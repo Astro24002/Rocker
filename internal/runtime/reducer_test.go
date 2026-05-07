@@ -22,3 +22,16 @@ func TestReducerUpdatesContainerStateOnStartStop(t *testing.T) {
 		t.Fatalf("expected exited after stop, got %q", got)
 	}
 }
+
+func TestReducerDoesNotIncrementVersionWhenStateUnchanged(t *testing.T) {
+	store := NewStore()
+	store.ReplaceContainers([]domain.Container{{ID: "c1", Name: "api", State: "running"}})
+
+	before := store.State().Version
+	ApplyEvent(store, Event{Type: "container", ID: "c1", Action: "start"})
+	after := store.State().Version
+
+	if after != before {
+		t.Fatalf("expected version to stay %d when state unchanged, got %d", before, after)
+	}
+}
