@@ -60,3 +60,33 @@ func TestSnapshotFileStoreRoundTripLatest(t *testing.T) {
 		t.Fatalf("latest path mismatch: got %q want %q", store.latestPath, wantPath)
 	}
 }
+
+func TestSnapshotFileStoreSaveLatestIncrementsVersionAcrossSaves(t *testing.T) {
+	root := t.TempDir()
+	store := NewSnapshotFileStore(root)
+
+	snapshot := domain.AppGraphSnapshot{
+		Meta: domain.SnapshotMeta{
+			ProjectName: "rocker",
+			ComposePath: "compose.yml",
+			Version:     1,
+		},
+	}
+
+	if err := store.SaveLatest(snapshot); err != nil {
+		t.Fatalf("first SaveLatest returned error: %v", err)
+	}
+
+	if err := store.SaveLatest(snapshot); err != nil {
+		t.Fatalf("second SaveLatest returned error: %v", err)
+	}
+
+	got, err := store.LoadLatest()
+	if err != nil {
+		t.Fatalf("LoadLatest returned error: %v", err)
+	}
+
+	if got.Meta.Version != 2 {
+		t.Fatalf("expected latest snapshot version 2 after sequential saves, got %d", got.Meta.Version)
+	}
+}
