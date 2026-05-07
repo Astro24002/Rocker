@@ -22,4 +22,7 @@ func TestOOMRuleFlagsOOMKilledContainers(t *testing.T) {
 	if findings[0].Code != "OOM_KILLED" {
 		t.Fatalf("expected code OOM_KILLED, got %q", findings[0].Code)
 	}
+	if findings[0].Message != "container api was OOM-killed" {
+		t.Fatalf("unexpected finding message: %q", findings[0].Message)
+	}
 }

@@ -22,4 +22,7 @@ func TestAnonymousVolumeRuleFlagsAnonymousMounts(t *testing.T) {
 	if findings[0].Code != "ANONYMOUS_VOLUME" {
 		t.Fatalf("expected code ANONYMOUS_VOLUME, got %q", findings[0].Code)
 	}
+	if findings[0].Message != "container api uses anonymous volume mounts" {
+		t.Fatalf("unexpected finding message: %q", findings[0].Message)
+	}
 }

@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"strconv"
 	"time"
 
 	"Rocker/internal/domain"
@@ -30,7 +31,7 @@ func (r *restartLoopRule) Evaluate(s domain.AppGraphSnapshot) []domain.Finding {
 		}
 		findings = append(findings, domain.Finding{
 			Code:    "RESTART_LOOP",
-			Message: "container " + c.Name + " restarted 5 times within 5 minutes",
+			Message: "container " + c.Name + " restarted " + strconv.Itoa(c.RestartCount) + " times within 5 minutes",
 		})
 	}
 	return findings

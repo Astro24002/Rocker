@@ -22,4 +22,7 @@ func TestNetworkUnreachableRuleFlagsDisconnectedContainer(t *testing.T) {
 	if findings[0].Code != "NETWORK_UNREACHABLE" {
 		t.Fatalf("expected code NETWORK_UNREACHABLE, got %q", findings[0].Code)
 	}
+	if findings[0].Message != "container api is missing required network attachment" {
+		t.Fatalf("unexpected finding message: %q", findings[0].Message)
+	}
 }
