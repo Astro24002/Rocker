@@ -13,11 +13,25 @@ type ComposeService struct {
 
 type Service struct{}
 
-type Container struct{}
+type Container struct {
+	ID     string
+	Name   string
+	Image  string
+	State  string
+	Status string
+}
 
-type Network struct{}
+type Network struct {
+	ID     string
+	Name   string
+	Driver string
+	Scope  string
+}
 
-type Volume struct{}
+type Volume struct {
+	Name   string
+	Driver string
+}
 
 type Explanation struct {
 	Code    string
