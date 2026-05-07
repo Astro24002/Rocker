@@ -7,21 +7,17 @@ import (
 )
 
 func BuildSnapshot(composeModel domain.ComposeModel, state RuntimeState, projectName string, composePath string) domain.AppGraphSnapshot {
-	services := make([]domain.Service, 0, len(composeModel.Services))
-	if len(composeModel.Services) > 0 {
-		names := make([]string, 0, len(composeModel.Services))
-		for name := range composeModel.Services {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for range names {
-			services = append(services, domain.Service{})
-		}
-	}
+	services := make([]domain.Service, len(composeModel.Services))
 
-	containers := make([]domain.Container, 0, len(state.Containers))
-	for _, container := range state.Containers {
-		containers = append(containers, container)
+	containerIDs := make([]string, 0, len(state.Containers))
+	for id := range state.Containers {
+		containerIDs = append(containerIDs, id)
+	}
+	sort.Strings(containerIDs)
+
+	containers := make([]domain.Container, 0, len(containerIDs))
+	for _, id := range containerIDs {
+		containers = append(containers, state.Containers[id])
 	}
 
 	snapshot := domain.AppGraphSnapshot{

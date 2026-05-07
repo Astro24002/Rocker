@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-const snapshotSchemaVersion uint64 = 1
+const initialSnapshotVersion uint64 = 1
 
 type SnapshotMeta struct {
 	ProjectName string
@@ -25,7 +25,7 @@ func NewSnapshotMeta(projectName string, composePath string) SnapshotMeta {
 	return SnapshotMeta{
 		ProjectName: projectName,
 		ComposePath: composePath,
-		Version:     snapshotSchemaVersion,
+		Version:     initialSnapshotVersion,
 		GeneratedAt: time.Now().UTC(),
 	}
 }
