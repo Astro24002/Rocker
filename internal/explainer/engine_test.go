@@ -32,3 +32,21 @@ func TestExplainerBuildsReasonImpactActions(t *testing.T) {
 		t.Fatal("expected at least one evidence ref")
 	}
 }
+
+func TestExplainerBuildsFallbackForUnknownFindingCode(t *testing.T) {
+	engine := NewEngine()
+
+	findings := []domain.Finding{
+		{Code: "UNKNOWN_CODE", Message: "unexpected condition observed"},
+	}
+
+	explanations := engine.Build(findings)
+	if len(explanations) != 1 {
+		t.Fatalf("expected 1 explanation, got %d", len(explanations))
+	}
+
+	explanation := explanations[0]
+	if explanation.Actions[0] != "Inspect the container logs and metrics to identify the root cause." {
+		t.Fatalf("expected fallback action, got %q", explanation.Actions[0])
+	}
+}
