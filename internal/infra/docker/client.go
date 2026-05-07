@@ -14,15 +14,15 @@ type Client struct{}
 func NewClient() *Client { return &Client{} }
 
 func (c *Client) ListContainers(ctx context.Context) ([]domain.Container, error) {
-	return nil, nil
+	return []domain.Container{}, nil
 }
 
 func (c *Client) ListNetworks(ctx context.Context) ([]domain.Network, error) {
-	return nil, nil
+	return []domain.Network{}, nil
 }
 
 func (c *Client) ListVolumes(ctx context.Context) ([]domain.Volume, error) {
-	return nil, nil
+	return []domain.Volume{}, nil
 }
 
 func (c *Client) StreamEvents(ctx context.Context) (<-chan runtime.Event, error) {
