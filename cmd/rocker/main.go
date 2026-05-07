@@ -7,8 +7,8 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: rocker <up|version>")
-		return
+		fmt.Fprintln(os.Stderr, "usage: rocker <up|version>")
+		os.Exit(2)
 	}
 
 	switch os.Args[1] {
@@ -17,6 +17,7 @@ func main() {
 	case "up":
 		fmt.Println("rocker up not yet implemented")
 	default:
-		fmt.Println("usage: rocker <up|version>")
+		fmt.Fprintln(os.Stderr, "usage: rocker <up|version>")
+		os.Exit(2)
 	}
 }
