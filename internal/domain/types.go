@@ -44,6 +44,10 @@ type Volume struct {
 }
 
 type Explanation struct {
-	Code    string
-	Summary string
+	Code         string
+	Summary      string
+	Reason       string
+	Impact       string
+	Actions      []string
+	EvidenceRefs []string
 }
