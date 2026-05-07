@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 type ComposeModel struct {
 	Services map[string]ComposeService
 }
@@ -14,11 +16,19 @@ type ComposeService struct {
 type Service struct{}
 
 type Container struct {
-	ID     string
-	Name   string
-	Image  string
-	State  string
-	Status string
+	ID                    string
+	Name                  string
+	Image                 string
+	State                 string
+	Status                string
+	OOMKilled             bool
+	RestartCount          int
+	LastStartedAt         time.Time
+	HealthFailStreak      int
+	DesiredNetworks       []string
+	AttachedNetworks      []string
+	AnonymousVolumeMounts int
+	CPUThrottleRatio      float64
 }
 
 type Network struct {
