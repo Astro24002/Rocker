@@ -20,6 +20,6 @@ type RuntimeSource interface {
 	ListNetworks(ctx context.Context) ([]domain.Network, error)
 	ListVolumes(ctx context.Context) ([]domain.Volume, error)
 	StreamEvents(ctx context.Context) (<-chan Event, error)
-	ContainerLogs(ctx context.Context, id string, tail string) (io.ReadCloser, error)
+	ContainerLogs(ctx context.Context, id string, tail int) (io.ReadCloser, error)
 	RestartContainer(ctx context.Context, id string) error
 }

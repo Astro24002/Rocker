@@ -31,7 +31,7 @@ func (c *Client) StreamEvents(ctx context.Context) (<-chan runtime.Event, error)
 	return ch, nil
 }
 
-func (c *Client) ContainerLogs(ctx context.Context, id string, tail string) (io.ReadCloser, error) {
+func (c *Client) ContainerLogs(ctx context.Context, id string, tail int) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
 }
 
