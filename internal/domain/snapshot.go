@@ -21,11 +21,17 @@ type AppGraphSnapshot struct {
 	Explanations []Explanation
 }
 
+func NewSnapshotMeta(projectName string, composePath string) SnapshotMeta {
+	return SnapshotMeta{
+		ProjectName: projectName,
+		ComposePath: composePath,
+		Version:     snapshotSchemaVersion,
+		GeneratedAt: time.Now().UTC(),
+	}
+}
+
 func NewAppGraphSnapshot() AppGraphSnapshot {
 	return AppGraphSnapshot{
-		Meta: SnapshotMeta{
-			Version:     snapshotSchemaVersion,
-			GeneratedAt: time.Now().UTC(),
-		},
+		Meta: NewSnapshotMeta("", ""),
 	}
 }
