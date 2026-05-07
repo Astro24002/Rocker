@@ -54,6 +54,14 @@ func (e *Engine) Build(findings []domain.Finding) []domain.Explanation {
 	for _, finding := range findings {
 		tpl, ok := e.templates[finding.Code]
 		if !ok {
+			explanations = append(explanations, domain.Explanation{
+				Code:    finding.Code,
+				Summary: finding.Message,
+				Reason:  "No specific template exists for this finding code.",
+				Impact:  "The issue may still affect service reliability and should be investigated.",
+				Actions: []string{"Inspect the container logs and metrics to identify the root cause."},
+				EvidenceRefs: []string{finding.Code},
+			})
 			continue
 		}
 
