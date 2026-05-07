@@ -55,4 +55,16 @@ volumes:
 	if len(web.DependsOn) != 1 || web.DependsOn[0] != "redis" {
 		t.Fatalf("expected web depends_on [redis], got %#v", web.DependsOn)
 	}
+
+	if len(web.Networks) != 1 || web.Networks[0] != "appnet" {
+		t.Fatalf("expected web networks [appnet], got %#v", web.Networks)
+	}
+
+	if len(web.Volumes) != 1 || web.Volumes[0] != "webdata" {
+		t.Fatalf("expected web volumes [webdata], got %#v", web.Volumes)
+	}
+
+	if len(web.Ports) != 1 || web.Ports[0] != "8080:80" {
+		t.Fatalf("expected web ports [8080:80], got %#v", web.Ports)
+	}
 }
