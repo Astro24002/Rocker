@@ -24,4 +24,7 @@ func TestRestartLoopRuleFlagsRestartBurst(t *testing.T) {
 	if findings[0].Code != "RESTART_LOOP" {
 		t.Fatalf("expected code RESTART_LOOP, got %q", findings[0].Code)
 	}
+	if findings[0].Message != "container api restarted 5 times within 5 minutes" {
+		t.Fatalf("unexpected finding message: %q", findings[0].Message)
+	}
 }
