@@ -17,3 +17,23 @@ func TestSnapshotHasVersionAndTimestamp(t *testing.T) {
 		t.Fatalf("expected Meta.GeneratedAt to be set")
 	}
 }
+
+func TestNewSnapshotMetaAssignsProjectAndComposePath(t *testing.T) {
+	meta := domain.NewSnapshotMeta("rocker", "compose.yml")
+
+	if meta.ProjectName != "rocker" {
+		t.Fatalf("expected ProjectName to be rocker, got %q", meta.ProjectName)
+	}
+
+	if meta.ComposePath != "compose.yml" {
+		t.Fatalf("expected ComposePath to be compose.yml, got %q", meta.ComposePath)
+	}
+
+	if meta.Version == 0 {
+		t.Fatalf("expected Version to be non-zero")
+	}
+
+	if meta.GeneratedAt.IsZero() {
+		t.Fatalf("expected GeneratedAt to be set")
+	}
+}
