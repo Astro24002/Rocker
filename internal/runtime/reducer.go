@@ -13,12 +13,18 @@ func ApplyEvent(store *Store, event Event) {
 			container = domain.Container{ID: event.ID}
 		}
 
+		previousState := container.State
+
 		switch event.Action {
 		case "start":
 			container.State = "running"
 		case "stop":
 			container.State = "exited"
 		default:
+			return false
+		}
+
+		if container.State == previousState {
 			return false
 		}
 
