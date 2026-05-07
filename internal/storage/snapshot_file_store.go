@@ -25,6 +25,19 @@ func (s *SnapshotFileStore) SaveLatest(snapshot domain.AppGraphSnapshot) error {
 		return fmt.Errorf("create snapshot directory %q: %w", dir, err)
 	}
 
+	if data, err := os.ReadFile(s.latestPath); err == nil {
+		var existing domain.AppGraphSnapshot
+		if err := json.Unmarshal(data, &existing); err != nil {
+			return fmt.Errorf("unmarshal existing latest snapshot %q: %w", s.latestPath, err)
+		}
+
+		if existing.Meta.Version >= snapshot.Meta.Version {
+			snapshot.Meta.Version = existing.Meta.Version + 1
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read existing latest snapshot %q: %w", s.latestPath, err)
+	}
+
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal snapshot: %w", err)
