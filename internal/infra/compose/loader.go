@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -32,12 +33,12 @@ type serviceYAML struct {
 func (Loader) Load(path string) (domain.ComposeModel, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return domain.ComposeModel{}, err
+		return domain.ComposeModel{}, fmt.Errorf("read compose file %q: %w", path, err)
 	}
 
 	var parsed composeYAML
 	if err := yaml.Unmarshal(data, &parsed); err != nil {
-		return domain.ComposeModel{}, err
+		return domain.ComposeModel{}, fmt.Errorf("parse compose file %q: %w", path, err)
 	}
 
 	model := domain.ComposeModel{Services: make(map[string]domain.ComposeService, len(parsed.Services))}
