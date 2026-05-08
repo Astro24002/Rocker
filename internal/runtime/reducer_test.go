@@ -50,6 +50,26 @@ func TestReconcileContainersDoesNotIncrementVersionWhenUnchanged(t *testing.T) {
 	}
 }
 
+func TestReconcileContainersDoesNotIncrementVersionWhenSlicesMatch(t *testing.T) {
+	store := NewStore()
+	containers := []domain.Container{{
+		ID:               "c1",
+		Name:             "api",
+		State:            "running",
+		DesiredNetworks:  []string{"backend", "frontend"},
+		AttachedNetworks: []string{"backend", "frontend"},
+	}}
+	store.ReplaceContainers(containers)
+
+	before := store.State().Version
+	ReconcileContainers(store, containers)
+	after := store.State().Version
+
+	if after != before {
+		t.Fatalf("expected version to stay %d for unchanged reconcile with slices, got %d", before, after)
+	}
+}
+
 func TestReconcileContainersIncrementsVersionAndReplacesStateWhenChanged(t *testing.T) {
 	store := NewStore()
 	store.ReplaceContainers([]domain.Container{
