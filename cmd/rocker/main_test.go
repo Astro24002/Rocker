@@ -37,12 +37,12 @@ func TestRockerVersionCommand(t *testing.T) {
 }
 
 func TestRockerUpCommand(t *testing.T) {
-	stdout, _, err := runRocker(t, "up")
+	stdout, _, err := runRocker(t, "up", "--compose", "compose.yml")
 	if err != nil {
 		t.Fatalf("expected up command to succeed, got error: %v, output: %s", err, string(stdout))
 	}
-	if string(stdout) != "rocker up not yet implemented\n" {
-		t.Fatalf("expected exact output %q, got %q", "rocker up not yet implemented\n", string(stdout))
+	if string(stdout) != "rocker up started\n" {
+		t.Fatalf("expected exact output %q, got %q", "rocker up started\n", string(stdout))
 	}
 }
 
@@ -72,4 +72,17 @@ func TestRockerUsageForInvalidAndNoArgs(t *testing.T) {
 			t.Fatalf("expected exact stderr %q, got %q", "usage: rocker <up|version>\n", string(stderr))
 		}
 	})
+}
+
+func TestUpCommandValidatesComposeFlag(t *testing.T) {
+	stdout, stderr, err := runRocker(t, "up")
+	if err == nil {
+		t.Fatalf("expected up without --compose to fail, got nil error, stdout: %s", string(stdout))
+	}
+	if string(stdout) != "" {
+		t.Fatalf("expected empty stdout, got %q", string(stdout))
+	}
+	if string(stderr) != "error: --compose is required\n" {
+		t.Fatalf("expected exact stderr %q, got %q", "error: --compose is required\n", string(stderr))
+	}
 }

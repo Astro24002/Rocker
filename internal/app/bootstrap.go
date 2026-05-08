@@ -1,5 +1,9 @@
 package app
 
-func Bootstrap() error {
-	return nil
+type Runtime struct {
+	Up *UpUseCase
+}
+
+func Bootstrap() Runtime {
+	return Runtime{Up: NewUpUseCase()}
 }
