@@ -1,1 +1,3 @@
 .worktrees/
+/rocker
+/web/node_modules/
