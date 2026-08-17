@@ -1,7 +1,31 @@
-import { contextBridge } from "electron"
+import { contextBridge, ipcRenderer } from "electron"
+import { ipcChannels, type RockerBridge } from "./ipc/bridge-contract"
+import type { SessionEvent } from "./ssh/ssh-manager"
 
-contextBridge.exposeInMainWorld("rocker", {
+const bridge: RockerBridge = {
   app: {
     platform: process.platform
+  },
+  hosts: {
+    list: () => ipcRenderer.invoke(ipcChannels.hostsList),
+    save: (request) => ipcRenderer.invoke(ipcChannels.hostsSave, request),
+    remove: (id) => ipcRenderer.invoke(ipcChannels.hostsRemove, id),
+    importSshConfig: () => ipcRenderer.invoke(ipcChannels.hostsImport)
+  },
+  sessions: {
+    open: (request) => ipcRenderer.invoke(ipcChannels.sessionOpen, request),
+    write: (sessionId, data) => ipcRenderer.invoke(ipcChannels.sessionWrite, sessionId, data),
+    resize: (sessionId, cols, rows) => ipcRenderer.invoke(ipcChannels.sessionResize, sessionId, cols, rows),
+    close: (sessionId) => ipcRenderer.invoke(ipcChannels.sessionClose, sessionId),
+    reconnect: (sessionId) => ipcRenderer.invoke(ipcChannels.sessionReconnect, sessionId)
+  },
+  events: {
+    onSessionEvent: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: SessionEvent): void => listener(payload)
+      ipcRenderer.on(ipcChannels.sessionEvent, handler)
+      return () => ipcRenderer.removeListener(ipcChannels.sessionEvent, handler)
+    }
   }
-})
+}
+
+contextBridge.exposeInMainWorld("rocker", bridge)

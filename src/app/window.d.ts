@@ -1,11 +1,9 @@
+import type { RockerBridge } from "../../electron/ipc/bridge-contract"
+
 export {}
 
 declare global {
   interface Window {
-    rocker: {
-      app: {
-        platform: NodeJS.Platform
-      }
-    }
+    rocker: RockerBridge
   }
 }

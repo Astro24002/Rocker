@@ -1,9 +1,16 @@
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, dialog } from "electron"
 import { join } from "node:path"
+import { registerIpcHandlers } from "./ipc/register"
+import { CredentialVault } from "./storage/credentials"
+import { JsonCredentialValueStore } from "./storage/credential-store"
+import { createHostStore } from "./storage/host-store"
+import { createSafeStorageCipher } from "./storage/safe-storage"
+import { JsonHostKeyStore } from "./ssh/host-key-store"
+import { SshManager } from "./ssh/ssh-manager"
 
 let mainWindow: BrowserWindow | undefined
 
-function createWindow(): void {
+function createWindow(): BrowserWindow {
   mainWindow = new BrowserWindow({
     minWidth: 1040,
     minHeight: 680,
@@ -23,10 +30,35 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(join(__dirname, "../renderer/index.html"))
   }
+  return mainWindow
 }
 
 app.whenReady().then(() => {
-  createWindow()
+  const userDataPath = app.getPath("userData")
+  const window = createWindow()
+  const sessions = new SshManager({
+    hostKeys: new JsonHostKeyStore(join(userDataPath, "host-keys.json")),
+    onUnknownHostKey: async ({ host, port, fingerprint }) => {
+      const result = await dialog.showMessageBox(window, {
+        type: "warning",
+        title: "Unknown host fingerprint",
+        message: `Trust ${host}:${port}?`,
+        detail: `SHA256:${fingerprint}`,
+        buttons: ["Cancel", "Trust"],
+        defaultId: 0,
+        cancelId: 0
+      })
+      return result.response === 1
+    }
+  })
+  registerIpcHandlers(window, {
+    hosts: createHostStore(userDataPath),
+    credentials: new CredentialVault(
+      new JsonCredentialValueStore(join(userDataPath, "credentials.json")),
+      createSafeStorageCipher()
+    ),
+    sessions
+  })
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
