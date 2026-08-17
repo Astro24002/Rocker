@@ -1,9 +1,13 @@
-import { dialog, ipcMain, type BrowserWindow } from "electron"
+import { dialog, ipcMain, shell, type BrowserWindow } from "electron"
 import { readFile } from "node:fs/promises"
 import type { CredentialVault } from "../storage/credentials"
 import type { HostStore } from "../storage/host-store"
 import type { HostProfile } from "../storage/types"
 import type { SshManager } from "../ssh/ssh-manager"
+import type { ForwardingManager } from "../ports/forwarding-manager"
+import type { PortService } from "../ports/port-service"
+import type { ForwardingSpec } from "../ports/types"
+import type { LinuxMetricsSampler } from "../monitoring/linux-metrics"
 import { ipcChannels, type HostSaveRequest, type SessionOpenRequest } from "./bridge-contract"
 import { isValidSessionId, validateDimensions, validateTerminalData } from "./validation"
 
@@ -11,6 +15,9 @@ export interface IpcDependencies {
   hosts: HostStore
   credentials: CredentialVault
   sessions: SshManager
+  ports: PortService
+  forwarding: ForwardingManager
+  monitoring: LinuxMetricsSampler
 }
 
 export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDependencies): () => void {
@@ -79,9 +86,37 @@ export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDepe
     if (!isValidSessionId(sessionId)) throw new Error("Invalid session identifier")
     return dependencies.sessions.reconnect(sessionId)
   })
+  ipcMain.handle(ipcChannels.portsScan, (_event, sessionId: unknown) => {
+    if (!isValidSessionId(sessionId)) throw new Error("Invalid session identifier")
+    return dependencies.ports.scan(sessionId)
+  })
+  ipcMain.handle(ipcChannels.portsStart, (_event, sessionId: unknown, spec: ForwardingSpec) => {
+    if (!isValidSessionId(sessionId) || !isValidForwardingSpec(spec)) throw new Error("Invalid forwarding request")
+    return dependencies.forwarding.start(sessionId, spec)
+  })
+  ipcMain.handle(ipcChannels.portsStop, (_event, forwardingId: unknown) => {
+    assertId(forwardingId)
+    return dependencies.forwarding.stop(forwardingId)
+  })
+  ipcMain.handle(ipcChannels.portsList, () => dependencies.forwarding.list())
+  ipcMain.handle(ipcChannels.portsOpenAddress, async (_event, forwardingId: unknown) => {
+    assertId(forwardingId)
+    const forwarding = dependencies.forwarding.get(forwardingId)
+    if (!forwarding || forwarding.status !== "forwarding") throw new Error("Forwarding is not active")
+    const host = forwarding.localAddress.includes(":") ? `[${forwarding.localAddress}]` : forwarding.localAddress
+    await shell.openExternal(`http://${host}:${forwarding.localPort}`)
+  })
+  ipcMain.handle(ipcChannels.monitorSample, (_event, sessionId: unknown) => {
+    if (!isValidSessionId(sessionId)) throw new Error("Invalid session identifier")
+    return dependencies.monitoring.sample(sessionId)
+  })
 
   const unsubscribe = dependencies.sessions.onEvent((event) => {
     if (!window.isDestroyed()) window.webContents.send(ipcChannels.sessionEvent, event)
+    if (event.kind === "state" && event.state === "closed") {
+      void dependencies.forwarding.stopForSession(event.sessionId)
+      dependencies.monitoring.clear(event.sessionId)
+    }
   })
   return () => {
     unsubscribe()
@@ -105,4 +140,11 @@ function assertHostProfile(profile: HostProfile | undefined): asserts profile is
 
 function assertId(id: unknown): asserts id is string {
   if (typeof id !== "string" || id.length < 1 || id.length > 128) throw new Error("Invalid identifier")
+}
+
+function isValidForwardingSpec(spec: ForwardingSpec | undefined): spec is ForwardingSpec {
+  return Boolean(spec) && typeof spec?.localAddress === "string" && spec.localAddress.length <= 64 &&
+    typeof spec.remoteAddress === "string" && spec.remoteAddress.length <= 255 &&
+    typeof spec.localPort === "number" && Number.isInteger(spec.localPort) && spec.localPort >= 0 && spec.localPort <= 65535 &&
+    typeof spec.remotePort === "number" && Number.isInteger(spec.remotePort) && spec.remotePort >= 1 && spec.remotePort <= 65535
 }

@@ -19,6 +19,16 @@ const bridge: RockerBridge = {
     close: (sessionId) => ipcRenderer.invoke(ipcChannels.sessionClose, sessionId),
     reconnect: (sessionId) => ipcRenderer.invoke(ipcChannels.sessionReconnect, sessionId)
   },
+  ports: {
+    scan: (sessionId) => ipcRenderer.invoke(ipcChannels.portsScan, sessionId),
+    start: (sessionId, spec) => ipcRenderer.invoke(ipcChannels.portsStart, sessionId, spec),
+    stop: (forwardingId) => ipcRenderer.invoke(ipcChannels.portsStop, forwardingId),
+    list: () => ipcRenderer.invoke(ipcChannels.portsList),
+    openAddress: (forwardingId) => ipcRenderer.invoke(ipcChannels.portsOpenAddress, forwardingId)
+  },
+  monitor: {
+    sample: (sessionId) => ipcRenderer.invoke(ipcChannels.monitorSample, sessionId)
+  },
   events: {
     onSessionEvent: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: SessionEvent): void => listener(payload)

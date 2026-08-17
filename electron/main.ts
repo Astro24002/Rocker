@@ -7,6 +7,9 @@ import { createHostStore } from "./storage/host-store"
 import { createSafeStorageCipher } from "./storage/safe-storage"
 import { JsonHostKeyStore } from "./ssh/host-key-store"
 import { SshManager } from "./ssh/ssh-manager"
+import { ForwardingManager } from "./ports/forwarding-manager"
+import { PortService } from "./ports/port-service"
+import { LinuxMetricsSampler } from "./monitoring/linux-metrics"
 
 let mainWindow: BrowserWindow | undefined
 
@@ -51,13 +54,17 @@ app.whenReady().then(() => {
       return result.response === 1
     }
   })
+  const forwarding = new ForwardingManager(sessions)
   registerIpcHandlers(window, {
     hosts: createHostStore(userDataPath),
     credentials: new CredentialVault(
       new JsonCredentialValueStore(join(userDataPath, "credentials.json")),
       createSafeStorageCipher()
     ),
-    sessions
+    sessions,
+    ports: new PortService(sessions),
+    forwarding,
+    monitoring: new LinuxMetricsSampler(sessions)
   })
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
