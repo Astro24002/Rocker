@@ -1,0 +1,21 @@
+:root {
+  color-scheme: dark;
+  --sidebar-bg: #252834;
+  --sidebar-deep: #1e202a;
+  --sidebar-hover: #303440;
+  --workspace-bg: #11131b;
+  --workspace-raised: #171a23;
+  --workspace-hover: #1d202a;
+  --line: #2a2e3a;
+  --line-strong: #3a3f4d;
+  --text-primary: #eef0f5;
+  --text-secondary: #a8adba;
+  --text-muted: #747a89;
+  --accent: #86de67;
+  --accent-hover: #9ae879;
+  --accent-ink: #12170f;
+  --teal: #51c8c1;
+  --warning: #e7b85f;
+  --danger: #ef7777;
+  --sidebar-width: 220px;
+}
