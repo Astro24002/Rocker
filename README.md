@@ -1,22 +1,50 @@
 # Rocker
 
-Rocker is a local-first SSH desktop client for Windows and macOS. It provides
-host management, multiple terminal tabs, and a TRAE-style remote port view with
-user-controlled local forwarding.
+Rocker is a local-first SSH desktop client for Windows and macOS. It combines
+host management, multiple terminal tabs, Linux host monitoring, and a
+TRAE-style Ports view where remote services are discovered automatically but
+forwarded only after an explicit user action.
 
-The first release is independent of Tabby source code and uses Electron,
+The implementation is independent of Tabby source code. Rocker uses Electron,
 React, xterm.js, and `ssh2`.
+
+## First-release features
+
+- Local host profiles, groups, favorites, and OpenSSH config import.
+- Password, private-key file, and SSH Agent authentication.
+- First-use host fingerprint confirmation and changed-key blocking.
+- Independent terminal tabs backed by real SSH PTY channels.
+- Linux `ss`/`netstat` port discovery and user-controlled local forwarding.
+- Expandable CPU, memory, disk, network, and latency summary for the active host.
+- Local connection history.
+- English UI by default with optional Simplified Chinese.
+
+SFTP and Snippets are visible navigation placeholders. Split panes, cloud sync,
+mobile clients, ProxyJump, remote forwarding, and Dynamic SOCKS5 are not part of
+the first release.
+
+## Requirements
+
+- Node.js 20 or newer. CI uses Node.js 24.
+- npm 10 or newer.
+- Windows or macOS to run a native packaged build.
 
 ## Development
 
-Requirements: Node.js 20 or newer.
+Install dependencies and launch the Electron development window:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Run the test suite and production build:
+Build all Electron process bundles without packaging:
+
+```bash
+npm run build
+```
+
+## Quality checks
 
 ```bash
 npm test
@@ -24,24 +52,45 @@ npm run typecheck
 npm run build
 ```
 
+The test suite includes SSH mock-server integration, host-key verification,
+encrypted storage boundaries, Linux port/metric parsing, forwarding lifecycle,
+state models, localization, and packaging metadata.
+
 ## Packaging
 
-Package targets are limited to Windows and macOS:
+Build a Windows NSIS installer on Windows:
 
 ```bash
 npm run dist:win
+```
+
+Build macOS DMG and ZIP artifacts on macOS:
+
+```bash
 npm run dist:mac
 ```
 
-Native signing and macOS notarization require platform credentials and are not
-enabled in local builds.
+Apple code signing/notarization and Windows code signing require platform
+credentials and are intentionally not enabled in local development builds.
 
 ## Local data
 
-Host metadata, settings, and connection history live in Electron's per-user
-application data directory. Passwords and private-key passphrases are stored
-through the platform-backed Electron `safeStorage` API.
+Rocker writes host metadata, settings, accepted host fingerprints, and
+connection history under Electron's per-user application data directory:
 
-SFTP and Snippets are navigation placeholders in the first release. Terminal
-split panes, cloud sync, mobile clients, remote forwarding, and Dynamic SOCKS5
-are intentionally out of scope.
+- Windows: `%APPDATA%/Rocker`
+- macOS: `~/Library/Application Support/Rocker`
+
+Passwords and private-key passphrases are encrypted with Electron `safeStorage`
+(DPAPI on Windows and Keychain-backed protection on macOS). Private key files are
+not copied into Rocker; only their paths are stored.
+
+## Project structure
+
+```text
+electron/        Electron main/preload, SSH, ports, monitoring, storage, IPC
+src/             React renderer, features, localization, and desktop styles
+tests/           Main-process, parser, storage, and packaging tests
+build/           Rocker application icon resources
+docs/            Approved product design and implementation plan
+```

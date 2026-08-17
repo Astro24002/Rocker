@@ -1,0 +1,47 @@
+appId: rocker
+productName: Rocker
+executableName: rocker
+asar: true
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+
+win:
+  icon: icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - arm64
+  artifactName: Rocker-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Rocker
+
+mac:
+  icon: icon.png
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  artifactName: Rocker-${version}-${arch}.${ext}
+
+dmg:
+  title: Rocker ${version}
+
+publish: null
