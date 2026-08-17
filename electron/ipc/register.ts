@@ -9,6 +9,8 @@ import type { PortService } from "../ports/port-service"
 import type { ForwardingSpec } from "../ports/types"
 import type { LinuxMetricsSampler } from "../monitoring/linux-metrics"
 import type { HistoryStore } from "../storage/history-store"
+import type { SettingsStore } from "../storage/settings-store"
+import type { AppSettings } from "../storage/types"
 import { randomUUID } from "node:crypto"
 import { ipcChannels, type HostSaveRequest, type SessionOpenRequest } from "./bridge-contract"
 import { isValidSessionId, validateDimensions, validateTerminalData } from "./validation"
@@ -21,6 +23,7 @@ export interface IpcDependencies {
   forwarding: ForwardingManager
   monitoring: LinuxMetricsSampler
   history: HistoryStore
+  settings: SettingsStore
 }
 
 export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDependencies): () => void {
@@ -122,6 +125,8 @@ export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDepe
   })
   ipcMain.handle(ipcChannels.historyList, () => dependencies.history.list())
   ipcMain.handle(ipcChannels.historyClear, () => dependencies.history.clear())
+  ipcMain.handle(ipcChannels.settingsGet, () => dependencies.settings.get())
+  ipcMain.handle(ipcChannels.settingsUpdate, (_event, update: Partial<AppSettings>) => dependencies.settings.update(update ?? {}))
 
   const unsubscribe = dependencies.sessions.onEvent((event) => {
     if (!window.isDestroyed()) window.webContents.send(ipcChannels.sessionEvent, event)

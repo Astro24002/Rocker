@@ -56,6 +56,10 @@ function createBrowserPreviewBridge(): RockerBridge {
       ],
       clear: async () => undefined
     },
+    settings: {
+      get: async () => ({ locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, connectionTimeout: 15, autoReconnect: true, portScanInterval: 15, bindAddress: "127.0.0.1" }),
+      update: async (update) => ({ locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, connectionTimeout: 15, autoReconnect: true, portScanInterval: 15, bindAddress: "127.0.0.1", ...update })
+    },
     events: {
       onSessionEvent: (listener) => {
         mockListeners.add(listener)

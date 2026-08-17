@@ -26,3 +26,14 @@ export interface ConnectionHistoryItem {
   durationMs: number
   outcome: "connected" | "failed" | "disconnected"
 }
+
+export interface AppSettings {
+  locale: "en" | "zh-CN"
+  sidebarWidth: number
+  terminalFont: string
+  terminalFontSize: number
+  connectionTimeout: number
+  autoReconnect: boolean
+  portScanInterval: number
+  bindAddress: "127.0.0.1" | "::1" | "0.0.0.0"
+}

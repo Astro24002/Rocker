@@ -11,6 +11,7 @@ import { ForwardingManager } from "./ports/forwarding-manager"
 import { PortService } from "./ports/port-service"
 import { LinuxMetricsSampler } from "./monitoring/linux-metrics"
 import { HistoryStore } from "./storage/history-store"
+import { SettingsStore } from "./storage/settings-store"
 
 let mainWindow: BrowserWindow | undefined
 
@@ -66,7 +67,8 @@ app.whenReady().then(() => {
     ports: new PortService(sessions),
     forwarding,
     monitoring: new LinuxMetricsSampler(sessions),
-    history: new HistoryStore(join(userDataPath, "history.json"))
+    history: new HistoryStore(join(userDataPath, "history.json")),
+    settings: new SettingsStore(join(userDataPath, "settings.json"))
   })
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

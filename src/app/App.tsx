@@ -18,8 +18,13 @@ import {
   type TerminalTab
 } from "../features/terminal/session-state"
 import { I18nProvider, useI18n } from "../i18n"
-import type { ConnectionHistoryItem, HostProfile, SessionEvent } from "./types"
+import type { AppSettings, ConnectionHistoryItem, HostProfile, SessionEvent } from "./types"
 import { getRockerBridge } from "./bridge"
+import { ComingSoonView } from "../components/ComingSoonView"
+import { MonitorSummary } from "../features/monitoring/MonitorSummary"
+import { applyMetrics, createMonitorState, toggleMonitor } from "../features/monitoring/monitor-state"
+import { PortsView } from "../features/ports/PortsView"
+import { SettingsView } from "../features/settings/SettingsView"
 
 export default function App() {
   return <I18nProvider><Workspace /></I18nProvider>
@@ -27,12 +32,14 @@ export default function App() {
 
 function Workspace() {
   const bridge = useMemo(() => getRockerBridge(), [])
-  const { t, locale, setLocale } = useI18n()
+  const { locale, setLocale } = useI18n()
   const [activeNav, setActiveNav] = useState<NavKey | "settings" | "terminal">("hosts")
   const [hosts, setHosts] = useState<HostProfile[]>([])
   const [history, setHistory] = useState<ConnectionHistoryItem[]>([])
   const [editor, setEditor] = useState<{ open: boolean; profile?: HostProfile }>({ open: false })
   const [sessions, setSessions] = useState(createSessionState)
+  const [monitor, setMonitor] = useState(createMonitorState)
+  const [settings, setSettings] = useState<AppSettings>({ locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, connectionTimeout: 15, autoReconnect: true, portScanInterval: 15, bindAddress: "127.0.0.1" })
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const stored = Number(localStorage.getItem("rocker.sidebarWidth") ?? 220)
     return clampSidebarWidth(Number.isFinite(stored) ? stored : 220)
@@ -41,8 +48,34 @@ function Workspace() {
   useEffect(() => {
     void bridge.hosts.list().then(setHosts)
     void bridge.history.list().then(setHistory)
+    void bridge.settings.get().then((stored) => {
+      setSettings(stored)
+      setLocale(stored.locale)
+      setSidebarWidth(clampSidebarWidth(stored.sidebarWidth))
+    })
     return bridge.events.onSessionEvent((event) => handleSessionEvent(event))
   }, [bridge])
+
+  const activeTab = sessions.tabs.find((tab) => tab.id === sessions.activeId)
+  const activeHost = activeTab ? hosts.find((host) => host.id === activeTab.hostId) : undefined
+
+  useEffect(() => {
+    if (!activeTab?.sessionId || activeTab.state !== "connected") return
+    let cancelled = false
+    const sample = (): void => {
+      void bridge.monitor.sample(activeTab.sessionId!).then((metrics) => {
+        if (!cancelled) setMonitor((current) => applyMetrics(current, metrics))
+      }).catch((error) => {
+        if (!cancelled) setMonitor((current) => ({ ...current, error: error instanceof Error ? error.message : String(error) }))
+      })
+    }
+    sample()
+    const interval = window.setInterval(sample, 5_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [activeTab?.sessionId, activeTab?.state, bridge])
 
   const handleSessionEvent = (event: SessionEvent): void => {
     setSessions((current) => {
@@ -58,6 +91,12 @@ function Workspace() {
     const next = clampSidebarWidth(width)
     localStorage.setItem("rocker.sidebarWidth", String(next))
     setSidebarWidth(next)
+    void bridge.settings.update({ sidebarWidth: next }).then(setSettings)
+  }
+
+  const updateSettings = (update: Partial<AppSettings>): void => {
+    setSettings((current) => ({ ...current, ...update }))
+    void bridge.settings.update(update).then(setSettings)
   }
 
   const connectHost = async (host: HostProfile): Promise<void> => {
@@ -109,16 +148,14 @@ function Workspace() {
         activeNav={activeNav}
         sessions={sessions.tabs}
         activeSessionId={sessions.activeId}
+        monitor={<MonitorSummary state={monitor} hostName={activeHost?.name} onToggle={() => setMonitor((current) => toggleMonitor(current))} />}
         onWidthChange={changeSidebarWidth}
         onNavigate={setActiveNav}
         onSessionActivate={(id) => setSessions((current) => activateTab(current, id))}
       />
       <main className="workspace">
         {activeNav === "settings" ? (
-          <section className="settings-view">
-            <header className="view-header"><div><span className="view-eyebrow">Rocker</span><h1>{t("settings.title")}</h1></div></header>
-            <div className="settings-section"><div className="setting-copy"><strong>{t("settings.language")}</strong><span>{t("settings.languageHint")}</span></div><div className="segmented-control" aria-label={t("settings.language")}><button data-active={locale === "en"} type="button" onClick={() => setLocale("en")}>{t("settings.english")}</button><button data-active={locale === "zh-CN"} type="button" onClick={() => setLocale("zh-CN")}>{t("settings.chinese")}</button></div></div>
-          </section>
+          <SettingsView locale={locale} settings={settings} onLocaleChange={(next) => { setLocale(next); updateSettings({ locale: next }) }} onUpdate={updateSettings} />
         ) : activeNav === "terminal" && sessions.tabs.length > 0 ? (
           <TerminalWorkspace
             tabs={sessions.tabs}
@@ -143,8 +180,12 @@ function Workspace() {
           />
         ) : activeNav === "history" ? (
           <HistoryView items={history} hosts={hosts} onReconnect={(host) => void connectHost(host)} onClear={() => void bridge.history.clear().then(() => setHistory([]))} />
+        ) : activeNav === "ports" ? (
+          <PortsView bridge={bridge} session={activeTab} username={activeHost?.username} />
+        ) : activeNav === "sftp" || activeNav === "snippets" ? (
+          <ComingSoonView feature={activeNav} />
         ) : (
-          <section className="placeholder-view"><span className="view-eyebrow">Rocker</span><h1>{t(activeNav === "ports" ? "ports.title" : activeNav === "sftp" ? "nav.sftp" : activeNav === "snippets" ? "nav.snippets" : "nav.hosts")}</h1><p>{t(activeNav === "sftp" ? "placeholder.sftp" : "placeholder.snippets")}</p></section>
+          <HostList hosts={hosts} onConnect={(host) => void connectHost(host)} onAdd={() => setEditor({ open: true })} onEdit={(profile) => setEditor({ open: true, profile })} onImport={() => void bridge.hosts.importSshConfig().then(() => bridge.hosts.list()).then(setHosts)} onFavorite={(host) => void favoriteHost(host)} />
         )}
       </main>
       <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={(profile, credentials) => void saveHost(profile, credentials)} />

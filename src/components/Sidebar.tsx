@@ -3,6 +3,7 @@ import { useI18n } from "../i18n"
 import { IconButton } from "./IconButton"
 import { NavItem } from "./NavItem"
 import type { TerminalTab } from "../features/terminal/session-state"
+import type { ReactNode } from "react"
 
 export type NavKey = "hosts" | "sftp" | "ports" | "snippets" | "history"
 
@@ -11,6 +12,7 @@ interface SidebarProps {
   activeNav: NavKey | "settings" | "terminal"
   sessions?: TerminalTab[]
   activeSessionId?: string
+  monitor?: ReactNode
   onWidthChange(width: number): void
   onNavigate(nav: NavKey | "settings" | "terminal"): void
   onSessionActivate?(id: string): void
@@ -28,7 +30,7 @@ export function clampSidebarWidth(width: number): number {
   return Math.max(180, Math.min(360, Math.round(width)))
 }
 
-export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWidthChange, onNavigate, onSessionActivate }: SidebarProps) {
+export function Sidebar({ width, activeNav, sessions = [], activeSessionId, monitor, onWidthChange, onNavigate, onSessionActivate }: SidebarProps) {
   const { t } = useI18n()
 
   const startResize = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -97,13 +99,13 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWi
         )}
       </section>
 
-      <section className="host-monitor host-monitor-offline">
+      {monitor ?? <section className="host-monitor host-monitor-offline">
         <div className="monitor-status-dot" />
         <div>
           <strong>{t("monitor.title")}</strong>
           <span>{t("monitor.offline")}</span>
         </div>
-      </section>
+      </section>}
 
       <div
         className="sidebar-resizer"
