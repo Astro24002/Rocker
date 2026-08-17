@@ -1,54 +1,47 @@
 # Rocker
 
-Minimal CLI skeleton for Rocker.
+Rocker is a local-first SSH desktop client for Windows and macOS. It provides
+host management, multiple terminal tabs, and a TRAE-style remote port view with
+user-controlled local forwarding.
 
-## Install / Build
+The first release is independent of Tabby source code and uses Electron,
+React, xterm.js, and `ssh2`.
 
-Build the binary:
+## Development
 
-`go build -o rocker ./cmd/rocker`
+Requirements: Node.js 20 or newer.
 
-Build frontend assets:
+```bash
+npm install
+npm run dev
+```
 
-`npm --prefix web install && npm --prefix web run build`
+Run the test suite and production build:
 
-Or use:
+```bash
+npm test
+npm run typecheck
+npm run build
+```
 
-`make ui-build`
+## Packaging
 
-## Usage
+Package targets are limited to Windows and macOS:
 
-`go run ./cmd/rocker version`
+```bash
+npm run dist:win
+npm run dist:mac
+```
 
-`go run ./cmd/rocker up --compose ./compose.yml`
+Native signing and macOS notarization require platform credentials and are not
+enabled in local builds.
 
-`make run`
+## Local data
 
-## Scope and Limits
+Host metadata, settings, and connection history live in Electron's per-user
+application data directory. Passwords and private-key passphrases are stored
+through the platform-backed Electron `safeStorage` API.
 
-- MVP targets local single-host Docker Compose projects.
-- Current development scope is 3-8 services.
-- Runtime diagnostics are rule-based (no AI diagnosis in MVP).
-
-## Troubleshooting
-
-- If frontend checks fail, run `npm --prefix web install` first.
-- If `internal/uiassets` embed fails, rebuild frontend and copy assets into `internal/uiassets/dist`.
-- If `make` command is unavailable in your environment, run the equivalent shell commands manually.
-
-## Acceptance Runbook (MVP)
-
-1. Prepare fixture compose:
-   - use `./fixtures/compose-4svc.yml` (web/api/redis/mysql).
-2. Start runtime:
-   - run `./rocker up --compose ./fixtures/compose-4svc.yml`.
-3. Validate topology:
-   - confirm UI shows all four services and expected dependencies.
-4. Validate diagnostic scenarios:
-   - Redis OOM should surface a finding + explanation.
-   - anonymous volume should trigger persistence risk warning.
-   - network mismatch should produce network-unreachable finding.
-5. Validate resiliency:
-   - restart Docker daemon; confirm stream reconnect path resumes.
-6. Final quality gate:
-   - run `go test ./... && npm --prefix web run build && go build -o rocker ./cmd/rocker`.
+SFTP and Snippets are navigation placeholders in the first release. Terminal
+split panes, cloud sync, mobile clients, remote forwarding, and Dynamic SOCKS5
+are intentionally out of scope.

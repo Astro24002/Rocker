@@ -1,3 +1,6 @@
 .worktrees/
 /rocker
-/web/node_modules/
+/node_modules/
+/out/
+/release/
+*.log
