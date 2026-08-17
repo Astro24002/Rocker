@@ -1,4 +1,4 @@
-import type { HostProfile } from "../storage/types"
+import type { ConnectionHistoryItem, HostProfile } from "../storage/types"
 import type { SessionEvent, SessionInfo } from "../ssh/ssh-manager"
 import type { HostMetrics } from "../monitoring/linux-metrics"
 import type { DiscoveredPort, ForwardingInfo, ForwardingSpec } from "../ports/types"
@@ -44,6 +44,10 @@ export interface RockerBridge {
   monitor: {
     sample(sessionId: string): Promise<HostMetrics>
   }
+  history: {
+    list(): Promise<ConnectionHistoryItem[]>
+    clear(): Promise<void>
+  }
   events: {
     onSessionEvent(listener: (event: SessionEvent) => void): () => void
   }
@@ -65,5 +69,7 @@ export const ipcChannels = {
   portsStop: "rocker:ports:stop",
   portsList: "rocker:ports:list",
   portsOpenAddress: "rocker:ports:open-address",
-  monitorSample: "rocker:monitor:sample"
+  monitorSample: "rocker:monitor:sample",
+  historyList: "rocker:history:list",
+  historyClear: "rocker:history:clear"
 } as const

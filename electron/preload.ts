@@ -29,6 +29,10 @@ const bridge: RockerBridge = {
   monitor: {
     sample: (sessionId) => ipcRenderer.invoke(ipcChannels.monitorSample, sessionId)
   },
+  history: {
+    list: () => ipcRenderer.invoke(ipcChannels.historyList),
+    clear: () => ipcRenderer.invoke(ipcChannels.historyClear)
+  },
   events: {
     onSessionEvent: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: SessionEvent): void => listener(payload)

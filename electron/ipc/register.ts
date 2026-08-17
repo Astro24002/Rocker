@@ -8,6 +8,8 @@ import type { ForwardingManager } from "../ports/forwarding-manager"
 import type { PortService } from "../ports/port-service"
 import type { ForwardingSpec } from "../ports/types"
 import type { LinuxMetricsSampler } from "../monitoring/linux-metrics"
+import type { HistoryStore } from "../storage/history-store"
+import { randomUUID } from "node:crypto"
 import { ipcChannels, type HostSaveRequest, type SessionOpenRequest } from "./bridge-contract"
 import { isValidSessionId, validateDimensions, validateTerminalData } from "./validation"
 
@@ -18,6 +20,7 @@ export interface IpcDependencies {
   ports: PortService
   forwarding: ForwardingManager
   monitoring: LinuxMetricsSampler
+  history: HistoryStore
 }
 
 export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDependencies): () => void {
@@ -55,18 +58,25 @@ export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDepe
     }
     const host = (await dependencies.hosts.list()).find((candidate) => candidate.id === request.hostId)
     if (!host) throw new Error("Host profile not found")
-    return dependencies.sessions.open({
-      hostId: host.id,
-      host: host.host,
-      port: host.port,
-      username: host.username,
-      authMethod: host.authMethod,
-      identityFile: host.identityFile,
-      password: await dependencies.credentials.get(host.id, "password"),
-      passphrase: await dependencies.credentials.get(host.id, "passphrase"),
-      cols: request.cols,
-      rows: request.rows
-    })
+    try {
+      const session = await dependencies.sessions.open({
+        hostId: host.id,
+        host: host.host,
+        port: host.port,
+        username: host.username,
+        authMethod: host.authMethod,
+        identityFile: host.identityFile,
+        password: await dependencies.credentials.get(host.id, "password"),
+        passphrase: await dependencies.credentials.get(host.id, "passphrase"),
+        cols: request.cols,
+        rows: request.rows
+      })
+      await dependencies.history.add({ id: randomUUID(), hostId: host.id, connectedAt: new Date().toISOString(), durationMs: 0, outcome: "connected" })
+      return session
+    } catch (error) {
+      await dependencies.history.add({ id: randomUUID(), hostId: host.id, connectedAt: new Date().toISOString(), durationMs: 0, outcome: "failed" })
+      throw error
+    }
   })
   ipcMain.handle(ipcChannels.sessionWrite, (_event, sessionId: unknown, data: unknown) => {
     if (!isValidSessionId(sessionId) || !validateTerminalData(data)) throw new Error("Invalid terminal input")
@@ -110,6 +120,8 @@ export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDepe
     if (!isValidSessionId(sessionId)) throw new Error("Invalid session identifier")
     return dependencies.monitoring.sample(sessionId)
   })
+  ipcMain.handle(ipcChannels.historyList, () => dependencies.history.list())
+  ipcMain.handle(ipcChannels.historyClear, () => dependencies.history.clear())
 
   const unsubscribe = dependencies.sessions.onEvent((event) => {
     if (!window.isDestroyed()) window.webContents.send(ipcChannels.sessionEvent, event)

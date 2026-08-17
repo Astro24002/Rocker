@@ -2,14 +2,18 @@ import { Bell, ChevronDown, Clock3, FileCode2, FolderClosed, Network, Search, Se
 import { useI18n } from "../i18n"
 import { IconButton } from "./IconButton"
 import { NavItem } from "./NavItem"
+import type { TerminalTab } from "../features/terminal/session-state"
 
 export type NavKey = "hosts" | "sftp" | "ports" | "snippets" | "history"
 
 interface SidebarProps {
   width: number
-  activeNav: NavKey | "settings"
+  activeNav: NavKey | "settings" | "terminal"
+  sessions?: TerminalTab[]
+  activeSessionId?: string
   onWidthChange(width: number): void
-  onNavigate(nav: NavKey | "settings"): void
+  onNavigate(nav: NavKey | "settings" | "terminal"): void
+  onSessionActivate?(id: string): void
 }
 
 const navItems: Array<{ key: NavKey; icon: typeof Server }> = [
@@ -24,7 +28,7 @@ export function clampSidebarWidth(width: number): number {
   return Math.max(180, Math.min(360, Math.round(width)))
 }
 
-export function Sidebar({ width, activeNav, onWidthChange, onNavigate }: SidebarProps) {
+export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWidthChange, onNavigate, onSessionActivate }: SidebarProps) {
   const { t } = useI18n()
 
   const startResize = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -78,7 +82,19 @@ export function Sidebar({ width, activeNav, onWidthChange, onNavigate }: Sidebar
           <span>{t("sidebar.sessions")}</span>
           <Search aria-hidden="true" size={14} />
         </div>
-        <p className="sidebar-empty">{t("sidebar.noSessions")}</p>
+        {sessions.length === 0 ? <p className="sidebar-empty">{t("sidebar.noSessions")}</p> : (
+          <div className="sidebar-session-list">
+            {sessions.map((session) => (
+              <button key={session.id} data-active={session.id === activeSessionId} type="button" onClick={() => {
+                onSessionActivate?.(session.id)
+                onNavigate("terminal")
+              }}>
+                <span className="session-state-dot" data-state={session.state} />
+                <span>{session.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="host-monitor host-monitor-offline">
