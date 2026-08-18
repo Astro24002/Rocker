@@ -10,6 +10,10 @@ directories:
 files:
   - out/**/*
   - package.json
+  - '!node_modules/**/*.map'
+  - '!node_modules/**/*.md'
+  - '!node_modules/**/deps/**'
+  - '!node_modules/**/{test,tests,__tests__,example,examples,docs}/**'
 
 win:
   icon: icon.png
