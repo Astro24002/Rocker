@@ -1,10 +1,9 @@
-import { ChevronDown, Clock3, FileCode2, FolderClosed, MoreHorizontal, Network, Search, Server, Settings } from "lucide-react"
+import { Clock3, FileCode2, FolderClosed, Network, Search, Server, Settings, SquareTerminal } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useI18n } from "../i18n"
 import { IconButton } from "./IconButton"
 import { NavItem } from "./NavItem"
 import type { WorkspaceSession } from "../features/terminal/session-state"
-import type { ReactNode } from "react"
 
 export type NavKey = "hosts" | "sftp" | "ports" | "snippets" | "history" | "settings"
 
@@ -13,7 +12,6 @@ interface SidebarProps {
   activeNav: NavKey | "settings" | "terminal"
   sessions?: WorkspaceSession[]
   activeSessionId?: string
-  monitor?: ReactNode
   onWidthChange(width: number): void
   onNavigate(nav: NavKey | "settings" | "terminal"): void
   onSessionActivate?(id: string): void
@@ -29,15 +27,14 @@ const navItems: Array<{ key: NavKey; icon: typeof Server }> = [
   { key: "sftp", icon: FolderClosed },
   { key: "ports", icon: Network },
   { key: "snippets", icon: FileCode2 },
-  { key: "history", icon: Clock3 },
-  { key: "settings", icon: Settings }
+  { key: "history", icon: Clock3 }
 ]
 
 export function clampSidebarWidth(width: number): number {
   return Math.max(180, Math.min(360, Math.round(width)))
 }
 
-export function Sidebar({ width, activeNav, sessions = [], activeSessionId, monitor, onWidthChange, onNavigate, onSessionActivate, onSessionDuplicate, onSessionDuplicateWindow, onSessionRename, onSessionSplit, onSessionClose }: SidebarProps) {
+export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWidthChange, onNavigate, onSessionActivate, onSessionDuplicate, onSessionDuplicateWindow, onSessionRename, onSessionSplit, onSessionClose }: SidebarProps) {
   const { t } = useI18n()
   const [menuSessionId, setMenuSessionId] = useState<string>()
 
@@ -68,11 +65,15 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, moni
 
   return (
     <aside className="sidebar" style={{ width }}>
-      <button className="workspace-switcher" type="button">
-        <span className="workspace-avatar">R</span>
-        <span>{t("workspace.personal")}</span>
-        <ChevronDown aria-hidden="true" size={15} />
-      </button>
+      <div className="sidebar-quick-actions">
+        <button className="local-terminal-action" type="button" onClick={() => onNavigate("terminal")}>
+          <SquareTerminal aria-hidden="true" size={16} />
+          <span>{t("sidebar.localTerminal")}</span>
+        </button>
+        <IconButton label={t("nav.settings")} className="sidebar-settings-action" data-active={activeNav === "settings"} onClick={() => onNavigate("settings")}>
+          <Settings size={16} />
+        </IconButton>
+      </div>
 
       <nav className="primary-nav" aria-label="Primary">
         {navItems.map(({ key, icon }) => (
@@ -95,14 +96,13 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, moni
           <div className="sidebar-session-list">
             {sessions.map((session) => (
               <div key={session.id} className="sidebar-session-row">
-                <button data-active={session.id === activeSessionId} type="button" onClick={() => {
+                <button data-active={session.id === activeSessionId} type="button" onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setMenuSessionId(session.id) }} onClick={() => {
                   onSessionActivate?.(session.id)
                   onNavigate("terminal")
                 }}>
                   <span className="session-state-dot" data-state={session.state} />
                   <span>{session.label}</span>
                 </button>
-                <IconButton label={`Actions for ${session.label}`} className="session-menu-trigger" onClick={(event) => { event.stopPropagation(); setMenuSessionId((current) => current === session.id ? undefined : session.id) }}><MoreHorizontal size={14} /></IconButton>
                 {menuSessionId === session.id && <div className="session-menu" onClick={(event) => event.stopPropagation()}>
                   <button type="button" onClick={() => { onSessionDuplicate?.(session); setMenuSessionId(undefined) }}>Duplicate</button>
                   <button type="button" onClick={() => { onSessionDuplicateWindow?.(session); setMenuSessionId(undefined) }}>Duplicate in a new window</button>
@@ -115,14 +115,6 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, moni
           </div>
         )}
       </section>
-
-      {monitor ?? <section className="host-monitor host-monitor-offline">
-        <div className="monitor-status-dot" />
-        <div>
-          <strong>{t("monitor.title")}</strong>
-          <span>{t("monitor.offline")}</span>
-        </div>
-      </section>}
 
       <div
         className="sidebar-resizer"

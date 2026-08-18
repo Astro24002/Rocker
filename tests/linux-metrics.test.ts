@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { parseCpuUsage, parseDiskUsage, parseMemoryUsage, parseNetworkTotals } from "../electron/monitoring/linux-metrics"
+import { parseCpuUsage, parseDiskUsage, parseLoadAverage, parseMemoryUsage, parseNetworkTotals } from "../electron/monitoring/linux-metrics"
 
 describe("Linux host metrics", () => {
   it("calculates CPU utilization from consecutive /proc/stat samples", () => {
@@ -21,5 +21,10 @@ describe("Linux host metrics", () => {
     )
 
     expect(totals).toEqual({ receivedBytes: 1200, transmittedBytes: 800 })
+  })
+
+  it("parses the one-minute system load average", () => {
+    expect(parseLoadAverage("0.42 0.31 0.18 1/234 12345")).toBe(0.42)
+    expect(parseLoadAverage("unavailable")).toBeNull()
   })
 })

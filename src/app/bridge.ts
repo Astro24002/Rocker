@@ -50,7 +50,7 @@ function createBrowserPreviewBridge(): RockerBridge {
       openAddress: async () => undefined
     },
     monitor: {
-      sample: async (sessionId) => ({ sessionId, latencyMs: 18, cpuPercent: 12, memoryPercent: 41, diskPercent: 58, receiveBytesPerSecond: 0, transmitBytesPerSecond: 0, sampledAt: new Date().toISOString() })
+      sample: async (sessionId) => ({ sessionId, latencyMs: 18, cpuPercent: 12, memoryPercent: 41, diskPercent: 58, loadAverage: 0.42, receiveBytesPerSecond: 0, transmitBytesPerSecond: 0, sampledAt: new Date().toISOString() })
     },
     history: {
       list: async () => [

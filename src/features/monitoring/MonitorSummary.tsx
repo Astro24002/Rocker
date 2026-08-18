@@ -12,28 +12,34 @@ export function MonitorSummary({ state, hostName, onToggle }: MonitorSummaryProp
   const { t } = useI18n()
   const metrics = state.metrics
   if (!hostName) {
-    return <section className="host-monitor host-monitor-offline"><div className="monitor-status-dot" /><div><strong>{t("monitor.title")}</strong><span>{t("monitor.offline")}</span></div></section>
+    return <section className="terminal-monitor terminal-monitor-offline" data-testid="terminal-monitor"><Gauge size={15} /><span>{t("monitor.offline")}</span></section>
   }
   return (
-    <section className="host-monitor-panel" data-expanded={state.expanded}>
-      <button className="monitor-summary-button" type="button" onClick={onToggle}>
-        <Gauge size={15} />
-        <span><strong>{hostName}</strong><small>{formatMetric(metrics?.latencyMs, "ms")} · CPU {formatMetric(metrics?.cpuPercent, "%")}</small></span>
-        {state.expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-      </button>
+    <section className="terminal-monitor" data-expanded={state.expanded} data-testid="terminal-monitor">
+      <div className="terminal-monitor-summary">
+        <button className="monitor-summary-button" type="button" onClick={onToggle}>
+          <Gauge size={15} />
+          <strong>{hostName}</strong>
+          {state.expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+        <div className="terminal-monitor-metrics">
+          <Metric label={t("monitor.cpu")} value={metrics?.cpuPercent} suffix="%" />
+          <Metric label={t("monitor.memory")} value={metrics?.memoryPercent} suffix="%" />
+          <Metric label="RX" value={metrics?.receiveBytesPerSecond} suffix=" B/s" />
+          <Metric label="TX" value={metrics?.transmitBytesPerSecond} suffix=" B/s" />
+          <Metric label={t("monitor.load")} value={metrics?.loadAverage} load />
+        </div>
+      </div>
       {state.expanded && <div className="monitor-details">
-        <Metric label={t("monitor.cpu")} value={metrics?.cpuPercent} suffix="%" />
-        <Metric label={t("monitor.memory")} value={metrics?.memoryPercent} suffix="%" />
         <Metric label="Disk" value={metrics?.diskPercent} suffix="%" />
-        <Metric label="RX" value={metrics?.receiveBytesPerSecond} suffix=" B/s" />
-        <Metric label="TX" value={metrics?.transmitBytesPerSecond} suffix=" B/s" />
         <span className="monitor-sampled">{metrics ? new Date(metrics.sampledAt).toLocaleTimeString() : "Waiting for sample"}</span>
       </div>}
     </section>
   )
 }
 
-function Metric({ label, value, suffix }: { label: string; value: number | null | undefined; suffix: string }) {
+function Metric({ label, value, suffix = "", load = false }: { label: string; value: number | null | undefined; suffix?: string; load?: boolean }) {
   const percent = suffix === "%" && value !== null && value !== undefined ? Math.max(0, Math.min(100, value)) : 0
-  return <div className="monitor-metric"><span>{label}</span><strong>{formatMetric(value, suffix)}</strong>{suffix === "%" && <i><b style={{ width: `${percent}%` }} /></i>}</div>
+  const formatted = load ? (value === null || value === undefined || !Number.isFinite(value) ? "—" : value.toFixed(2)) : formatMetric(value, suffix)
+  return <div className="monitor-metric"><span>{label}</span><strong>{formatted}</strong>{suffix === "%" && <i><b style={{ width: `${percent}%` }} /></i>}</div>
 }

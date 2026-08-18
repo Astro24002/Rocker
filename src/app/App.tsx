@@ -9,7 +9,6 @@ import {
   activateTab,
   appendOutput,
   attachSession,
-  clearTabOutput,
   closeTab,
   createSessionState,
   duplicateSession as duplicateSessionState,
@@ -25,7 +24,6 @@ import { I18nProvider, useI18n } from "../i18n"
 import type { AppSettings, ConnectionHistoryItem, HostProfile, SessionEvent } from "./types"
 import { getRockerBridge } from "./bridge"
 import { ComingSoonView } from "../components/ComingSoonView"
-import { MonitorSummary } from "../features/monitoring/MonitorSummary"
 import { applyMetrics, createMonitorState, toggleMonitor } from "../features/monitoring/monitor-state"
 import { PortsView } from "../features/ports/PortsView"
 import { SettingsView } from "../features/settings/SettingsView"
@@ -164,17 +162,6 @@ function Workspace() {
     if (sessions.tabs.length <= 1) setActiveNav("hosts")
   }
 
-  const reconnectTerminal = async (tab: TerminalTab): Promise<void> => {
-    if (!tab.sessionId) return
-    setSessions((current) => setLocalTabState(current, tab.id, "reconnecting"))
-    try {
-      const next = await bridge.sessions.reconnect(tab.sessionId)
-      setSessions((current) => attachSession(current, tab.id, next.sessionId))
-    } catch (error) {
-      setSessions((current) => setLocalTabState(current, tab.id, "error", error instanceof Error ? error.message : String(error)))
-    }
-  }
-
   return (
     <div className="app-shell">
       <WindowChrome />
@@ -184,7 +171,6 @@ function Workspace() {
         activeNav={activeNav}
         sessions={sessions.tabs}
         activeSessionId={sessions.activeId}
-        monitor={<MonitorSummary state={monitor} hostName={activeHost?.name} onToggle={() => setMonitor((current) => toggleMonitor(current))} />}
         onWidthChange={changeSidebarWidth}
         onNavigate={setActiveNav}
         onSessionActivate={(id) => setSessions((current) => activateTab(current, id))}
@@ -201,12 +187,9 @@ function Workspace() {
           <TerminalWorkspace
             tabs={sessions.tabs}
             activeId={sessions.activeId}
-            onActivate={(id) => setSessions((current) => activateTab(current, id))}
-            onClose={(tab) => void closeTerminalTab(tab)}
-            onNew={() => setActiveNav("hosts")}
-            onReconnect={(tab) => void reconnectTerminal(tab)}
-            onDisconnect={(tab) => tab.sessionId && void bridge.sessions.close(tab.sessionId)}
-            onClear={(tab) => setSessions((current) => clearTabOutput(current, tab.id))}
+            monitor={monitor}
+            monitorHostName={activeHost?.name}
+            onMonitorToggle={() => setMonitor((current) => toggleMonitor(current))}
             onInput={(tab, data) => tab.sessionId && void bridge.sessions.write(tab.sessionId, data)}
             onResize={(tab, cols, rows) => tab.sessionId && void bridge.sessions.resize(tab.sessionId, cols, rows)}
           />

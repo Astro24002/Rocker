@@ -12,6 +12,7 @@ export interface HostMetrics {
   cpuPercent: number | null
   memoryPercent: number | null
   diskPercent: number | null
+  loadAverage: number | null
   receiveBytesPerSecond: number | null
   transmitBytesPerSecond: number | null
   sampledAt: string
@@ -30,11 +31,12 @@ export class LinuxMetricsSampler {
 
   public async sample(sessionId: string): Promise<HostMetrics> {
     const startedAt = performance.now()
-    const [cpu, memory, disk, network] = await Promise.all([
+    const [cpu, memory, disk, network, load] = await Promise.all([
       this.sessions.exec(sessionId, "cat /proc/stat"),
       this.sessions.exec(sessionId, "cat /proc/meminfo"),
       this.sessions.exec(sessionId, "df -P /"),
-      this.sessions.exec(sessionId, "cat /proc/net/dev")
+      this.sessions.exec(sessionId, "cat /proc/net/dev"),
+      this.sessions.exec(sessionId, "cat /proc/loadavg")
     ])
     const now = Date.now()
     const currentNetwork = parseNetworkTotals(network)
@@ -47,6 +49,7 @@ export class LinuxMetricsSampler {
       cpuPercent: previous ? parseCpuUsage(previous.cpu, cpu) : null,
       memoryPercent: parseMemoryUsage(memory),
       diskPercent: parseDiskUsage(disk),
+      loadAverage: parseLoadAverage(load),
       receiveBytesPerSecond: previous ? (currentNetwork.receivedBytes - previous.network.receivedBytes) / elapsedSeconds : null,
       transmitBytesPerSecond: previous ? (currentNetwork.transmittedBytes - previous.network.transmittedBytes) / elapsedSeconds : null,
       sampledAt: new Date(now).toISOString()
@@ -56,6 +59,11 @@ export class LinuxMetricsSampler {
   public clear(sessionId: string): void {
     this.previous.delete(sessionId)
   }
+}
+
+export function parseLoadAverage(output: string): number | null {
+  const value = Number.parseFloat(output.trim().split(/\s+/)[0] ?? "")
+  return Number.isFinite(value) ? value : null
 }
 
 export function parseCpuUsage(previous: string, current: string): number | null {

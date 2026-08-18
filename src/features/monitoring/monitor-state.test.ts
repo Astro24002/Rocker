@@ -20,6 +20,7 @@ describe("current host monitor state", () => {
       cpuPercent: null,
       memoryPercent: 42,
       diskPercent: 60,
+      loadAverage: 1.2,
       receiveBytesPerSecond: null,
       transmitBytesPerSecond: null,
       sampledAt: "2026-08-17T12:00:00.000Z"
