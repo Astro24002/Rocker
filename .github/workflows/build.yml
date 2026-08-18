@@ -80,8 +80,17 @@ jobs:
             esac
           done
 
-          find release -type f \( -name 'Rocker-*.exe' -o -name 'Rocker-*.dmg' -o -name 'Rocker-*.zip' \) -print0 | while IFS= read -r -d '' asset; do
-            gh release upload "$GITHUB_REF_NAME" "$asset" \
-              --repo "$GITHUB_REPOSITORY" \
-              --clobber
+          release_version="${GITHUB_REF_NAME#v}"
+          for asset in \
+            "release/Rocker-v${release_version}-x64.exe" \
+            "release/Rocker-v${release_version}-arm64.exe" \
+            "release/Rocker-v${release_version}-x64.dmg" \
+            "release/Rocker-v${release_version}-arm64.dmg" \
+            "release/Rocker-v${release_version}-x64.zip" \
+            "release/Rocker-v${release_version}-arm64.zip"; do
+            if [ -f "$asset" ]; then
+              gh release upload "$GITHUB_REF_NAME" "$asset" \
+                --repo "$GITHUB_REPOSITORY" \
+                --clobber
+            fi
           done
