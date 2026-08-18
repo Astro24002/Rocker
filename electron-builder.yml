@@ -22,7 +22,7 @@ win:
       arch:
         - x64
         - arm64
-  artifactName: Rocker-${version}-${arch}.${ext}
+  artifactName: Rocker-${arch}.${ext}
 
 nsis:
   oneClick: false
@@ -43,7 +43,7 @@ mac:
       arch:
         - x64
         - arm64
-  artifactName: Rocker-${version}-${arch}.${ext}
+  artifactName: Rocker-${arch}.${ext}
 
 dmg:
   title: Rocker ${version}

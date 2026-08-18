@@ -72,7 +72,8 @@ jobs:
             --json assets \
             --jq '.assets[].name' | while IFS= read -r existing; do
             case "$existing" in
-              Rocker-*.exe|Rocker-*.dmg|Rocker-*.zip) ;;
+              Rocker-x64.exe|Rocker-arm64.exe|Rocker-x64.dmg|Rocker-arm64.dmg|\
+              Rocker-x64.zip|Rocker-arm64.zip) ;;
               *) gh release delete-asset "$GITHUB_REF_NAME" "$existing" --repo "$GITHUB_REPOSITORY" --yes ;;
             esac
           done
