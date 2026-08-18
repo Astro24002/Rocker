@@ -27,7 +27,10 @@ describe("Sidebar session actions", () => {
     expect(screen.queryByRole("button", { name: /Actions for G11/ })).not.toBeInTheDocument()
 
     fireEvent.contextMenu(sessionButton)
-    expect(screen.getByRole("button", { name: "Duplicate" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument()
+    expect(screen.getByRole("menu", { name: "Session actions for G11" })).toBeInTheDocument()
+    expect(screen.getByRole("menuitem", { name: "Duplicate" })).toBeInTheDocument()
+    expect(screen.getByRole("menuitem", { name: "Close" })).toBeInTheDocument()
+    expect(screen.getByText("Session")).toBeInTheDocument()
+    expect(screen.getByText("Layout")).toBeInTheDocument()
   })
 })

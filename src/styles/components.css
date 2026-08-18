@@ -701,12 +701,17 @@
 }
 
 .terminal-monitor {
-  position: relative;
-  z-index: 2;
-  flex: 0 0 auto;
-  border-bottom: 1px solid var(--line);
-  background: var(--workspace-raised);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.16);
+  position: absolute;
+  z-index: 4;
+  top: 12px;
+  right: 14px;
+  width: min(620px, calc(100% - 28px));
+  overflow: hidden;
+  border: 1px solid rgba(134, 222, 103, 0.34);
+  border-radius: 8px;
+  background: rgba(18, 22, 29, 0.94);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(14px);
 }
 
 .terminal-monitor-offline {
@@ -723,19 +728,21 @@
   color: var(--accent);
 }
 
-.terminal-monitor-summary {
+.monitor-hud-header {
   display: flex;
-  min-height: 42px;
+  min-height: 38px;
   align-items: center;
-  gap: 16px;
-  padding: 0 12px;
+  gap: 10px;
+  padding: 0 9px 0 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .monitor-summary-button {
   display: grid;
-  min-width: 110px;
-  min-height: 34px;
-  grid-template-columns: 18px minmax(0, 1fr) 16px;
+  min-width: 138px;
+  min-height: 30px;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   padding: 0;
@@ -746,13 +753,19 @@
 }
 
 .monitor-summary-button:hover {
-  background: var(--sidebar-hover);
+  color: var(--text-primary);
 }
 
 .monitor-summary-button > svg:first-child {
   color: var(--accent);
 }
 
+.monitor-summary-button span {
+  display: block;
+  min-width: 0;
+}
+
+.monitor-summary-button small,
 .monitor-summary-button strong {
   display: block;
   overflow: hidden;
@@ -760,58 +773,99 @@
   white-space: nowrap;
 }
 
+.monitor-summary-button small {
+  color: var(--text-muted);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
 .monitor-summary-button strong {
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: 10px;
 }
 
-.terminal-monitor-metrics {
+.monitor-hud-status {
   display: flex;
-  min-width: 0;
-  flex: 1;
   align-items: center;
-  gap: 16px;
-  overflow-x: auto;
-}
-
-.terminal-monitor-metrics .monitor-metric {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: baseline;
   gap: 5px;
-  color: var(--text-muted);
-  font-size: 10px;
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.1em;
 }
 
-.terminal-monitor-metrics .monitor-metric strong {
-  color: var(--text-secondary);
-  font-size: 10px;
+.monitor-hud-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(134, 222, 103, 0.75);
 }
 
-.monitor-details {
+.monitor-hud-toggle {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px 12px;
-  padding: 0 12px 12px;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
 }
 
-.monitor-metric {
+.monitor-hud-toggle:hover {
+  color: var(--text-primary);
+  background: var(--workspace-hover);
+}
+
+.monitor-hud-grid {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 3px 6px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+  padding: 7px;
+}
+
+.monitor-hud-grid .monitor-metric,
+.monitor-hud-details .monitor-metric {
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.monitor-metric-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.monitor-metric-heading svg {
+  color: var(--teal);
 }
 
 .monitor-metric strong {
-  color: var(--text-secondary);
-  font-size: 10px;
+  display: block;
+  margin-top: 3px;
+  color: var(--text-primary);
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
 }
 
 .monitor-metric i {
-  grid-column: 1 / -1;
+  display: block;
   width: 100%;
   height: 2px;
+  margin-top: 5px;
   overflow: hidden;
   background: var(--line);
 }
@@ -819,11 +873,19 @@
 .monitor-metric b {
   display: block;
   height: 100%;
-  background: var(--teal);
+  background: var(--accent);
+}
+
+.monitor-hud-details {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+  padding: 0 7px 7px;
 }
 
 .monitor-sampled {
   grid-column: 1 / -1;
+  align-self: center;
   color: var(--text-muted);
   font-size: 9px;
 }

@@ -1,4 +1,4 @@
-import { Clock3, FileCode2, FolderClosed, Network, Search, Server, Settings, SquareTerminal } from "lucide-react"
+import { Clock3, Columns2, Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, Search, Server, Settings, SquareTerminal, X } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useI18n } from "../i18n"
 import { IconButton } from "./IconButton"
@@ -103,12 +103,15 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWi
                   <span className="session-state-dot" data-state={session.state} />
                   <span>{session.label}</span>
                 </button>
-                {menuSessionId === session.id && <div className="session-menu" onClick={(event) => event.stopPropagation()}>
-                  <button type="button" onClick={() => { onSessionDuplicate?.(session); setMenuSessionId(undefined) }}>Duplicate</button>
-                  <button type="button" onClick={() => { onSessionDuplicateWindow?.(session); setMenuSessionId(undefined) }}>Duplicate in a new window</button>
-                  <button type="button" onClick={() => { onSessionRename?.(session); setMenuSessionId(undefined) }}>Rename</button>
-                  <button type="button" onClick={() => { onSessionSplit?.(session); setMenuSessionId(undefined) }}>Split horizontally</button>
-                  <button type="button" onClick={() => { onSessionClose?.(session); setMenuSessionId(undefined) }}>Close</button>
+                {menuSessionId === session.id && <div className="session-menu" role="menu" aria-label={`Session actions for ${session.label}`} onClick={(event) => event.stopPropagation()}>
+                  <span className="session-menu-label">{t("sidebar.menuSession")}</span>
+                  <button role="menuitem" type="button" onClick={() => { onSessionDuplicate?.(session); setMenuSessionId(undefined) }}><Copy aria-hidden="true" size={14} /><span>{t("sidebar.duplicate")}</span></button>
+                  <button role="menuitem" type="button" onClick={() => { onSessionDuplicateWindow?.(session); setMenuSessionId(undefined) }}><ExternalLink aria-hidden="true" size={14} /><span>{t("sidebar.duplicateWindow")}</span></button>
+                  <button role="menuitem" type="button" onClick={() => { onSessionRename?.(session); setMenuSessionId(undefined) }}><Pencil aria-hidden="true" size={14} /><span>{t("sidebar.rename")}</span></button>
+                  <span className="session-menu-label session-menu-label-spaced">{t("sidebar.menuLayout")}</span>
+                  <button role="menuitem" type="button" onClick={() => { onSessionSplit?.(session); setMenuSessionId(undefined) }}><Columns2 aria-hidden="true" size={14} /><span>{t("sidebar.splitHorizontal")}</span></button>
+                  <span className="session-menu-separator" />
+                  <button className="session-menu-danger" role="menuitem" type="button" onClick={() => { onSessionClose?.(session); setMenuSessionId(undefined) }}><X aria-hidden="true" size={14} /><span>{t("sidebar.close")}</span></button>
                 </div>}
               </div>
             ))}

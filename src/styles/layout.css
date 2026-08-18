@@ -137,6 +137,11 @@
   min-height: 0;
 }
 
+.terminal-workspace {
+  position: relative;
+  overflow: hidden;
+}
+
 .terminal-stack {
   position: relative;
   flex: 1;

@@ -38,6 +38,7 @@ describe("TerminalWorkspace layout", () => {
     expect(screen.getByText("800 B/s")).toBeInTheDocument()
     expect(screen.getByText("Load")).toBeInTheDocument()
     expect(screen.getByText("1.25")).toBeInTheDocument()
+    expect(screen.getByTestId("terminal-monitor")).toHaveClass("terminal-monitor-hud")
     expect(screen.getByTestId("terminal-monitor").compareDocumentPosition(screen.getByTestId("terminal-surface")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
