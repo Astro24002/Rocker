@@ -71,9 +71,11 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --json assets \
             --jq '.assets[].name' | while IFS= read -r existing; do
+            release_version="${GITHUB_REF_NAME#v}"
             case "$existing" in
-              Rocker-x64.exe|Rocker-arm64.exe|Rocker-x64.dmg|Rocker-arm64.dmg|\
-              Rocker-x64.zip|Rocker-arm64.zip) ;;
+              "Rocker-v${release_version}-x64.exe"|"Rocker-v${release_version}-arm64.exe"|\
+              "Rocker-v${release_version}-x64.dmg"|"Rocker-v${release_version}-arm64.dmg"|\
+              "Rocker-v${release_version}-x64.zip"|"Rocker-v${release_version}-arm64.zip") ;;
               *) gh release delete-asset "$GITHUB_REF_NAME" "$existing" --repo "$GITHUB_REPOSITORY" --yes ;;
             esac
           done
