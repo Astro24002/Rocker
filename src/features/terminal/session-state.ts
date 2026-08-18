@@ -1,14 +1,23 @@
 export type TerminalTabState = "connecting" | "connected" | "disconnected" | "error" | "reconnecting"
 
-export interface TerminalTab {
+export interface SessionPane {
+  orientation: "horizontal"
+  parentId: string
+}
+
+export interface WorkspaceSession {
   id: string
   sessionId?: string
+  connectionId?: string
   hostId: string
   label: string
   state: TerminalTabState
   output: string
   error?: string
+  pane?: SessionPane
 }
+
+export type TerminalTab = WorkspaceSession
 
 export interface TerminalSessionState {
   tabs: TerminalTab[]
@@ -29,12 +38,54 @@ export function openTab(
   }
 }
 
-export function attachSession(state: TerminalSessionState, localId: string, sessionId: string): TerminalSessionState {
+export function attachSession(state: TerminalSessionState, localId: string, sessionId: string, connectionId?: string): TerminalSessionState {
   return {
     ...state,
-    tabs: state.tabs.map((tab) => tab.id === localId ? { ...tab, sessionId, state: "connected" } : tab)
+    tabs: state.tabs.map((tab) => tab.id === localId ? { ...tab, sessionId, connectionId, state: "connected" } : tab)
   }
 }
+
+export function duplicateSession(
+  state: TerminalSessionState,
+  sourceId: string,
+  input: Pick<WorkspaceSession, "id" | "label"> & Partial<Pick<WorkspaceSession, "hostId">>
+): TerminalSessionState {
+  const source = state.tabs.find((tab) => tab.id === sourceId)
+  if (!source) return state
+  const clone: WorkspaceSession = {
+    id: input.id,
+    hostId: input.hostId ?? source.hostId,
+    label: input.label,
+    state: "connecting",
+    output: ""
+  }
+  return { ...state, tabs: [...state.tabs, clone], activeId: clone.id }
+}
+
+export function renameSession(state: TerminalSessionState, localId: string, label: string): TerminalSessionState {
+  const nextLabel = label.trim()
+  return nextLabel ? { ...state, tabs: state.tabs.map((tab) => tab.id === localId ? { ...tab, label: nextLabel } : tab) } : state
+}
+
+export function splitSession(
+  state: TerminalSessionState,
+  sourceId: string,
+  input: Pick<WorkspaceSession, "id" | "label"> & Partial<Pick<WorkspaceSession, "hostId">>
+): TerminalSessionState {
+  const source = state.tabs.find((tab) => tab.id === sourceId)
+  if (!source) return state
+  const clone: WorkspaceSession = {
+    id: input.id,
+    hostId: input.hostId ?? source.hostId,
+    label: input.label,
+    state: "connecting",
+    output: "",
+    pane: { orientation: "horizontal", parentId: sourceId }
+  }
+  return { ...state, tabs: [...state.tabs, clone], activeId: clone.id }
+}
+
+export const closeSession = closeTab
 
 export function closeTab(state: TerminalSessionState, localId: string): TerminalSessionState {
   const index = state.tabs.findIndex((tab) => tab.id === localId)

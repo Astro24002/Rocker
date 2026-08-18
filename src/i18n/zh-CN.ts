@@ -36,5 +36,11 @@ export const zhCN = {
   "placeholder.sftp": "安全文件传输将在后续版本中提供。",
   "placeholder.snippets": "可复用命令片段将在后续版本中提供。",
   "history.title": "历史记录",
-  "ports.title": "端口转发"
+  "ports.title": "端口转发",
+  "ports.subtitle": "查看远程服务，只转发你明确批准的端口。",
+  "ports.scan": "检查远程服务",
+  "ports.noConnection": "暂无连接主机",
+  "ports.noConnectionBody": "请先打开 SSH 会话，再检查远程服务。",
+  "ports.idleTitle": "尚未检查端口",
+  "ports.idleBody": "端口检查需要手动触发。Rocker 只提供推荐，不会自动启动转发。"
 } satisfies Record<TranslationKey, string>

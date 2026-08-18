@@ -3,6 +3,7 @@ export type PortStatus = "discovered" | "starting" | "forwarding" | "stopping" |
 
 export interface DiscoveredPort {
   id: string
+  connectionId?: string
   sessionId?: string
   remoteAddress: string
   remotePort: number
@@ -22,7 +23,8 @@ export interface ForwardingSpec {
 
 export interface ForwardingInfo extends ForwardingSpec {
   id: string
-  sessionId: string
+  connectionId: string
+  sessionId?: string
   status: PortStatus
   error?: string
 }

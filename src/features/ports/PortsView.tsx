@@ -1,15 +1,15 @@
 import { Clipboard, ExternalLink, Play, RefreshCw, Square } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import type { DiscoveredPort, ForwardingInfo } from "../../app/types"
 import { IconButton } from "../../components/IconButton"
 import { useI18n } from "../../i18n"
-import type { TerminalTab } from "../terminal/session-state"
+import type { WorkspaceSession } from "../terminal/session-state"
 import { applyDiscoveredPorts, applyForwarding, createPortState, setPortError, setPortLoading } from "./port-state"
 
 interface PortsViewProps {
   bridge: RockerBridge
-  session?: TerminalTab
+  session?: WorkspaceSession
   username?: string
 }
 
@@ -17,13 +17,13 @@ export function PortsView({ bridge, session, username }: PortsViewProps) {
   const { t } = useI18n()
   const [state, setState] = useState(createPortState)
   const [localPorts, setLocalPorts] = useState<Record<string, number>>({})
-  const sessionId = session?.sessionId
+  const connectionId = session?.connectionId
 
   const scan = async (): Promise<void> => {
-    if (!sessionId) return
+    if (!connectionId) return
     setState((current) => setPortLoading(current, true))
     try {
-      const [ports, forwardings] = await Promise.all([bridge.ports.scan(sessionId), bridge.ports.list()])
+      const [ports, forwardings] = await Promise.all([bridge.ports.scan(connectionId), bridge.ports.list()])
       setState((current) => forwardings.reduce((next, forwarding) => applyForwarding(next, forwarding), applyDiscoveredPorts(current, ports)))
       setLocalPorts((current) => ({ ...Object.fromEntries(ports.map((port) => [port.id, current[port.id] ?? port.remotePort])) }))
     } catch (error) {
@@ -31,18 +31,14 @@ export function PortsView({ bridge, session, username }: PortsViewProps) {
     }
   }
 
-  useEffect(() => {
-    void scan()
-  }, [sessionId])
-
   const forwardingByPort = useMemo(() => new Map(state.forwardings
-    .filter((forwarding) => forwarding.sessionId === sessionId && forwarding.status !== "stopped")
-    .map((forwarding) => [forwarding.remotePort, forwarding])), [state.forwardings, sessionId])
+    .filter((forwarding) => forwarding.connectionId === connectionId && forwarding.status !== "stopped")
+    .map((forwarding) => [forwarding.remotePort, forwarding])), [state.forwardings, connectionId])
 
   const startForwarding = async (port: DiscoveredPort): Promise<void> => {
-    if (!sessionId) return
+    if (!connectionId) return
     try {
-      const forwarding = await bridge.ports.start(sessionId, {
+      const forwarding = await bridge.ports.start(connectionId, {
         localAddress: "127.0.0.1",
         localPort: localPorts[port.id] ?? port.remotePort,
         remoteAddress: normalizeRemoteAddress(port.remoteAddress),
@@ -62,11 +58,11 @@ export function PortsView({ bridge, session, username }: PortsViewProps) {
   return (
     <section className="ports-view">
       <header className="view-header">
-        <div><span className="view-eyebrow">Rocker / {session?.label ?? t("workspace.personal")}</span><h1>{t("ports.title")}</h1><p>Discover remote services and forward only the ports you need.</p></div>
-        <button className="secondary-command" type="button" disabled={!sessionId || state.loading} onClick={() => void scan()}><RefreshCw size={15} className={state.loading ? "is-spinning" : ""} />Scan ports</button>
+        <div><span className="view-eyebrow">Rocker / {session?.label ?? t("workspace.personal")}</span><h1>{t("ports.title")}</h1><p>{t("ports.subtitle")}</p></div>
+        <button className="secondary-command" type="button" disabled={!connectionId || state.loading} onClick={() => void scan()}><RefreshCw size={15} className={state.loading ? "is-spinning" : ""} />{t("ports.scan")}</button>
       </header>
-      {!sessionId ? (
-        <div className="port-empty"><strong>No connected host</strong><span>Open an SSH session to discover listening ports.</span></div>
+      {!connectionId ? (
+        <div className="port-empty"><strong>{t("ports.noConnection")}</strong><span>{t("ports.noConnectionBody")}</span></div>
       ) : (
         <div className="ports-content">
           {state.error && <div className="inline-error">{formatPortError(state.error)}</div>}
@@ -94,7 +90,7 @@ export function PortsView({ bridge, session, username }: PortsViewProps) {
               )
             })}
           </div>
-          {state.ports.length === 0 && !state.loading && <div className="port-empty"><strong>No listening ports found</strong><span>The terminal remains available even when discovery is unsupported.</span></div>}
+          {state.ports.length === 0 && !state.loading && <div className="port-empty"><strong>{t("ports.idleTitle")}</strong><span>{t("ports.idleBody")}</span></div>}
         </div>
       )}
     </section>

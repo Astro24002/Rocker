@@ -1,10 +1,14 @@
 import { contextBridge, ipcRenderer } from "electron"
 import { ipcChannels, type RockerBridge } from "./ipc/bridge-contract"
 import type { SessionEvent } from "./ssh/ssh-manager"
+import type { SessionLaunchRequest } from "./ipc/bridge-contract"
 
 const bridge: RockerBridge = {
   app: {
-    platform: process.platform
+    platform: process.platform,
+    minimize: () => ipcRenderer.invoke(ipcChannels.windowMinimize),
+    toggleMaximize: () => ipcRenderer.invoke(ipcChannels.windowToggleMaximize),
+    close: () => ipcRenderer.invoke(ipcChannels.windowClose)
   },
   hosts: {
     list: () => ipcRenderer.invoke(ipcChannels.hostsList),
@@ -17,7 +21,8 @@ const bridge: RockerBridge = {
     write: (sessionId, data) => ipcRenderer.invoke(ipcChannels.sessionWrite, sessionId, data),
     resize: (sessionId, cols, rows) => ipcRenderer.invoke(ipcChannels.sessionResize, sessionId, cols, rows),
     close: (sessionId) => ipcRenderer.invoke(ipcChannels.sessionClose, sessionId),
-    reconnect: (sessionId) => ipcRenderer.invoke(ipcChannels.sessionReconnect, sessionId)
+    reconnect: (sessionId) => ipcRenderer.invoke(ipcChannels.sessionReconnect, sessionId),
+    duplicateInNewWindow: (hostId) => ipcRenderer.invoke(ipcChannels.sessionDuplicateWindow, hostId)
   },
   ports: {
     scan: (sessionId) => ipcRenderer.invoke(ipcChannels.portsScan, sessionId),
@@ -42,6 +47,11 @@ const bridge: RockerBridge = {
       const handler = (_event: Electron.IpcRendererEvent, payload: SessionEvent): void => listener(payload)
       ipcRenderer.on(ipcChannels.sessionEvent, handler)
       return () => ipcRenderer.removeListener(ipcChannels.sessionEvent, handler)
+    },
+    onSessionLaunch: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: SessionLaunchRequest): void => listener(payload)
+      ipcRenderer.on(ipcChannels.sessionLaunch, handler)
+      return () => ipcRenderer.removeListener(ipcChannels.sessionLaunch, handler)
     }
   }
 }

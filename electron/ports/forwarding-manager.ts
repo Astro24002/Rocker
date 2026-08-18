@@ -4,7 +4,8 @@ import type { Client } from "ssh2"
 import type { ForwardingInfo, ForwardingSpec } from "./types"
 
 export interface SshConnectionProvider {
-  getClient(sessionId: string): Client
+  getClientForConnection?(connectionId: string): Client
+  getClient?(sessionId: string): Client
 }
 
 interface ForwardingRecord {
@@ -17,17 +18,17 @@ export class ForwardingManager {
 
   public constructor(private readonly connections: SshConnectionProvider) {}
 
-  public async start(sessionId: string, spec: ForwardingSpec): Promise<ForwardingInfo> {
+  public async start(connectionId: string, spec: ForwardingSpec): Promise<ForwardingInfo> {
     const info: ForwardingInfo = {
       ...spec,
       id: randomUUID(),
-      sessionId,
+      connectionId,
       status: "starting"
     }
     const server = createServer((socket) => {
       let client: Client
       try {
-        client = this.connections.getClient(sessionId)
+        client = this.connections.getClientForConnection?.(connectionId) ?? this.connections.getClient?.(connectionId) ?? (() => { throw new Error("SSH connection provider is unavailable") })()
       } catch (error) {
         socket.destroy(error as Error)
         return
@@ -75,10 +76,14 @@ export class ForwardingManager {
     record.info.status = "stopped"
   }
 
-  public async stopForSession(sessionId: string): Promise<void> {
+  public async stopForConnection(connectionId: string): Promise<void> {
     const ids = [...this.records.values()]
-      .filter((record) => record.info.sessionId === sessionId && record.info.status !== "stopped")
+      .filter((record) => record.info.connectionId === connectionId && record.info.status !== "stopped")
       .map((record) => record.info.id)
     await Promise.all(ids.map((id) => this.stop(id)))
+  }
+
+  public async stopForSession(sessionId: string): Promise<void> {
+    return this.stopForConnection(sessionId)
   }
 }

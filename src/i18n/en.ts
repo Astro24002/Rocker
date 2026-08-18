@@ -34,7 +34,13 @@ export const en = {
   "placeholder.sftp": "Secure file transfers will arrive in a later release.",
   "placeholder.snippets": "Reusable command snippets will arrive in a later release.",
   "history.title": "History",
-  "ports.title": "Port Forwarding"
+  "ports.title": "Port Forwarding",
+  "ports.subtitle": "Review remote services and forward only the ports you approve.",
+  "ports.scan": "Scan remote services",
+  "ports.noConnection": "No connected host",
+  "ports.noConnectionBody": "Open an SSH session before checking remote services.",
+  "ports.idleTitle": "No scan requested",
+  "ports.idleBody": "Scanning is manual. Rocker will only recommend ports and never start forwarding automatically."
 } as const
 
 export type TranslationKey = keyof typeof en

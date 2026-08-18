@@ -17,7 +17,7 @@ export function getRockerBridge(): RockerBridge {
 
 function createBrowserPreviewBridge(): RockerBridge {
   return {
-    app: { platform: "browser" as NodeJS.Platform },
+    app: { platform: "browser" as NodeJS.Platform, minimize: async () => undefined, toggleMaximize: async () => undefined, close: async () => undefined },
     hosts: {
       list: async () => mockHosts,
       save: async ({ profile }) => {
@@ -31,18 +31,20 @@ function createBrowserPreviewBridge(): RockerBridge {
     sessions: {
       open: async ({ hostId }) => {
         const sessionId = crypto.randomUUID()
-        window.setTimeout(() => emitMock({ kind: "state", sessionId, state: "connected" }), 100)
-        window.setTimeout(() => emitMock({ kind: "data", sessionId, data: `Rocker preview session for ${hostId}\\r\\n$ ` }), 160)
-        return { sessionId, hostId, state: "connected" }
+        const connectionId = `preview-${hostId}`
+        window.setTimeout(() => emitMock({ kind: "state", sessionId, connectionId, state: "connected" }), 100)
+        window.setTimeout(() => emitMock({ kind: "data", sessionId, connectionId, data: `Rocker preview session for ${hostId}\\r\\n$ ` }), 160)
+        return { sessionId, connectionId, hostId, state: "connected" }
       },
-      write: async (sessionId, data) => emitMock({ kind: "data", sessionId, data: `preview:${data}` }),
+      write: async (sessionId, data) => emitMock({ kind: "data", sessionId, connectionId: "preview", data: `preview:${data}` }),
       resize: async () => undefined,
-      close: async (sessionId) => emitMock({ kind: "state", sessionId, state: "closed" }),
-      reconnect: async (sessionId) => ({ sessionId, hostId: sessionId, state: "connected" })
+      close: async (sessionId) => emitMock({ kind: "state", sessionId, connectionId: "preview", state: "closed" }),
+      reconnect: async (sessionId) => ({ sessionId, connectionId: "preview", hostId: sessionId, state: "connected" }),
+      duplicateInNewWindow: async () => undefined
     },
     ports: {
       scan: async () => [],
-      start: async (_sessionId, spec) => ({ ...spec, id: crypto.randomUUID(), sessionId: "preview", status: "forwarding" }),
+      start: async (connectionId, spec) => ({ ...spec, id: crypto.randomUUID(), connectionId, status: "forwarding" }),
       stop: async () => undefined,
       list: async () => [],
       openAddress: async () => undefined
@@ -64,7 +66,8 @@ function createBrowserPreviewBridge(): RockerBridge {
       onSessionEvent: (listener) => {
         mockListeners.add(listener)
         return () => mockListeners.delete(listener)
-      }
+      },
+      onSessionLaunch: () => () => undefined
     }
   }
 }

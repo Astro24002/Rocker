@@ -4,7 +4,7 @@ import { applyDiscoveredPorts, applyForwarding, createPortState, setPortError } 
 
 const discovered: DiscoveredPort = {
   id: "port-3000",
-  sessionId: "session",
+  connectionId: "connection",
   remoteAddress: "0.0.0.0",
   remotePort: 3000,
   process: "node",
@@ -23,7 +23,7 @@ describe("Ports view state", () => {
   it("tracks forwarding independently from discovery", () => {
     const forwarding: ForwardingInfo = {
       id: "forward-1",
-      sessionId: "session",
+      connectionId: "connection",
       localAddress: "127.0.0.1",
       localPort: 3000,
       remoteAddress: "0.0.0.0",

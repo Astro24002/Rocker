@@ -82,6 +82,80 @@ describe("SSH sessions", () => {
     await manager.close(session.sessionId)
     await waitFor(() => events.some((event) => event.kind === "state" && event.state === "closed"))
   })
+
+  it("reuses a verified connection for matching sessions in one window", async () => {
+    const hostKey = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      privateKeyEncoding: { format: "pem", type: "pkcs1" },
+      publicKeyEncoding: { format: "pem", type: "spki" }
+    }).privateKey
+    const server = new Server({ hostKeys: [hostKey] })
+    servers.push(server)
+    let connectionCount = 0
+    server.on("connection", (client) => {
+      connectionCount += 1
+      client.on("authentication", (context) => context.method === "password" && context.password === "secret" ? context.accept() : context.reject())
+      client.on("ready", () => client.on("session", (accept) => {
+        const session = accept()
+        session.on("pty", (acceptPty) => acceptPty())
+        session.on("shell", (acceptShell) => acceptShell().write("ready\n"))
+      }))
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", () => resolve())
+      server.once("error", reject)
+    })
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("mock server did not expose a port")
+    const hostKeys: HostKeyStore = { get: async () => undefined, trust: async () => undefined }
+    const manager = new SshManager({ hostKeys, onUnknownHostKey: async () => true })
+    const request = { hostId: "shared", host: "127.0.0.1", port: address.port, username: "tester", authMethod: "password" as const, password: "secret", cols: 100, rows: 30 }
+
+    const first = await manager.open(request, { windowId: 11 })
+    const second = await manager.open(request, { windowId: 11 })
+
+    expect(second.connectionId).toBe(first.connectionId)
+    expect(connectionCount).toBe(1)
+    await manager.close(first.sessionId)
+    await manager.close(second.sessionId)
+  })
+
+  it("forces a new connection for a duplicate in another window", async () => {
+    const hostKey = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      privateKeyEncoding: { format: "pem", type: "pkcs1" },
+      publicKeyEncoding: { format: "pem", type: "spki" }
+    }).privateKey
+    const server = new Server({ hostKeys: [hostKey] })
+    servers.push(server)
+    let connectionCount = 0
+    server.on("connection", (client) => {
+      connectionCount += 1
+      client.on("authentication", (context) => context.method === "password" && context.password === "secret" ? context.accept() : context.reject())
+      client.on("ready", () => client.on("session", (accept) => {
+        const session = accept()
+        session.on("pty", (acceptPty) => acceptPty())
+        session.on("shell", (acceptShell) => acceptShell())
+      }))
+    })
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", () => resolve())
+      server.once("error", reject)
+    })
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("mock server did not expose a port")
+    const hostKeys: HostKeyStore = { get: async () => undefined, trust: async () => undefined }
+    const manager = new SshManager({ hostKeys, onUnknownHostKey: async () => true })
+    const request = { hostId: "shared", host: "127.0.0.1", port: address.port, username: "tester", authMethod: "password" as const, password: "secret", cols: 100, rows: 30 }
+
+    const first = await manager.open(request, { windowId: 11 })
+    const second = await manager.open(request, { windowId: 12, forceNewConnection: true })
+
+    expect(second.connectionId).not.toBe(first.connectionId)
+    expect(connectionCount).toBe(2)
+    await manager.close(first.sessionId)
+    await manager.close(second.sessionId)
+  })
 })
 
 async function waitFor(predicate: () => boolean): Promise<void> {

@@ -6,17 +6,17 @@ const ssCommand = "ss -ltnpeH"
 const netstatCommand = "netstat -ltnpe"
 
 export class PortService {
-  public constructor(private readonly sessions: Pick<SshManager, "exec">) {}
+  public constructor(private readonly sessions: Pick<SshManager, "exec" | "execOnConnection">) {}
 
-  public async scan(sessionId: string): Promise<DiscoveredPort[]> {
+  public async scan(connectionId: string): Promise<DiscoveredPort[]> {
     try {
-      const output = await this.sessions.exec(sessionId, ssCommand)
+      const output = await this.sessions.execOnConnection(connectionId, ssCommand)
       const ports = parseListeningPorts(output, "ss")
-      if (ports.length > 0) return ports.map((port) => ({ ...port, sessionId }))
+      if (ports.length > 0) return ports.map((port) => ({ ...port, connectionId }))
     } catch {
       // The netstat fallback below reports the final unsupported state.
     }
-    const output = await this.sessions.exec(sessionId, netstatCommand)
-    return parseListeningPorts(output, "netstat").map((port) => ({ ...port, sessionId }))
+    const output = await this.sessions.execOnConnection(connectionId, netstatCommand)
+    return parseListeningPorts(output, "netstat").map((port) => ({ ...port, connectionId }))
   }
 }

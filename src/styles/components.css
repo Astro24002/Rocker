@@ -1,16 +1,3 @@
-.sidebar-tools {
-  display: flex;
-  height: 52px;
-  align-items: center;
-  gap: 4px;
-  padding: 0 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
-}
-
-.sidebar-tools-spacer {
-  flex: 1;
-}
-
 .icon-button,
 .icon-command {
   display: inline-grid;
@@ -137,6 +124,54 @@
   background: transparent;
   cursor: pointer;
   text-align: left;
+}
+
+.sidebar-session-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+  min-height: 34px;
+}
+
+.sidebar-session-row > button:first-child {
+  min-width: 0;
+}
+
+.session-menu-trigger {
+  width: 28px;
+  height: 28px;
+  color: var(--text-muted);
+}
+
+.session-menu {
+  position: absolute;
+  z-index: 20;
+  top: 30px;
+  right: 0;
+  display: flex;
+  width: 205px;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--workspace-raised);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
+}
+
+.session-menu button {
+  min-height: 30px;
+  padding: 0 9px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.session-menu button:hover {
+  color: var(--text-primary);
+  background: var(--workspace-hover);
 }
 
 .sidebar-session-list button:hover,
@@ -296,35 +331,6 @@
 .segmented-control button[data-active="true"] {
   color: var(--text-primary);
   background: var(--line-strong);
-}
-
-.session-tabs {
-  display: flex;
-  height: 38px;
-  align-items: stretch;
-  border-bottom: 1px solid var(--line);
-  background: var(--workspace-raised);
-}
-
-.session-tab {
-  display: flex;
-  min-width: 128px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  border-right: 1px solid var(--line);
-  color: var(--text-secondary);
-  background: transparent;
-}
-
-.session-tab[data-active="true"] {
-  color: var(--text-primary);
-  background: var(--workspace-bg);
-}
-
-.new-session-button {
-  align-self: center;
-  margin-left: 4px;
 }
 
 .host-groups button {
@@ -557,55 +563,21 @@
   background: var(--workspace-raised);
 }
 
-.terminal-tab-strip,
-.terminal-actions {
-  display: flex;
+.terminal-session-title {
   min-width: 0;
-  align-items: center;
-}
-
-.terminal-tab-strip {
-  overflow-x: auto;
   flex: 1;
-}
-
-.terminal-tab {
-  display: grid;
-  min-width: 142px;
-  max-width: 220px;
-  height: 40px;
-  grid-template-columns: 8px minmax(0, 1fr) 18px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 9px 0 12px;
-  border-right: 1px solid var(--line);
-  color: var(--text-secondary);
-  background: transparent;
-  cursor: pointer;
-}
-
-.terminal-tab[data-active="true"] {
-  color: var(--text-primary);
-  background: var(--workspace-bg);
-}
-
-.terminal-tab-label {
   overflow: hidden;
-  text-align: left;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.terminal-tab-close {
-  display: grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border-radius: 3px;
-}
-
-.terminal-tab-close:hover {
-  background: var(--line-strong);
+.terminal-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
 }
 
 .terminal-actions {

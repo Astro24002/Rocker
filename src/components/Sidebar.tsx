@@ -1,21 +1,27 @@
-import { Bell, ChevronDown, Clock3, FileCode2, FolderClosed, Network, Search, Server, Settings } from "lucide-react"
+import { ChevronDown, Clock3, FileCode2, FolderClosed, MoreHorizontal, Network, Search, Server, Settings } from "lucide-react"
+import { useEffect, useState } from "react"
 import { useI18n } from "../i18n"
 import { IconButton } from "./IconButton"
 import { NavItem } from "./NavItem"
-import type { TerminalTab } from "../features/terminal/session-state"
+import type { WorkspaceSession } from "../features/terminal/session-state"
 import type { ReactNode } from "react"
 
-export type NavKey = "hosts" | "sftp" | "ports" | "snippets" | "history"
+export type NavKey = "hosts" | "sftp" | "ports" | "snippets" | "history" | "settings"
 
 interface SidebarProps {
   width: number
   activeNav: NavKey | "settings" | "terminal"
-  sessions?: TerminalTab[]
+  sessions?: WorkspaceSession[]
   activeSessionId?: string
   monitor?: ReactNode
   onWidthChange(width: number): void
   onNavigate(nav: NavKey | "settings" | "terminal"): void
   onSessionActivate?(id: string): void
+  onSessionDuplicate?(session: WorkspaceSession): void
+  onSessionDuplicateWindow?(session: WorkspaceSession): void
+  onSessionRename?(session: WorkspaceSession): void
+  onSessionSplit?(session: WorkspaceSession): void
+  onSessionClose?(session: WorkspaceSession): void
 }
 
 const navItems: Array<{ key: NavKey; icon: typeof Server }> = [
@@ -23,15 +29,24 @@ const navItems: Array<{ key: NavKey; icon: typeof Server }> = [
   { key: "sftp", icon: FolderClosed },
   { key: "ports", icon: Network },
   { key: "snippets", icon: FileCode2 },
-  { key: "history", icon: Clock3 }
+  { key: "history", icon: Clock3 },
+  { key: "settings", icon: Settings }
 ]
 
 export function clampSidebarWidth(width: number): number {
   return Math.max(180, Math.min(360, Math.round(width)))
 }
 
-export function Sidebar({ width, activeNav, sessions = [], activeSessionId, monitor, onWidthChange, onNavigate, onSessionActivate }: SidebarProps) {
+export function Sidebar({ width, activeNav, sessions = [], activeSessionId, monitor, onWidthChange, onNavigate, onSessionActivate, onSessionDuplicate, onSessionDuplicateWindow, onSessionRename, onSessionSplit, onSessionClose }: SidebarProps) {
   const { t } = useI18n()
+  const [menuSessionId, setMenuSessionId] = useState<string>()
+
+  useEffect(() => {
+    if (!menuSessionId) return
+    const close = (): void => setMenuSessionId(undefined)
+    window.addEventListener("click", close)
+    return () => window.removeEventListener("click", close)
+  }, [menuSessionId])
 
   const startResize = (event: React.PointerEvent<HTMLDivElement>): void => {
     event.preventDefault()
@@ -53,14 +68,6 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, moni
 
   return (
     <aside className="sidebar" style={{ width }}>
-      <div className="sidebar-tools">
-        <IconButton label={t("nav.settings")} data-active={activeNav === "settings"} onClick={() => onNavigate("settings")}>
-          <Settings size={15} strokeWidth={1.8} />
-        </IconButton>
-        <div className="sidebar-tools-spacer" />
-        <IconButton label={t("common.notifications")}><Bell size={15} strokeWidth={1.8} /></IconButton>
-      </div>
-
       <button className="workspace-switcher" type="button">
         <span className="workspace-avatar">R</span>
         <span>{t("workspace.personal")}</span>
@@ -87,13 +94,23 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, moni
         {sessions.length === 0 ? <p className="sidebar-empty">{t("sidebar.noSessions")}</p> : (
           <div className="sidebar-session-list">
             {sessions.map((session) => (
-              <button key={session.id} data-active={session.id === activeSessionId} type="button" onClick={() => {
-                onSessionActivate?.(session.id)
-                onNavigate("terminal")
-              }}>
-                <span className="session-state-dot" data-state={session.state} />
-                <span>{session.label}</span>
-              </button>
+              <div key={session.id} className="sidebar-session-row">
+                <button data-active={session.id === activeSessionId} type="button" onClick={() => {
+                  onSessionActivate?.(session.id)
+                  onNavigate("terminal")
+                }}>
+                  <span className="session-state-dot" data-state={session.state} />
+                  <span>{session.label}</span>
+                </button>
+                <IconButton label={`Actions for ${session.label}`} className="session-menu-trigger" onClick={(event) => { event.stopPropagation(); setMenuSessionId((current) => current === session.id ? undefined : session.id) }}><MoreHorizontal size={14} /></IconButton>
+                {menuSessionId === session.id && <div className="session-menu" onClick={(event) => event.stopPropagation()}>
+                  <button type="button" onClick={() => { onSessionDuplicate?.(session); setMenuSessionId(undefined) }}>Duplicate</button>
+                  <button type="button" onClick={() => { onSessionDuplicateWindow?.(session); setMenuSessionId(undefined) }}>Duplicate in a new window</button>
+                  <button type="button" onClick={() => { onSessionRename?.(session); setMenuSessionId(undefined) }}>Rename</button>
+                  <button type="button" onClick={() => { onSessionSplit?.(session); setMenuSessionId(undefined) }}>Split horizontally</button>
+                  <button type="button" onClick={() => { onSessionClose?.(session); setMenuSessionId(undefined) }}>Close</button>
+                </div>}
+              </div>
             ))}
           </div>
         )}

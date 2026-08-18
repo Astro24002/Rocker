@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog } from "electron"
 import { join } from "node:path"
-import { registerIpcHandlers } from "./ipc/register"
+import { registerIpcHandlers, type IpcDependencies } from "./ipc/register"
+import { ipcChannels } from "./ipc/bridge-contract"
 import { CredentialVault } from "./storage/credentials"
 import { JsonCredentialValueStore } from "./storage/credential-store"
 import { createHostStore } from "./storage/host-store"
@@ -13,15 +14,17 @@ import { LinuxMetricsSampler } from "./monitoring/linux-metrics"
 import { HistoryStore } from "./storage/history-store"
 import { SettingsStore } from "./storage/settings-store"
 
-let mainWindow: BrowserWindow | undefined
+const windows = new Set<BrowserWindow>()
 
-function createWindow(): BrowserWindow {
-  mainWindow = new BrowserWindow({
+function createWindow(onReady?: (window: BrowserWindow) => void): BrowserWindow {
+  const window = new BrowserWindow({
     minWidth: 1040,
     minHeight: 680,
     width: 1440,
     height: 900,
     backgroundColor: "#0f1118",
+    frame: false,
+    titleBarStyle: "hidden",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -29,13 +32,16 @@ function createWindow(): BrowserWindow {
       preload: join(__dirname, "../preload/index.cjs")
     }
   })
+  windows.add(window)
+  window.once("closed", () => windows.delete(window))
+  window.webContents.once("did-finish-load", () => onReady?.(window))
 
   if (process.env.ELECTRON_RENDERER_URL) {
-    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+    void window.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    void mainWindow.loadFile(join(__dirname, "../renderer/index.html"))
+    void window.loadFile(join(__dirname, "../renderer/index.html"))
   }
-  return mainWindow
+  return window
 }
 
 app.whenReady().then(() => {
@@ -57,7 +63,7 @@ app.whenReady().then(() => {
     }
   })
   const forwarding = new ForwardingManager(sessions)
-  registerIpcHandlers(window, {
+  const dependencies: IpcDependencies = {
     hosts: createHostStore(userDataPath),
     credentials: new CredentialVault(
       new JsonCredentialValueStore(join(userDataPath, "credentials.json")),
@@ -68,8 +74,17 @@ app.whenReady().then(() => {
     forwarding,
     monitoring: new LinuxMetricsSampler(sessions),
     history: new HistoryStore(join(userDataPath, "history.json")),
-    settings: new SettingsStore(join(userDataPath, "settings.json"))
-  })
+    settings: new SettingsStore(join(userDataPath, "settings.json")),
+    getWindows: () => [...windows]
+  }
+  dependencies.createDuplicateWindow = async (hostId) => {
+    createWindow((target) => {
+      setTimeout(() => {
+        if (!target.isDestroyed()) target.webContents.send(ipcChannels.sessionLaunch, { hostId })
+      }, 100)
+    })
+  }
+  registerIpcHandlers(window, dependencies)
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()

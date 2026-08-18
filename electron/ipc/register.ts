@@ -1,4 +1,4 @@
-import { dialog, ipcMain, shell, type BrowserWindow } from "electron"
+import { BrowserWindow, dialog, ipcMain, shell } from "electron"
 import { readFile } from "node:fs/promises"
 import type { CredentialVault } from "../storage/credentials"
 import type { HostStore } from "../storage/host-store"
@@ -24,6 +24,8 @@ export interface IpcDependencies {
   monitoring: LinuxMetricsSampler
   history: HistoryStore
   settings: SettingsStore
+  createDuplicateWindow?(hostId: string): Promise<void>
+  getWindows?(): BrowserWindow[]
 }
 
 export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDependencies): () => void {
@@ -55,7 +57,7 @@ export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDepe
     if (result.canceled || !result.filePaths[0]) return []
     return dependencies.hosts.importOpenSSHConfig(await readFile(result.filePaths[0], "utf8"))
   })
-  ipcMain.handle(ipcChannels.sessionOpen, async (_event, request: SessionOpenRequest) => {
+  ipcMain.handle(ipcChannels.sessionOpen, async (event, request: SessionOpenRequest) => {
     if (!request || typeof request.hostId !== "string" || !validateDimensions(request.cols, request.rows)) {
       throw new Error("Invalid session request")
     }
@@ -73,7 +75,7 @@ export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDepe
         passphrase: await dependencies.credentials.get(host.id, "passphrase"),
         cols: request.cols,
         rows: request.rows
-      })
+      }, { windowId: event.sender.id, forceNewConnection: request.forceNewConnection })
       await dependencies.history.add({ id: randomUUID(), hostId: host.id, connectedAt: new Date().toISOString(), durationMs: 0, outcome: "connected" })
       return session
     } catch (error) {
@@ -98,6 +100,11 @@ export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDepe
   ipcMain.handle(ipcChannels.sessionReconnect, (_event, sessionId: unknown) => {
     if (!isValidSessionId(sessionId)) throw new Error("Invalid session identifier")
     return dependencies.sessions.reconnect(sessionId)
+  })
+  ipcMain.handle(ipcChannels.sessionDuplicateWindow, (_event, hostId: unknown) => {
+    if (typeof hostId !== "string" || hostId.length < 1 || hostId.length > 128) throw new Error("Invalid host identifier")
+    if (!dependencies.createDuplicateWindow) throw new Error("Window duplication is unavailable")
+    return dependencies.createDuplicateWindow(hostId)
   })
   ipcMain.handle(ipcChannels.portsScan, (_event, sessionId: unknown) => {
     if (!isValidSessionId(sessionId)) throw new Error("Invalid session identifier")
@@ -127,18 +134,29 @@ export function registerIpcHandlers(window: BrowserWindow, dependencies: IpcDepe
   ipcMain.handle(ipcChannels.historyClear, () => dependencies.history.clear())
   ipcMain.handle(ipcChannels.settingsGet, () => dependencies.settings.get())
   ipcMain.handle(ipcChannels.settingsUpdate, (_event, update: Partial<AppSettings>) => dependencies.settings.update(update ?? {}))
+  ipcMain.handle(ipcChannels.windowMinimize, (event) => { BrowserWindow.fromWebContents(event.sender)?.minimize() })
+  ipcMain.handle(ipcChannels.windowToggleMaximize, (event) => {
+    const target = BrowserWindow.fromWebContents(event.sender)
+    if (target?.isMaximized()) target.unmaximize()
+    else target?.maximize()
+  })
+  ipcMain.handle(ipcChannels.windowClose, (event) => BrowserWindow.fromWebContents(event.sender)?.close())
 
   const unsubscribe = dependencies.sessions.onEvent((event) => {
-    if (!window.isDestroyed()) window.webContents.send(ipcChannels.sessionEvent, event)
+    for (const target of dependencies.getWindows?.() ?? [window]) {
+      if (!target.isDestroyed()) target.webContents.send(ipcChannels.sessionEvent, event)
+    }
     if (event.kind === "state" && event.state === "closed") {
-      void dependencies.forwarding.stopForSession(event.sessionId)
+      if (!dependencies.sessions.hasSessionsForConnection(event.connectionId)) {
+        void dependencies.forwarding.stopForConnection(event.connectionId)
+      }
       dependencies.monitoring.clear(event.sessionId)
     }
   })
   return () => {
     unsubscribe()
     for (const channel of Object.values(ipcChannels)) {
-      if (channel !== ipcChannels.sessionEvent) ipcMain.removeHandler(channel)
+      if (channel !== ipcChannels.sessionEvent && channel !== ipcChannels.sessionLaunch) ipcMain.removeHandler(channel)
     }
   }
 }

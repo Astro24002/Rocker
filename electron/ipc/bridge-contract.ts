@@ -15,11 +15,19 @@ export interface SessionOpenRequest {
   hostId: string
   cols: number
   rows: number
+  forceNewConnection?: boolean
+}
+
+export interface SessionLaunchRequest {
+  hostId: string
 }
 
 export interface RockerBridge {
   app: {
     platform: NodeJS.Platform
+    minimize(): Promise<void>
+    toggleMaximize(): Promise<void>
+    close(): Promise<void>
   }
   hosts: {
     list(): Promise<HostProfile[]>
@@ -33,6 +41,7 @@ export interface RockerBridge {
     resize(sessionId: string, cols: number, rows: number): Promise<void>
     close(sessionId: string): Promise<void>
     reconnect(sessionId: string): Promise<SessionInfo>
+    duplicateInNewWindow(hostId: string): Promise<void>
   }
   ports: {
     scan(sessionId: string): Promise<DiscoveredPort[]>
@@ -54,6 +63,7 @@ export interface RockerBridge {
   }
   events: {
     onSessionEvent(listener: (event: SessionEvent) => void): () => void
+    onSessionLaunch(listener: (request: SessionLaunchRequest) => void): () => void
   }
 }
 
@@ -67,6 +77,7 @@ export const ipcChannels = {
   sessionResize: "rocker:sessions:resize",
   sessionClose: "rocker:sessions:close",
   sessionReconnect: "rocker:sessions:reconnect",
+  sessionDuplicateWindow: "rocker:sessions:duplicate-window",
   sessionEvent: "rocker:sessions:event",
   portsScan: "rocker:ports:scan",
   portsStart: "rocker:ports:start",
@@ -77,5 +88,9 @@ export const ipcChannels = {
   historyList: "rocker:history:list",
   historyClear: "rocker:history:clear",
   settingsGet: "rocker:settings:get",
-  settingsUpdate: "rocker:settings:update"
+  settingsUpdate: "rocker:settings:update",
+  windowMinimize: "rocker:window:minimize",
+  windowToggleMaximize: "rocker:window:toggle-maximize",
+  windowClose: "rocker:window:close",
+  sessionLaunch: "rocker:window:session-launch"
 } as const

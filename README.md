@@ -1,9 +1,9 @@
 # Rocker
 
 Rocker is a local-first SSH desktop client for Windows and macOS. It combines
-host management, multiple terminal tabs, Linux host monitoring, and a
-TRAE-style Ports view where remote services are discovered automatically but
-forwarded only after an explicit user action.
+host management, multiple terminal sessions, Linux host monitoring, and a
+TRAE-style Ports view where remote services are checked only when requested
+and forwarded only after an explicit user action.
 
 The implementation is independent of Tabby source code. Rocker uses Electron,
 React, xterm.js, and `ssh2`.
@@ -13,15 +13,18 @@ React, xterm.js, and `ssh2`.
 - Local host profiles, groups, favorites, and OpenSSH config import.
 - Password, private-key file, and SSH Agent authentication.
 - First-use host fingerprint confirmation and changed-key blocking.
-- Independent terminal tabs backed by real SSH PTY channels.
-- Linux `ss`/`netstat` port discovery and user-controlled local forwarding.
+- Session-level duplicate, rename, horizontal split, and close actions backed by
+  real SSH PTY channels.
+- Matching sessions in one window reuse a verified SSH connection; new windows
+  always create an independent connection.
+- User-triggered Linux `ss`/`netstat` port recommendations and controlled local forwarding.
 - Expandable CPU, memory, disk, network, and latency summary for the active host.
 - Local connection history.
 - English UI by default with optional Simplified Chinese.
 
-SFTP and Snippets are visible navigation placeholders. Split panes, cloud sync,
-mobile clients, ProxyJump, remote forwarding, and Dynamic SOCKS5 are not part of
-the first release.
+SFTP and Snippets are visible navigation placeholders. Cloud sync, mobile
+clients, ProxyJump, remote forwarding, and Dynamic SOCKS5 are not part of the
+first release.
 
 ## Requirements
 
