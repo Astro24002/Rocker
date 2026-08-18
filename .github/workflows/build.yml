@@ -67,7 +67,17 @@ jobs:
               --generate-notes
           fi
 
-          find release -type f -print0 | while IFS= read -r -d '' asset; do
+          gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '.assets[].name' | while IFS= read -r existing; do
+            case "$existing" in
+              *.exe|*.dmg|*.zip) ;;
+              *) gh release delete-asset "$GITHUB_REF_NAME" "$existing" --repo "$GITHUB_REPOSITORY" --yes ;;
+            esac
+          done
+
+          find release -type f \( -iname '*.exe' -o -iname '*.dmg' -o -iname '*.zip' \) -print0 | while IFS= read -r -d '' asset; do
             gh release upload "$GITHUB_REF_NAME" "$asset" \
               --repo "$GITHUB_REPOSITORY" \
               --clobber
