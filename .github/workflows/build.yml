@@ -72,12 +72,12 @@ jobs:
             --json assets \
             --jq '.assets[].name' | while IFS= read -r existing; do
             case "$existing" in
-              *.exe|*.dmg|*.zip) ;;
+              Rocker-*.exe|Rocker-*.dmg|Rocker-*.zip) ;;
               *) gh release delete-asset "$GITHUB_REF_NAME" "$existing" --repo "$GITHUB_REPOSITORY" --yes ;;
             esac
           done
 
-          find release -type f \( -iname '*.exe' -o -iname '*.dmg' -o -iname '*.zip' \) -print0 | while IFS= read -r -d '' asset; do
+          find release -type f \( -name 'Rocker-*.exe' -o -name 'Rocker-*.dmg' -o -name 'Rocker-*.zip' \) -print0 | while IFS= read -r -d '' asset; do
             gh release upload "$GITHUB_REF_NAME" "$asset" \
               --repo "$GITHUB_REPOSITORY" \
               --clobber
