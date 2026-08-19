@@ -91,6 +91,10 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     return () => this.listeners.delete(listener)
   }
 
+  public ownerForSession(sessionId: string): number | undefined {
+    return this.sessions.get(sessionId)?.request.ownerWebContentsId
+  }
+
   public beginRestore(ownerWebContentsId: number, activeSessionId: string): void {
     if (!isValidOwnerWebContentsId(ownerWebContentsId) || !isValidSessionId(activeSessionId)) {
       throw new Error("Invalid restore admission")

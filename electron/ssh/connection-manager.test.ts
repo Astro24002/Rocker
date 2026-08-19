@@ -18,6 +18,15 @@ describe("SshConnectionManager", () => {
     expect(otherWindow.connectionId).not.toBe(first.connectionId)
   })
 
+  it("reports the owner only while a connection record remains active", async () => {
+    const { manager, request } = createConnectionHarness({})
+    const lease = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+
+    expect(manager.ownerForConnection(lease.connectionId)).toBe(11)
+    await manager.release(lease.id)
+    expect(manager.ownerForConnection(lease.connectionId)).toBeUndefined()
+  })
+
   it("coalesces concurrent matching acquisitions in one owner window", async () => {
     const { clients, manager, request } = createConnectionHarness({})
     const [first, second] = await Promise.all([
@@ -36,6 +45,28 @@ describe("SshConnectionManager", () => {
     const second = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
 
     expect(second.connectionId).not.toBe(first.connectionId)
+  })
+
+  it("does not reuse a verified connection after its known Host Key context changes", async () => {
+    const { manager, request, setKnownHostKey } = createConnectionHarness({})
+    const first = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    setKnownHostKey("different-known-fingerprint")
+    const second = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+
+    expect(second.connectionId).not.toBe(first.connectionId)
+  })
+
+  it("keeps reusing a connection after its initially unknown Host Key is trusted", async () => {
+    const { manager, request, setKnownHostKey } = createConnectionHarness({
+      inspection: "unknown",
+      promptForHostKey: async () => true,
+      trustHostKey: async () => undefined
+    })
+    const first = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    setKnownHostKey("fingerprint-a")
+    const second = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+
+    expect(second.connectionId).toBe(first.connectionId)
   })
 
   it("schedules one retry timer for all leases on a lost connection", async () => {
@@ -94,6 +125,16 @@ describe("SshConnectionManager", () => {
     }
 
     await waitFor(() => events.at(-1)?.kind === "failed")
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "network" })
+  })
+
+  it("does not schedule a retry when automatic reconnect is disabled", async () => {
+    const { clients, events, manager, request, scheduler } = createConnectionHarness({ maxRetryAttempts: 0 })
+    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+
+    clients[0].emitter.emit("close")
+
     expect(scheduler.pendingTimers()).toHaveLength(0)
     expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "network" })
   })
@@ -247,6 +288,7 @@ interface HarnessOptions {
   connectFailure?: Error
   resolveFailure?: Error
   deferRetryResolution?: boolean
+  maxRetryAttempts?: number
 }
 
 function createConnectionHarness(options: HarnessOptions) {
@@ -277,6 +319,7 @@ function createConnectionHarness(options: HarnessOptions) {
   const events: ConnectionEvent[] = []
   const clients: Array<{ emitter: EventEmitter; end: ReturnType<typeof vi.fn> }> = []
   let securityContextKey = "profile-and-credential-hash"
+  let knownHostKeyFingerprint: string | undefined
   let connectFailure = options.connectFailure
   let resolveFailure = options.resolveFailure
   let storedFingerprint = options.storedFingerprint
@@ -319,6 +362,7 @@ function createConnectionHarness(options: HarnessOptions) {
     createClient,
     scheduler,
     random: () => 0.5,
+    maxRetryAttempts: options.maxRetryAttempts,
     resolve: async () => {
       resolveCalls += 1
       if (options.deferRetryResolution && resolveCalls > 1) {
@@ -332,7 +376,8 @@ function createConnectionHarness(options: HarnessOptions) {
         username: "rock",
         authMethod: "agent",
         readyTimeoutMs: 15_000,
-        securityContextKey
+        securityContextKey,
+        ...(knownHostKeyFingerprint ? { knownHostKeyFingerprint } : {})
       }
     },
     inspectHostKey: async (_request, fingerprint) => {
@@ -359,6 +404,7 @@ function createConnectionHarness(options: HarnessOptions) {
     scheduler,
     request: { hostId: "host-a" },
     setSecurityContext: (next: string) => { securityContextKey = next },
+    setKnownHostKey: (next: string | undefined) => { knownHostKeyFingerprint = next },
     setConnectFailure: (next: Error | undefined) => { connectFailure = next },
     setResolveFailure: (next: Error | undefined) => { resolveFailure = next },
     setHostKeyChange: (stored: string, received: string) => {

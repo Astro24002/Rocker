@@ -4,7 +4,11 @@ export type {
   ConnectionHistoryItem,
   CredentialKind,
   HostProfile,
-  StoredHostDocument
+  StoredHostDocument,
+  StoredTerminalLayout,
+  StoredWorkspaceDocument,
+  StoredWorkspaceSession,
+  StoredWorkspaceWindow
 } from "../../electron/storage/types"
 
 export type { HostMetrics } from "../../electron/monitoring/linux-metrics"

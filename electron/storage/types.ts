@@ -66,6 +66,8 @@ export interface AppSettings {
   terminalFontSize: number
   connectionTimeout: number
   autoReconnect: boolean
-  portScanInterval: number
+  reconnectMode: "limited" | "continuous"
+  restorePreviousWorkspace: boolean
+  confirmMultilinePaste: boolean
   bindAddress: "127.0.0.1" | "::1" | "0.0.0.0"
 }

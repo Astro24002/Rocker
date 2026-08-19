@@ -24,6 +24,7 @@ export interface ResolvedConnectionRequest {
   agent?: string
   readyTimeoutMs: number
   securityContextKey: string
+  knownHostKeyFingerprint?: string
 }
 
 export type ConnectionResolutionFailureReason = "authentication" | "configuration" | "cancelled"
@@ -132,12 +133,16 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     this.createClient = options.createClient ?? (() => new Client())
     this.scheduler = options.scheduler ?? defaultScheduler
     this.random = options.random ?? Math.random
-    this.maxRetryAttempts = Math.max(1, Math.floor(options.maxRetryAttempts ?? 8))
+    this.maxRetryAttempts = Math.max(0, Math.floor(options.maxRetryAttempts ?? 8))
   }
 
   public onEvent(listener: (event: ConnectionEvent) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  public ownerForConnection(connectionId: string): number | undefined {
+    return this.connections.get(connectionId)?.ownerWebContentsId
   }
 
   public async acquire(request: ConnectionAcquireRequest): Promise<ConnectionLease> {
@@ -159,6 +164,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       const reusable = [...this.connections.values()].find((record) =>
         record.ownerWebContentsId === request.ownerWebContentsId &&
         record.identityKey === identityKey &&
+        matchesKnownHostKey(record, resolved) &&
         ((record.verifiedFingerprint !== undefined && record.state === "ready") ||
           (record.state === "connecting" && record.connectPromise !== undefined))
       )
@@ -511,6 +517,11 @@ function connectionIdentity(hostId: string, resolved: ResolvedConnectionRequest)
     agent: resolved.agent,
     securityContextKey: resolved.securityContextKey
   })).digest("hex")
+}
+
+function matchesKnownHostKey(record: ConnectionRecord, resolved: ResolvedConnectionRequest): boolean {
+  return resolved.knownHostKeyFingerprint === undefined ||
+    record.verifiedFingerprint === normalizeFingerprint(resolved.knownHostKeyFingerprint)
 }
 
 function failureReason(error: unknown): TerminalFailureReason {

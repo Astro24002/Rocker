@@ -80,6 +80,11 @@ export class ForwardingManager {
     return record ? { ...record.info } : undefined
   }
 
+  public ownerForForwarding(id: string): number | undefined {
+    const record = this.records.get(id)
+    return record && record.info.status !== "stopped" ? record.ownerWebContentsId : undefined
+  }
+
   public list(): ForwardingInfo[] {
     return [...this.records.values()].map((record) => ({ ...record.info }))
   }

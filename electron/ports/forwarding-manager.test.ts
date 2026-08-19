@@ -65,6 +65,16 @@ describe("ForwardingManager", () => {
     expect(listeners.created).toHaveLength(2)
   })
 
+  it("reports the owner only while a forwarding record remains active", async () => {
+    const connections = new FakeConnections()
+    const forwards = new ForwardingManager(connections, { createListener: createListenerFactory().create })
+    const forward = await forwards.start(connectionId, loopbackSpec, ownerWebContentsId)
+
+    expect(forwards.ownerForForwarding(forward.id)).toBe(ownerWebContentsId)
+    await forwards.stop(forward.id)
+    expect(forwards.ownerForForwarding(forward.id)).toBeUndefined()
+  })
+
   it("deduplicates concurrent manual resumes for one suspended forward", async () => {
     const connections = new FakeConnections()
     const listeners = createListenerFactory()

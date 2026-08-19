@@ -23,6 +23,16 @@ describe("TerminalSessionManager", () => {
     expect(events.at(-1)).toMatchObject({ kind: "state", sessionId, state: "closing", channelGeneration: 1 })
   })
 
+  it("reports the owner only while a logical session remains open", async () => {
+    const { sessions } = createSessionHarness()
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+
+    expect(sessions.ownerForSession(sessionId)).toBe(7)
+    await sessions.close(sessionId)
+    expect(sessions.ownerForSession(sessionId)).toBeUndefined()
+  })
+
   it("opens a fresh PTY generation for every recovered logical session", async () => {
     const { sessions, transport, retryScheduler, events } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
