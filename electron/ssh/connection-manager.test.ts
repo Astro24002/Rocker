@@ -165,6 +165,36 @@ describe("SshConnectionManager", () => {
     expect(scheduler.pendingTimers()).toHaveLength(0)
     expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "configuration", ownerWebContentsId: 11 })
   })
+
+  it("does not retry a Host Key persistence conflict during recovery", async () => {
+    const { clients, events, manager, request, scheduler, setHostKeyChange } = createConnectionHarness({
+      promptForHostKey: async () => true,
+      replaceHostKey: async () => { throw new Error("Host Key changed while awaiting replacement confirmation") }
+    })
+    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    setHostKeyChange("old-fingerprint", "new-fingerprint")
+    clients[0].emitter.emit("close")
+
+    await scheduler.runNext()
+
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-changed", ownerWebContentsId: 11 })
+  })
+
+  it("does not retry a failed unknown Host Key trust during recovery", async () => {
+    const { clients, events, manager, request, scheduler, setHostKeyUnknown } = createConnectionHarness({
+      promptForHostKey: async () => true,
+      trustHostKey: async () => { throw new Error("Host Key persistence is unavailable") }
+    })
+    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    setHostKeyUnknown()
+    clients[0].emitter.emit("close")
+
+    await scheduler.runNext()
+
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-rejected", ownerWebContentsId: 11 })
+  })
 })
 
 interface HarnessOptions {
@@ -202,6 +232,9 @@ function createConnectionHarness(options: HarnessOptions) {
   let securityContextKey = "profile-and-credential-hash"
   let connectFailure = options.connectFailure
   let resolveFailure = options.resolveFailure
+  let storedFingerprint = options.storedFingerprint
+  let nextFingerprint = options.nextFingerprint
+  let inspection = options.inspection
   const createClient = (): Client => {
     const emitter = new EventEmitter()
     const client = {
@@ -215,7 +248,7 @@ function createConnectionHarness(options: HarnessOptions) {
           const verify = (accepted: boolean) => {
             if (accepted) emitter.emit("ready")
           }
-          const result = hostVerifier(options.nextFingerprint ?? "fingerprint-a", verify)
+          const result = hostVerifier(nextFingerprint ?? "fingerprint-a", verify)
           if (result !== undefined) verify(result)
         } else {
           queueMicrotask(() => emitter.emit("ready"))
@@ -244,14 +277,14 @@ function createConnectionHarness(options: HarnessOptions) {
       }
     },
     inspectHostKey: async (_request, fingerprint) => {
-      if (options.storedFingerprint) {
+      if (storedFingerprint) {
         return {
           status: "changed" as const,
-          storedFingerprint: options.storedFingerprint,
-          receivedFingerprint: options.nextFingerprint ?? fingerprint
+          storedFingerprint,
+          receivedFingerprint: nextFingerprint ?? fingerprint
         }
       }
-      if (options.inspection === "unknown") return { status: "unknown" as const, fingerprint }
+      if (inspection === "unknown") return { status: "unknown" as const, fingerprint }
       return { status: "match" as const, fingerprint }
     },
     promptForHostKey: options.promptForHostKey ?? (async () => false),
@@ -267,7 +300,16 @@ function createConnectionHarness(options: HarnessOptions) {
     request: { hostId: "host-a" },
     setSecurityContext: (next: string) => { securityContextKey = next },
     setConnectFailure: (next: Error | undefined) => { connectFailure = next },
-    setResolveFailure: (next: Error | undefined) => { resolveFailure = next }
+    setResolveFailure: (next: Error | undefined) => { resolveFailure = next },
+    setHostKeyChange: (stored: string, received: string) => {
+      storedFingerprint = stored
+      nextFingerprint = received
+      inspection = undefined
+    },
+    setHostKeyUnknown: () => {
+      storedFingerprint = undefined
+      inspection = "unknown"
+    }
   }
 }
 

@@ -1,3 +1,4 @@
+import { resolve } from "node:path"
 import { JsonStore } from "../storage/json-store"
 import { normalizeFingerprint, type HostKeyStore } from "./host-keys"
 
@@ -11,8 +12,8 @@ export class JsonHostKeyStore implements HostKeyStore {
   private readonly filePath: string
 
   public constructor(filePath: string) {
-    this.filePath = filePath
-    this.store = new JsonStore(filePath, { fingerprints: {} })
+    this.filePath = resolve(filePath)
+    this.store = new JsonStore(this.filePath, { fingerprints: {} })
   }
 
   public async get(host: string, port: number): Promise<string | undefined> {

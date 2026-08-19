@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { JsonHostKeyStore } from "./host-key-store"
 
@@ -23,5 +23,21 @@ describe("JsonHostKeyStore", () => {
     await expect(firstReplacement).resolves.toBeUndefined()
     await expect(secondReplacement).rejects.toThrow("Host Key changed while awaiting replacement confirmation")
     await expect(store.get("host.example", 22)).resolves.toBe("new-fingerprint-a")
+  })
+
+  it("serializes replacements from equivalent backing-file paths", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-host-key-store-"))
+    temporaryPaths.push(directory)
+    const filePath = join(directory, "host-keys.json")
+    const absoluteStore = new JsonHostKeyStore(filePath)
+    const relativeStore = new JsonHostKeyStore(relative(process.cwd(), filePath))
+    await absoluteStore.trust("host.example", 22, "old-fingerprint")
+
+    const firstReplacement = absoluteStore.replace("host.example", 22, "old-fingerprint", "new-fingerprint-a")
+    const secondReplacement = relativeStore.replace("host.example", 22, "old-fingerprint", "new-fingerprint-b")
+
+    await expect(firstReplacement).resolves.toBeUndefined()
+    await expect(secondReplacement).rejects.toThrow("Host Key changed while awaiting replacement confirmation")
+    await expect(absoluteStore.get("host.example", 22)).resolves.toBe("new-fingerprint-a")
   })
 })

@@ -352,13 +352,21 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     if (inspection.status === "unknown") {
       const trust = this.options.trustHostKey ?? this.options.hostKeys?.trust.bind(this.options.hostKeys)
       if (!trust) throw new HostKeyError("Host Key was rejected", "host-key-rejected")
-      await trust(resolved.host, resolved.port, inspection.fingerprint)
+      try {
+        await trust(resolved.host, resolved.port, inspection.fingerprint)
+      } catch {
+        throw new HostKeyError("Host Key could not be trusted", "host-key-rejected")
+      }
       record.verifiedFingerprint = normalizeFingerprint(inspection.fingerprint)
       return true
     }
     const replace = this.options.replaceHostKey ?? this.options.hostKeys?.replace?.bind(this.options.hostKeys)
     if (!replace) throw new HostKeyError("Host Key changed", "host-key-changed")
-    await replace(resolved.host, resolved.port, inspection.storedFingerprint, inspection.receivedFingerprint)
+    try {
+      await replace(resolved.host, resolved.port, inspection.storedFingerprint, inspection.receivedFingerprint)
+    } catch {
+      throw new HostKeyError("Host Key changed while saving replacement", "host-key-changed")
+    }
     record.verifiedFingerprint = normalizeFingerprint(inspection.receivedFingerprint)
     return true
   }
