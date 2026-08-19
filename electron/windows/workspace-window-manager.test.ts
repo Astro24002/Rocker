@@ -28,6 +28,21 @@ describe("WorkspaceWindowManager", () => {
     expect(store.removeWindow).toHaveBeenCalledWith(secondWorkspace)
   })
 
+  it("preserves the last workspace when closing it exits the desktop process", async () => {
+    const store = createStore()
+    const windows = createWindowFactory()
+    const manager = new WorkspaceWindowManager({
+      snapshots: store,
+      createWindow: windows.create,
+      preserveLastWindowWorkspace: true
+    })
+    const window = manager.createNew(createWorkspace(firstWorkspace))
+
+    await manager.handleClosed(window.webContents.id)
+
+    expect(store.removeWindow).not.toHaveBeenCalled()
+  })
+
   it("restores a saved workspace under its own web contents identity", async () => {
     const saved = createWorkspace(firstWorkspace, { x: 30, y: 40, width: 1360, height: 820 }, true)
     const store = createStore({ version: 1, windows: [saved] })

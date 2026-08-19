@@ -26,6 +26,7 @@ export interface WorkspaceWindowManagerOptions {
   snapshots: Pick<WorkspaceSnapshotStore, "load" | "saveWindow" | "removeWindow">
   createWindow(options?: WorkspaceWindowOptions): WorkspaceWindow
   onWindowClosed?(ownerWebContentsId: number): Promise<void> | void
+  preserveLastWindowWorkspace?: boolean
 }
 
 export class WorkspaceWindowManager {
@@ -102,7 +103,8 @@ export class WorkspaceWindowManager {
 
   public async handleClosed(ownerWebContentsId: number): Promise<void> {
     const workspaceId = this.workspaceForWebContents(ownerWebContentsId)
-    const removeWorkspace = !this.quitting && workspaceId !== undefined
+    const preserveLastWindowWorkspace = this.options.preserveLastWindowWorkspace === true && this.windows.size === 1
+    const removeWorkspace = !this.quitting && !preserveLastWindowWorkspace && workspaceId !== undefined
     this.removeWorkspaceForWindow(ownerWebContentsId)
     if (removeWorkspace) this.options.snapshots.removeWindow(workspaceId)
     await this.options.onWindowClosed?.(ownerWebContentsId)

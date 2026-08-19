@@ -82,6 +82,7 @@ async function startApplication(): Promise<void> {
   windows = new WorkspaceWindowManager({
     snapshots,
     createWindow: createNativeWindow,
+    preserveLastWindowWorkspace: process.platform !== "darwin",
     onWindowClosed: async (ownerWebContentsId) => {
       await forwarding.releaseOwner(ownerWebContentsId)
       await sessions.releaseOwner(ownerWebContentsId)
