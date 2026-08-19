@@ -54,6 +54,17 @@ describe("SshConnectionManager", () => {
     })
   })
 
+  it("runs a shared retry immediately without leaving the delayed timer behind", async () => {
+    const { clients, manager, request, scheduler } = createConnectionHarness({})
+    const lease = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    clients[0].emitter.emit("close")
+
+    manager.retryNow(lease.connectionId)
+
+    await waitFor(() => clients.length === 2)
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+  })
+
   it("exhausts the default eight retry attempts", async () => {
     const { clients, events, manager, request, scheduler, setConnectFailure } = createConnectionHarness({})
     await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })

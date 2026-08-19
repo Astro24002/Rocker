@@ -207,6 +207,16 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     await Promise.all(leaseIds.map((leaseId) => this.release(leaseId)))
   }
 
+  public retryNow(connectionId?: string): void {
+    for (const record of this.connections.values()) {
+      if (connectionId !== undefined && record.connectionId !== connectionId) continue
+      if (record.state !== "retrying" || record.retryTimer === undefined || record.leases.size === 0) continue
+      this.scheduler.cancel(record.retryTimer)
+      record.retryTimer = undefined
+      void this.retry(record)
+    }
+  }
+
   public async execOnConnection(connectionId: string, command: string): Promise<string> {
     if (!command || command.includes("\u0000") || command.length > 4_096) throw new Error("Invalid remote command")
     const client = this.getClientForConnection(connectionId)
@@ -402,10 +412,13 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     const delayMs = retryDelayMs(attempt, this.random)
     record.retryAttempt = attempt
     record.state = "retrying"
-    record.retryTimer = this.scheduler.schedule(delayMs, () => {
+    let timerId = 0
+    timerId = this.scheduler.schedule(delayMs, () => {
+      if (record.retryTimer !== timerId) return
       record.retryTimer = undefined
       void this.retry(record)
     })
+    record.retryTimer = timerId
     this.emit({
       kind: "retrying",
       connectionId: record.connectionId,
