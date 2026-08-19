@@ -71,10 +71,10 @@ export class TerminalController {
     this.flush()
   }
 
-  public writeLocalNotice(kind: "reconnected" | "restored-new-shell"): void {
+  public writeLocalNotice(kind: "reconnected" | "restored-new-shell", message?: string): void {
     if (this.disposed) return
-    const message = kind === "reconnected" ? "\r\n[Rocker] Reconnected\r\n" : "\r\n[Rocker] Restored a new shell\r\n"
-    this.queue.push({ bytes: new TextEncoder().encode(message) })
+    const defaultMessage = kind === "reconnected" ? "[Rocker] Reconnected" : "[Rocker] Restored a new shell"
+    this.queue.push({ bytes: new TextEncoder().encode(`\r\n${message ?? defaultMessage}\r\n`) })
     this.flush()
   }
 

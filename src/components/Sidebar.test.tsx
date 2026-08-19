@@ -4,7 +4,7 @@ import { I18nProvider } from "../i18n"
 import { Sidebar } from "./Sidebar"
 
 describe("Sidebar session actions", () => {
-  const session = { id: "session-1", hostId: "host-1", label: "G11", state: "connected" as const, output: "" }
+  const session = { id: "session-1", hostId: "host-1", label: "G11", state: "connected" as const, channelGeneration: 1 }
 
   it("replaces the personal-space header with local terminal and settings actions", () => {
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[]} onWidthChange={vi.fn()} onNavigate={vi.fn()} /></I18nProvider>)

@@ -24,14 +24,18 @@ export function TerminalView(props: TerminalViewProps) {
   const controllerRef = useRef<TerminalController | null>(null)
   const propsRef = useRef(props)
   const frameRef = useRef<number | undefined>(undefined)
+  const fitHiddenRef = useRef(false)
 
   propsRef.current = props
 
-  const scheduleFit = useCallback(() => {
+  const scheduleFit = useCallback((includeHidden = false) => {
+    if (includeHidden) fitHiddenRef.current = true
     if (frameRef.current !== undefined) return
     const run = (): void => {
       frameRef.current = undefined
-      if (propsRef.current.visible) controllerRef.current?.fit()
+      const shouldFit = fitHiddenRef.current || propsRef.current.visible
+      fitHiddenRef.current = false
+      if (shouldFit) controllerRef.current?.fit()
     }
     if (typeof window.requestAnimationFrame === "function") {
       frameRef.current = window.requestAnimationFrame(run)
@@ -106,6 +110,12 @@ export function TerminalView(props: TerminalViewProps) {
 
     const dataDisposable = terminal.onData((data) => controller.sendInput(data))
     terminal.attachCustomKeyEventHandler((event) => {
+      if (isCopyShortcut(event, terminal)) {
+        event.preventDefault()
+        const selection = terminal.getSelection()
+        if (selection) void navigator.clipboard?.writeText(selection).catch(() => undefined)
+        return false
+      }
       if (!isInterruptKey(event, terminal)) return true
       event.preventDefault()
       controller.sendInput("\u0003")
@@ -113,9 +123,9 @@ export function TerminalView(props: TerminalViewProps) {
     })
     const observer = typeof ResizeObserver === "undefined"
       ? undefined
-      : new ResizeObserver(scheduleFit)
+      : new ResizeObserver(() => scheduleFit())
     observer?.observe(container)
-    scheduleFit()
+    scheduleFit(true)
 
     return () => {
       observer?.disconnect()
@@ -124,6 +134,7 @@ export function TerminalView(props: TerminalViewProps) {
         window.cancelAnimationFrame(frameRef.current)
       }
       frameRef.current = undefined
+      fitHiddenRef.current = false
       controller.dispose()
       if (controllerRef.current === controller) controllerRef.current = null
       if (terminalRef.current === terminal) terminalRef.current = null
@@ -190,6 +201,11 @@ const hiddenSurfaceStyle = {
   pointerEvents: "none" as const
 }
 
+function isCopyShortcut(event: globalThis.KeyboardEvent, terminal: Pick<Terminal, "hasSelection" | "getSelection">): boolean {
+  if (!terminal.hasSelection() || event.altKey || event.key.toLowerCase() !== "c") return false
+  return (event.ctrlKey && event.shiftKey && !event.metaKey) || (event.metaKey && !event.ctrlKey)
+}
+
 function isInterruptKey(event: globalThis.KeyboardEvent, terminal: Pick<Terminal, "hasSelection"> | null): boolean {
-  return event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "c" && !terminal?.hasSelection()
+  return event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === "c" && !terminal?.hasSelection()
 }

@@ -15,8 +15,12 @@ const xterm = vi.hoisted(() => {
     public readonly dispose = vi.fn()
     public readonly write = vi.fn((_data: Uint8Array | string, done?: () => void) => done?.())
     public readonly hasSelection = vi.fn(() => false)
-    public readonly attachCustomKeyEventHandler = vi.fn()
+    public readonly getSelection = vi.fn(() => "")
+    public readonly attachCustomKeyEventHandler = vi.fn((handler: (event: KeyboardEvent) => boolean) => {
+      this.customKeyHandler = handler
+    })
     private dataListener?: (data: string) => void
+    private customKeyHandler?: (event: KeyboardEvent) => boolean
 
     public constructor(options: Record<string, unknown> = {}) {
       this.options = { ...options }
@@ -30,6 +34,10 @@ const xterm = vi.hoisted(() => {
 
     public emitData(data: string): void {
       this.dataListener?.(data)
+    }
+
+    public emitCustomKey(event: KeyboardEvent): boolean | undefined {
+      return this.customKeyHandler?.(event)
     }
   }
 
@@ -87,6 +95,52 @@ describe("TerminalView", () => {
     expect(onInput).toHaveBeenNthCalledWith(2, "\u0003")
   })
 
+  it("copies a selected terminal range with the platform shortcut", async () => {
+    const clipboard = { writeText: vi.fn().mockResolvedValue(undefined) }
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard })
+    const onInput = vi.fn()
+
+    render(<TerminalView {...createProps({ onInput })} />)
+    const terminal = xterm.terminals[0]
+    terminal.hasSelection.mockReturnValue(true)
+    terminal.getSelection.mockReturnValue("selected output")
+
+    const result = terminal.emitCustomKey({
+      altKey: false,
+      ctrlKey: true,
+      key: "c",
+      metaKey: false,
+      preventDefault: vi.fn(),
+      shiftKey: true
+    } as unknown as KeyboardEvent)
+
+    expect(result).toBe(false)
+    await waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith("selected output"))
+    expect(onInput).not.toHaveBeenCalled()
+  })
+
+  it("copies a selected terminal range with Cmd+C on macOS", async () => {
+    const clipboard = { writeText: vi.fn().mockResolvedValue(undefined) }
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard })
+
+    render(<TerminalView {...createProps()} />)
+    const terminal = xterm.terminals[0]
+    terminal.hasSelection.mockReturnValue(true)
+    terminal.getSelection.mockReturnValue("macOS selection")
+
+    const result = terminal.emitCustomKey({
+      altKey: false,
+      ctrlKey: false,
+      key: "c",
+      metaKey: true,
+      preventDefault: vi.fn(),
+      shiftKey: false
+    } as unknown as KeyboardEvent)
+
+    expect(result).toBe(false)
+    await waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith("macOS selection"))
+  })
+
   it("keeps one xterm instance while applying live font preferences", async () => {
     const { rerender } = render(<TerminalView {...createProps()} />)
     const terminal = xterm.terminals[0]
@@ -106,6 +160,12 @@ describe("TerminalView", () => {
     expect(onController).toHaveBeenCalledWith(session.id, expect.objectContaining({ acceptOutput: expect.any(Function) }))
     unmount()
     expect(onController).toHaveBeenLastCalledWith(session.id, undefined)
+  })
+
+  it("fits a mounted hidden surface so a restored session receives a real grid", async () => {
+    render(<TerminalView {...createProps({ visible: false })} />)
+
+    await waitFor(() => expect(fit.addons[0].fit).toHaveBeenCalled())
   })
 })
 

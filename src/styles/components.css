@@ -232,12 +232,23 @@
 }
 
 .session-state-dot[data-state="connecting"],
-.session-state-dot[data-state="reconnecting"] {
+.session-state-dot[data-state="reconnecting"],
+.session-state-dot[data-state="restoring"] {
   background: var(--warning);
 }
 
 .session-state-dot[data-state="error"] {
   background: var(--danger);
+}
+
+.session-state-dot[data-state="disconnected"],
+.session-state-dot[data-state="closing"] {
+  border: 1px solid var(--text-muted);
+  background: transparent;
+}
+
+.session-state-dot[data-state="idle"] {
+  background: var(--teal);
 }
 
 .session-state-dot {
@@ -710,6 +721,95 @@
 .port-status[data-status="forwarding"] {
   color: var(--accent);
   background: rgba(134, 222, 103, 0.09);
+}
+
+.port-status[data-status="error"] {
+  color: var(--danger);
+  background: rgba(219, 109, 114, 0.1);
+}
+
+.terminal-connection-overlay {
+  position: absolute;
+  z-index: 5;
+  top: 12px;
+  left: 14px;
+  display: flex;
+  min-height: 38px;
+  max-width: min(580px, calc(100% - 28px));
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px 6px 10px;
+  border: 1px solid rgba(216, 173, 99, 0.36);
+  border-radius: 6px;
+  color: var(--warning);
+  background: rgba(21, 26, 32, 0.94);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.26);
+  backdrop-filter: blur(14px);
+}
+
+.terminal-connection-overlay[data-state="error"],
+.terminal-connection-overlay[data-state="disconnected"] {
+  border-color: rgba(219, 109, 114, 0.42);
+  color: var(--danger);
+}
+
+.terminal-connection-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.terminal-connection-copy strong,
+.terminal-connection-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-connection-copy strong {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.terminal-connection-copy span {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.terminal-connection-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.terminal-overlay-button {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.terminal-overlay-button:hover {
+  color: var(--text-primary);
+  background: var(--workspace-hover);
+}
+
+.terminal-overlay-primary {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+.terminal-overlay-primary:hover {
+  color: var(--accent-ink);
+  background: var(--accent-hover);
 }
 
 .port-actions {

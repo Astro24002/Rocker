@@ -1,4 +1,5 @@
 import type { TerminalDimensions } from "../../../electron/ssh/types"
+import type { ReactNode } from "react"
 import type { MonitorState } from "../monitoring/monitor-state"
 import { MonitorSummary } from "../monitoring/MonitorSummary"
 import { visibleSessionIds } from "./layout"
@@ -8,6 +9,8 @@ import type { TerminalController } from "./terminal-controller"
 
 interface TerminalWorkspaceProps {
   workspace: TerminalWorkspaceState
+  workspaceVisible?: boolean
+  overlay?: ReactNode
   monitor: MonitorState
   monitorHostName?: string
   onMonitorToggle(): void
@@ -30,6 +33,7 @@ export function TerminalWorkspace(props: TerminalWorkspaceProps) {
   return (
     <section className="terminal-workspace">
       <MonitorSummary state={props.monitor} hostName={props.monitorHostName} onToggle={props.onMonitorToggle} />
+      {props.overlay}
       <div
         className="terminal-stack"
         data-split={visibleCount > 1}
@@ -39,7 +43,7 @@ export function TerminalWorkspace(props: TerminalWorkspaceProps) {
           <TerminalView
             key={session.id}
             session={session}
-            visible={visibleIds.has(session.id)}
+            visible={props.workspaceVisible !== false && visibleIds.has(session.id)}
             fontFamily={props.fontFamily}
             fontSize={props.fontSize}
             confirmMultilinePaste={props.confirmMultilinePaste}

@@ -19,10 +19,10 @@ export function MonitorSummary({ state, hostName, onToggle }: MonitorSummaryProp
       <div className="monitor-hud-header">
         <button className="monitor-summary-button" type="button" onClick={onToggle}>
           <Gauge size={15} />
-          <span><small>LIVE MONITOR</small><strong>{hostName}</strong></span>
+          <span><small>{t("monitor.live")}</small><strong>{hostName}</strong></span>
         </button>
-        <span className="monitor-hud-status"><i />ONLINE</span>
-        <button className="monitor-hud-toggle" aria-label={state.expanded ? "Collapse host monitor" : "Expand host monitor"} type="button" onClick={onToggle}>
+        <span className="monitor-hud-status"><i />{t("monitor.online")}</span>
+        <button className="monitor-hud-toggle" aria-label={state.expanded ? t("monitor.collapse") : t("monitor.expand")} type="button" onClick={onToggle}>
           {state.expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
       </div>
@@ -33,7 +33,7 @@ export function MonitorSummary({ state, hostName, onToggle }: MonitorSummaryProp
         <Metric icon={ArrowUpFromLine} label="TX" value={metrics?.transmitBytesPerSecond} suffix=" B/s" />
         <Metric icon={Activity} label={t("monitor.load")} value={metrics?.loadAverage} load />
       </div>
-      {state.expanded && <div className="monitor-hud-details"><Metric icon={HardDrive} label="Disk" value={metrics?.diskPercent} suffix="%" /><span className="monitor-sampled">{metrics ? new Date(metrics.sampledAt).toLocaleTimeString() : "Waiting for sample"}</span></div>}
+      {state.expanded && <div className="monitor-hud-details"><Metric icon={HardDrive} label={t("monitor.disk")} value={metrics?.diskPercent} suffix="%" /><span className="monitor-sampled">{metrics ? new Date(metrics.sampledAt).toLocaleTimeString() : t("monitor.waiting")}</span></div>}
     </section>
   )
 }
