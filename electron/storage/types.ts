@@ -27,6 +27,38 @@ export interface ConnectionHistoryItem {
   outcome: "connected" | "failed" | "disconnected"
 }
 
+export type StoredTerminalLayout =
+  | { kind: "leaf"; sessionId: string }
+  | {
+      kind: "split"
+      direction: "horizontal"
+      ratio: number
+      first: StoredTerminalLayout
+      second: StoredTerminalLayout
+    }
+
+export interface StoredWorkspaceSession {
+  sessionId: string
+  hostId: string
+  label: string
+  cols: number
+  rows: number
+}
+
+export interface StoredWorkspaceWindow {
+  workspaceId: string
+  bounds?: { x: number; y: number; width: number; height: number }
+  maximized: boolean
+  activeSessionId?: string
+  sessions: StoredWorkspaceSession[]
+  layout?: StoredTerminalLayout
+}
+
+export interface StoredWorkspaceDocument {
+  version: 1
+  windows: StoredWorkspaceWindow[]
+}
+
 export interface AppSettings {
   locale: "en" | "zh-CN"
   sidebarWidth: number
