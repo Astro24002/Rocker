@@ -153,6 +153,18 @@ describe("SshConnectionManager", () => {
     expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "configuration", ownerWebContentsId: 11 })
     expect(scheduler.pendingTimers()).toHaveLength(0)
   })
+
+  it("does not retry an unclassified profile resolution failure", async () => {
+    const { clients, events, manager, request, scheduler, setResolveFailure } = createConnectionHarness({})
+    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    setResolveFailure(new Error("Profile unavailable"))
+    clients[0].emitter.emit("close")
+
+    await scheduler.runNext()
+
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "configuration", ownerWebContentsId: 11 })
+  })
 })
 
 interface HarnessOptions {
@@ -189,6 +201,7 @@ function createConnectionHarness(options: HarnessOptions) {
   const clients: Array<{ emitter: EventEmitter }> = []
   let securityContextKey = "profile-and-credential-hash"
   let connectFailure = options.connectFailure
+  let resolveFailure = options.resolveFailure
   const createClient = (): Client => {
     const emitter = new EventEmitter()
     const client = {
@@ -220,7 +233,7 @@ function createConnectionHarness(options: HarnessOptions) {
     scheduler,
     random: () => 0.5,
     resolve: async () => {
-      if (options.resolveFailure) throw options.resolveFailure
+      if (resolveFailure) throw resolveFailure
       return {
         host: "127.0.0.1",
         port: 22,
@@ -253,7 +266,8 @@ function createConnectionHarness(options: HarnessOptions) {
     scheduler,
     request: { hostId: "host-a" },
     setSecurityContext: (next: string) => { securityContextKey = next },
-    setConnectFailure: (next: Error | undefined) => { connectFailure = next }
+    setConnectFailure: (next: Error | undefined) => { connectFailure = next },
+    setResolveFailure: (next: Error | undefined) => { resolveFailure = next }
   }
 }
 

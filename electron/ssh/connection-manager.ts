@@ -26,6 +26,14 @@ export interface ResolvedConnectionRequest {
   securityContextKey: string
 }
 
+export type ConnectionResolutionFailureReason = "authentication" | "configuration" | "cancelled"
+
+export class ConnectionResolutionError extends Error {
+  public constructor(message: string, public readonly reason: ConnectionResolutionFailureReason = "configuration") {
+    super(message)
+  }
+}
+
 export interface RetryScheduler {
   schedule(delayMs: number, action: () => void): number
   cancel(id: number): void
@@ -141,7 +149,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
         kind: "failed",
         connectionId: randomUUID(),
         ownerWebContentsId: request.ownerWebContentsId,
-        reason: failureReason(error)
+        reason: resolutionFailureReason(error)
       })
       throw error
     }
@@ -396,8 +404,14 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
 
   private async retry(record: ConnectionRecord): Promise<void> {
     if (!this.connections.has(record.connectionId) || record.leases.size === 0) return
+    let resolved: ResolvedConnectionRequest
     try {
-      const resolved = await this.options.resolve({ hostId: record.hostId, ownerWebContentsId: record.ownerWebContentsId, kind: "terminal" })
+      resolved = await this.options.resolve({ hostId: record.hostId, ownerWebContentsId: record.ownerWebContentsId, kind: "terminal" })
+    } catch (error) {
+      this.discard(record, resolutionFailureReason(error))
+      return
+    }
+    try {
       if (connectionIdentity(record.hostId, resolved) !== record.identityKey) {
         throw new Error("Resolved connection security context changed during retry")
       }
@@ -466,6 +480,10 @@ function failureReason(error: unknown): TerminalFailureReason {
   if (message.includes("timeout") || message.includes("timed out")) return "timeout"
   if (message.includes("dns") || message.includes("enotfound")) return "dns"
   return "network"
+}
+
+function resolutionFailureReason(error: unknown): ConnectionResolutionFailureReason {
+  return error instanceof ConnectionResolutionError ? error.reason : "configuration"
 }
 
 function isRetryable(reason: TerminalFailureReason): boolean {
