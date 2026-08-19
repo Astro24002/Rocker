@@ -105,6 +105,7 @@ interface ConnectionRecord {
   retryTimer?: number
   retryAttempt: number
   connectPromise?: Promise<void>
+  cancelConnect?: () => void
 }
 
 class HostKeyError extends Error {
@@ -260,6 +261,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
   }
 
   private async connect(record: ConnectionRecord, resolved: ResolvedConnectionRequest): Promise<void> {
+    if (!this.isCurrent(record)) throw new Error("SSH connection was closed")
     record.state = "connecting"
     const client = this.createClient()
     record.client = client
@@ -270,7 +272,8 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
         settled = true
         reject(error)
       }
-      const isCurrentTransport = (): boolean => record.client === client && this.connections.has(record.connectionId)
+      record.cancelConnect = () => fail(new Error("SSH connection was closed"))
+      const isCurrentTransport = (): boolean => record.client === client && this.isCurrent(record)
       const ready = (): void => {
         if (settled || !isCurrentTransport()) return
         settled = true
@@ -299,6 +302,10 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
 
       void this.connectConfig(record, resolved, fail).then((config) => {
         if (settled) return
+        if (!isCurrentTransport()) {
+          fail(new Error("SSH connection was closed"))
+          return
+        }
         client.connect(config)
       }).catch((error: Error) => fail(error))
     })
@@ -306,7 +313,10 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     try {
       await promise
     } finally {
-      record.connectPromise = undefined
+      if (record.connectPromise === promise) {
+        record.connectPromise = undefined
+        record.cancelConnect = undefined
+      }
     }
   }
 
@@ -437,6 +447,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       this.discard(record, resolutionFailureReason(error))
       return
     }
+    if (!this.isCurrent(record) || record.leases.size === 0) return
     try {
       if (connectionIdentity(record.hostId, resolved) !== record.identityKey) {
         throw new Error("Resolved connection security context changed during retry")
@@ -460,6 +471,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     record.state = "closed"
     if (record.retryTimer !== undefined) this.scheduler.cancel(record.retryTimer)
     record.retryTimer = undefined
+    record.cancelConnect?.()
     record.client?.end()
     this.connections.delete(record.connectionId)
   }
@@ -476,6 +488,10 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     const record = this.connections.get(connectionId)
     if (!record) throw new Error("SSH connection not found")
     return record
+  }
+
+  private isCurrent(record: ConnectionRecord): boolean {
+    return this.connections.get(record.connectionId) === record
   }
 
   private emit(event: ConnectionEvent): void {

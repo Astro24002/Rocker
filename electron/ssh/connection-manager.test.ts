@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events"
 import type { Client, ConnectConfig, HostFingerprintVerifier } from "ssh2"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
   SshConnectionManager,
   type ConnectionEvent,
@@ -63,6 +63,23 @@ describe("SshConnectionManager", () => {
 
     await waitFor(() => clients.length === 2)
     expect(scheduler.pendingTimers()).toHaveLength(0)
+  })
+
+  it("does not create a transport after the final lease is released during retry resolution", async () => {
+    const { clients, manager, request, releaseRetryResolution, scheduler, waitForRetryResolution } = createConnectionHarness({
+      deferRetryResolution: true
+    })
+    const lease = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    clients[0].emitter.emit("close")
+
+    scheduler.fireNext()
+    await waitForRetryResolution()
+    await manager.release(lease.id)
+    releaseRetryResolution()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    expect(clients).toHaveLength(1)
+    expect(clients[0].end).toHaveBeenCalledOnce()
   })
 
   it("exhausts the default eight retry attempts", async () => {
@@ -229,12 +246,13 @@ interface HarnessOptions {
   replaceHostKey?: (host: string, port: number, expectedFingerprint: string, replacementFingerprint: string) => Promise<void>
   connectFailure?: Error
   resolveFailure?: Error
+  deferRetryResolution?: boolean
 }
 
 function createConnectionHarness(options: HarnessOptions) {
   const scheduled = new Map<number, () => void>()
   let nextTimer = 1
-  const scheduler: RetryScheduler & { pendingTimers(): number[]; runNext(): Promise<void> } = {
+  const scheduler: RetryScheduler & { pendingTimers(): number[]; runNext(): Promise<void>; fireNext(): void } = {
     schedule: (_delayMs, action) => {
       const id = nextTimer++
       scheduled.set(id, action)
@@ -248,10 +266,16 @@ function createConnectionHarness(options: HarnessOptions) {
       scheduled.delete(next[0])
       next[1]()
       await waitFor(() => scheduled.size > 0 || clients.length > 1 || events.some((event) => event.kind === "failed"))
+    },
+    fireNext: () => {
+      const next = scheduled.entries().next().value as [number, () => void] | undefined
+      if (!next) throw new Error("No retry timer is scheduled")
+      scheduled.delete(next[0])
+      next[1]()
     }
   }
   const events: ConnectionEvent[] = []
-  const clients: Array<{ emitter: EventEmitter }> = []
+  const clients: Array<{ emitter: EventEmitter; end: ReturnType<typeof vi.fn> }> = []
   let securityContextKey = "profile-and-credential-hash"
   let connectFailure = options.connectFailure
   let resolveFailure = options.resolveFailure
@@ -259,8 +283,14 @@ function createConnectionHarness(options: HarnessOptions) {
   let nextFingerprint = options.nextFingerprint
   let inspection = options.inspection
   let hostKeyInspectionFailure: Error | undefined
+  let resolveCalls = 0
+  let releaseRetryResolution: (() => void) | undefined
+  let signalRetryResolution: (() => void) | undefined
+  const retryResolution = new Promise<void>((resolve) => { releaseRetryResolution = resolve })
+  const retryResolutionStarted = new Promise<void>((resolve) => { signalRetryResolution = resolve })
   const createClient = (): Client => {
     const emitter = new EventEmitter()
+    const end = vi.fn()
     const client = {
       connect: (config: ConnectConfig) => {
         if (connectFailure) {
@@ -278,11 +308,11 @@ function createConnectionHarness(options: HarnessOptions) {
           queueMicrotask(() => emitter.emit("ready"))
         }
       },
-      end: () => undefined,
+      end,
       on: emitter.on.bind(emitter),
       once: emitter.once.bind(emitter)
     }
-    clients.push({ emitter })
+    clients.push({ emitter, end })
     return client as unknown as Client
   }
   const manager = new SshConnectionManager({
@@ -290,6 +320,11 @@ function createConnectionHarness(options: HarnessOptions) {
     scheduler,
     random: () => 0.5,
     resolve: async () => {
+      resolveCalls += 1
+      if (options.deferRetryResolution && resolveCalls > 1) {
+        signalRetryResolution?.()
+        await retryResolution
+      }
       if (resolveFailure) throw resolveFailure
       return {
         host: "127.0.0.1",
@@ -337,7 +372,9 @@ function createConnectionHarness(options: HarnessOptions) {
     },
     setHostKeyInspectionFailure: (next: Error | undefined) => {
       hostKeyInspectionFailure = next
-    }
+    },
+    releaseRetryResolution: () => releaseRetryResolution?.(),
+    waitForRetryResolution: async () => retryResolutionStarted
   }
 }
 
