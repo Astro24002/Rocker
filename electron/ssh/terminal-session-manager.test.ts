@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events"
 import type { Client, ConnectConfig, HostFingerprintVerifier } from "ssh2"
 import { describe, expect, it, vi } from "vitest"
-import { SshConnectionManager, type RetryScheduler } from "./connection-manager"
+import { ConnectionResolutionError, SshConnectionManager, type RetryScheduler } from "./connection-manager"
 import { TerminalSessionManager } from "./terminal-session-manager"
 import type { OwnedTerminalSessionEvent } from "./types"
 
@@ -46,19 +46,24 @@ describe("TerminalSessionManager", () => {
     expect(retryScheduler.pendingTimers()).toHaveLength(0)
   })
 
-  it("marks resume recovery as restoring and reports a restored shell", async () => {
-    const { sessions, transport, events } = createSessionHarness()
+  it("does not invalidate a ready shell when desktop resume fires during runtime recovery", async () => {
+    const { sessions, transport, retryScheduler, shellFactory, channels, events } = createSessionHarness({ deferShellCallbacks: true })
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    const initial = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await waitFor(() => shellFactory.started.length === 1)
+    shellFactory.settleNext()
+    await initial
     transport.dropUnexpectedly()
+    await retryScheduler.runNext()
+    await waitFor(() => shellFactory.started.length === 2)
 
     sessions.retryAfterResume()
+    shellFactory.settleNext()
     await waitFor(() => events.some((event) => event.kind === "state" && event.state === "connected" && event.channelGeneration === 2))
 
-    const restoringIndex = events.findIndex((event) => event.kind === "state" && event.state === "restoring")
-    const restored = events.at(-1)
-    expect(restoringIndex).toBeGreaterThan(-1)
-    expect(restored).toMatchObject({ kind: "state", state: "connected", notice: "restored-new-shell", channelGeneration: 2 })
+    expect(events.some((event) => event.kind === "state" && event.state === "restoring")).toBe(false)
+    expect(events.at(-1)).toMatchObject({ kind: "state", state: "connected", notice: "reconnected", channelGeneration: 2 })
+    expect(channels.get(2)!.end).not.toHaveBeenCalled()
   })
 
   it("starts a workspace-restored session as restoring before its new shell opens", async () => {
@@ -82,6 +87,29 @@ describe("TerminalSessionManager", () => {
       notice: "restored-new-shell"
     })
     expect(opened.state).toBe("connected")
+  })
+
+  it("retains a session and emits an error when initial and manual connection attempts fail", async () => {
+    const authenticationError = new ConnectionResolutionError("Authentication rejected", "authentication")
+    const { sessions, events, channels } = createSessionHarness({ resolveFailures: [authenticationError, authenticationError] })
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+
+    await expect(sessions.open({
+      sessionId,
+      hostId: "host-a",
+      cols: 120,
+      rows: 40,
+      ownerWebContentsId: 7,
+      restorePriority: "active"
+    })).rejects.toThrow("Authentication rejected")
+    expect(events.at(-1)).toMatchObject({ kind: "state", state: "error", reason: "authentication" })
+
+    await expect(sessions.reconnect(sessionId)).rejects.toThrow("Authentication rejected")
+    expect(events.at(-1)).toMatchObject({ kind: "state", state: "error", reason: "authentication" })
+
+    await sessions.reconnect(sessionId)
+    expect(channels).toHaveLength(1)
+    expect(events.at(-1)).toMatchObject({ kind: "state", state: "connected", notice: "reconnected" })
   })
 
   it("releases a lease acquired after its logical session was closed", async () => {
@@ -270,6 +298,75 @@ describe("TerminalSessionManager", () => {
     shellFactory.settleNext()
     await Promise.all([backgroundOpen, activeOpen])
   })
+
+  it("holds a background restore until its predeclared active session enters the queue", async () => {
+    const { sessions, transport, shellFactory } = createSessionHarness({
+      deferShellCallbacks: true,
+      deferEachConnectionResolution: true
+    })
+    const background = "11111111-1111-4111-8111-111111111111"
+    const active = "22222222-2222-4222-8222-222222222222"
+    sessions.beginRestore(7, active)
+
+    const backgroundOpen = sessions.open({
+      sessionId: background,
+      hostId: "background-host",
+      cols: 120,
+      rows: 40,
+      ownerWebContentsId: 7,
+      restorePriority: "background"
+    })
+    await flush()
+    expect(transport.connectionRequests).toEqual([])
+
+    const activeOpen = sessions.open({
+      sessionId: active,
+      hostId: "active-host",
+      cols: 121,
+      rows: 40,
+      ownerWebContentsId: 7,
+      restorePriority: "active"
+    })
+    await waitFor(() => transport.connectionRequests.length === 1)
+    expect(transport.connectionRequests).toEqual(["active-host"])
+    transport.resolveNextConnection()
+    await waitFor(() => shellFactory.started.length === 1)
+    shellFactory.settleNext()
+
+    await waitFor(() => transport.connectionRequests.length === 2)
+    expect(transport.connectionRequests).toEqual(["active-host", "background-host"])
+    transport.resolveNextConnection()
+    await waitFor(() => shellFactory.started.length === 2)
+    shellFactory.settleNext()
+    await Promise.all([backgroundOpen, activeOpen])
+  })
+
+  it("allows a restore batch to proceed when its active session is unavailable", async () => {
+    const { sessions, transport, shellFactory } = createSessionHarness({
+      deferShellCallbacks: true,
+      deferEachConnectionResolution: true
+    })
+    const missingActive = "22222222-2222-4222-8222-222222222222"
+    const background = "11111111-1111-4111-8111-111111111111"
+    sessions.beginRestore(7, missingActive)
+    const backgroundOpen = sessions.open({
+      sessionId: background,
+      hostId: "background-host",
+      cols: 120,
+      rows: 40,
+      ownerWebContentsId: 7,
+      restorePriority: "background"
+    })
+    await flush()
+    expect(transport.connectionRequests).toEqual([])
+
+    sessions.completeRestore(7)
+    await waitFor(() => transport.connectionRequests.length === 1)
+    transport.resolveNextConnection()
+    await waitFor(() => shellFactory.started.length === 1)
+    shellFactory.settleNext()
+    await backgroundOpen
+  })
 })
 
 interface FakeChannel {
@@ -287,6 +384,7 @@ interface HarnessOptions {
   deferShellCallbacks?: boolean
   deferConnectionResolution?: boolean
   deferEachConnectionResolution?: boolean
+  resolveFailures?: Error[]
 }
 
 function createSessionHarness(options: HarnessOptions = {}) {
@@ -298,7 +396,8 @@ function createSessionHarness(options: HarnessOptions = {}) {
     shellFactory,
     retryScheduler,
     options.deferConnectionResolution ?? false,
-    options.deferEachConnectionResolution ?? false
+    options.deferEachConnectionResolution ?? false,
+    [...(options.resolveFailures ?? [])]
   )
   const sessions = new TerminalSessionManager({ connections: transport.connections })
   sessions.onEvent(({ event }) => events.push(event))
@@ -365,7 +464,8 @@ function createTransport(
   shellFactory: ReturnType<typeof createShellFactory>,
   retryScheduler: ReturnType<typeof createRetryScheduler>,
   deferConnectionResolution: boolean,
-  deferEachConnectionResolution = false
+  deferEachConnectionResolution = false,
+  resolveFailures: Error[] = []
 ) {
   const clients: Array<{ emitter: EventEmitter; end: ReturnType<typeof vi.fn> }> = []
   let releaseConnectionResolution: (() => void) | undefined
@@ -397,6 +497,8 @@ function createTransport(
     resolve: async (request) => {
       connectionRequests.push(request.hostId)
       signalConnectionResolution?.()
+      const failure = resolveFailures.shift()
+      if (failure) throw failure
       if (deferConnectionResolution) await connectionResolution
       if (deferEachConnectionResolution) {
         await new Promise<void>((resolve) => pendingConnectionResolutions.push(resolve))
@@ -422,6 +524,10 @@ function createTransport(
     resolveNextConnection: () => pendingConnectionResolutions.shift()?.(),
     waitForConnectionResolution: () => connectionResolutionStarted
   }
+}
+
+async function flush(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
 }
 
 async function waitFor(condition: () => boolean): Promise<void> {
