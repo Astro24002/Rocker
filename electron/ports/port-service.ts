@@ -1,4 +1,4 @@
-import type { SshManager } from "../ssh/ssh-manager"
+import type { ConnectionCommandExecutor } from "../ssh/types"
 import { parseListeningPorts } from "./linux-port-parser"
 import type { DiscoveredPort } from "./types"
 
@@ -6,7 +6,7 @@ const ssCommand = "ss -ltnpeH"
 const netstatCommand = "netstat -ltnpe"
 
 export class PortService {
-  public constructor(private readonly sessions: Pick<SshManager, "exec" | "execOnConnection">) {}
+  public constructor(private readonly sessions: ConnectionCommandExecutor) {}
 
   public async scan(connectionId: string): Promise<DiscoveredPort[]> {
     try {

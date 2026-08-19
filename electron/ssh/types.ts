@@ -49,3 +49,11 @@ export interface TerminalSessionInfo {
   channelGeneration: number
   state: TerminalSessionState
 }
+
+export interface SessionCommandExecutor {
+  exec(sessionId: string, command: string): Promise<string>
+}
+
+export interface ConnectionCommandExecutor {
+  execOnConnection(connectionId: string, command: string): Promise<string>
+}
