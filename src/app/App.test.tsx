@@ -6,6 +6,12 @@ import { clampSidebarWidth } from "../components/Sidebar"
 beforeEach(() => localStorage.clear())
 
 describe("desktop workspace shell", () => {
+  it("uses the modern professional tool shell", () => {
+    render(<App />)
+
+    expect(document.querySelector(".app-shell")).toHaveAttribute("data-ui-style", "modern-professional")
+  })
+
   it("renders peer navigation entries from the reference layout", () => {
     render(<App />)
 

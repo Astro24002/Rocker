@@ -163,7 +163,7 @@ function Workspace() {
   }
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-ui-style="modern-professional">
       <WindowChrome />
       <div className="app-content">
         <Sidebar
