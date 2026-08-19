@@ -86,13 +86,18 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     this.sessions.set(request.sessionId, record)
     this.emitState(record, "connecting")
     try {
-      record.lease = await this.options.connections.acquire({
+      const lease = await this.options.connections.acquire({
         hostId: request.hostId,
         ownerWebContentsId: request.ownerWebContentsId,
         kind: "terminal",
         forceNewConnection: request.forceNewConnection
       })
-      record.connectionId = record.lease.connectionId
+      if (!this.isCurrent(record) || !record.recoveryDesired) {
+        await this.options.connections.release(lease.id)
+        throw new Error("Terminal session is closed")
+      }
+      record.lease = lease
+      record.connectionId = lease.connectionId
       return await this.queueShell(record)
     } catch (error) {
       await this.removeRecord(request.sessionId, false)
@@ -126,18 +131,24 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     if (!record.lease) {
       record.state = "connecting"
       this.emitState(record, "connecting")
-      record.lease = await this.options.connections.acquire({
+      const lease = await this.options.connections.acquire({
         hostId: record.request.hostId,
         ownerWebContentsId: record.request.ownerWebContentsId,
         kind: "terminal",
         forceNewConnection: record.request.forceNewConnection
       })
-      record.connectionId = record.lease.connectionId
+      if (!this.isCurrent(record) || !record.recoveryDesired) {
+        await this.options.connections.release(lease.id)
+        throw new Error("Terminal session is closed")
+      }
+      record.lease = lease
+      record.connectionId = lease.connectionId
     }
 
     try {
       this.options.connections.getClientForConnection(record.connectionId!)
     } catch {
+      this.options.connections.retryNow(record.connectionId)
       record.state = "reconnecting"
       this.emitState(record, "reconnecting")
       return
@@ -147,7 +158,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
 
   public cancelReconnect(sessionId: string): void {
     const record = this.sessions.get(sessionId)
-    if (!record || !record.recoveryDesired) return
+    if (!record || !record.recoveryDesired || (record.state !== "connecting" && record.state !== "reconnecting")) return
     record.recoveryDesired = false
     record.output?.close()
     record.output = undefined
@@ -182,10 +193,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
   }
 
   public retryAfterResume(): void {
-    for (const [sessionId, record] of this.sessions) {
-      if (!record.recoveryDesired || (record.state !== "reconnecting" && record.state !== "disconnected")) continue
-      void this.reconnect(sessionId)
-    }
+    this.options.connections.retryNow()
   }
 
   public async exec(sessionId: string, command: string): Promise<string> {

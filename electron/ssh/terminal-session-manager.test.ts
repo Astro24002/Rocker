@@ -34,6 +34,31 @@ describe("TerminalSessionManager", () => {
     expect(events.at(-1)).toMatchObject({ kind: "state", sessionId, channelGeneration: 2, notice: "reconnected" })
   })
 
+  it("retries the shared transport immediately after desktop resume", async () => {
+    const { sessions, transport, retryScheduler, channels } = createSessionHarness()
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    transport.dropUnexpectedly()
+
+    sessions.retryAfterResume()
+
+    await waitFor(() => channels.has(2))
+    expect(retryScheduler.pendingTimers()).toHaveLength(0)
+  })
+
+  it("releases a lease acquired after its logical session was closed", async () => {
+    const { sessions, transport } = createSessionHarness({ deferConnectionResolution: true })
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await transport.waitForConnectionResolution()
+
+    await sessions.close(sessionId)
+    transport.releaseConnectionResolution()
+
+    await expect(opening).rejects.toThrow("Terminal session is closed")
+    await waitFor(() => transport.clients[0]?.end.mock.calls.length === 1)
+  })
+
   it("ignores a stale shell close after an unexpected transport loss", async () => {
     const { sessions, transport, retryScheduler, channels, events } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
@@ -85,6 +110,18 @@ describe("TerminalSessionManager", () => {
     expect(channels.has(4)).toBe(false)
   })
 
+  it("does not tear down a healthy channel when a stale cancel-reconnect action arrives", async () => {
+    const { sessions, channels } = createSessionHarness()
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+
+    sessions.cancelReconnect(sessionId)
+    sessions.write(sessionId, 1, "still-connected")
+
+    expect(channels.get(1)!.end).not.toHaveBeenCalled()
+    expect(channels.get(1)!.write).toHaveBeenCalledWith("still-connected")
+  })
+
   it("releases every session belonging to a closed owner", async () => {
     const { sessions, channels } = createSessionHarness()
     const owned = "11111111-1111-4111-8111-111111111111"
@@ -125,14 +162,17 @@ interface FakeChannel {
   emitClose(): void
 }
 
-interface HarnessOptions { deferShellCallbacks?: boolean }
+interface HarnessOptions {
+  deferShellCallbacks?: boolean
+  deferConnectionResolution?: boolean
+}
 
 function createSessionHarness(options: HarnessOptions = {}) {
   const events: OwnedTerminalSessionEvent["event"][] = []
   const channels = new Map<number, FakeChannel>()
   const shellFactory = createShellFactory(channels, options.deferShellCallbacks ?? false)
   const retryScheduler = createRetryScheduler()
-  const transport = createTransport(shellFactory, retryScheduler)
+  const transport = createTransport(shellFactory, retryScheduler, options.deferConnectionResolution ?? false)
   const sessions = new TerminalSessionManager({ connections: transport.connections })
   sessions.onEvent(({ event }) => events.push(event))
   return { sessions, transport, retryScheduler, events, channels, shellFactory }
@@ -193,12 +233,21 @@ function createRetryScheduler() {
   }
 }
 
-function createTransport(shellFactory: ReturnType<typeof createShellFactory>, retryScheduler: ReturnType<typeof createRetryScheduler>) {
-  const clients: EventEmitter[] = []
+function createTransport(
+  shellFactory: ReturnType<typeof createShellFactory>,
+  retryScheduler: ReturnType<typeof createRetryScheduler>,
+  deferConnectionResolution: boolean
+) {
+  const clients: Array<{ emitter: EventEmitter; end: ReturnType<typeof vi.fn> }> = []
+  let releaseConnectionResolution: (() => void) | undefined
+  let signalConnectionResolution: (() => void) | undefined
+  const connectionResolution = new Promise<void>((resolve) => { releaseConnectionResolution = resolve })
+  const connectionResolutionStarted = new Promise<void>((resolve) => { signalConnectionResolution = resolve })
   const connections = new SshConnectionManager({
     createClient: () => {
       const emitter = new EventEmitter()
-      clients.push(emitter)
+      const end = vi.fn()
+      clients.push({ emitter, end })
       return {
         connect: (config: ConnectConfig) => {
           const verify = (accepted: boolean) => { if (accepted) emitter.emit("ready") }
@@ -207,27 +256,34 @@ function createTransport(shellFactory: ReturnType<typeof createShellFactory>, re
         shell: (shellOptions: { cols: number }, callback: (error: Error | undefined, channel?: FakeChannel) => void) => {
           shellFactory.shell(shellOptions, callback)
         },
-        end: () => undefined,
+        end,
         on: emitter.on.bind(emitter),
         once: emitter.once.bind(emitter)
       } as unknown as Client
     },
     scheduler: retryScheduler satisfies RetryScheduler,
     random: () => 0.5,
-    resolve: async () => ({
-      host: "127.0.0.1",
-      port: 22,
-      username: "rock",
-      authMethod: "agent",
-      readyTimeoutMs: 15_000,
-      securityContextKey: "test"
-    }),
+    resolve: async () => {
+      signalConnectionResolution?.()
+      if (deferConnectionResolution) await connectionResolution
+      return {
+        host: "127.0.0.1",
+        port: 22,
+        username: "rock",
+        authMethod: "agent",
+        readyTimeoutMs: 15_000,
+        securityContextKey: "test"
+      }
+    },
     inspectHostKey: async (_request, fingerprint) => ({ status: "match" as const, fingerprint }),
     promptForHostKey: async () => false
   })
   return {
+    clients,
     connections,
-    dropUnexpectedly: () => clients.at(-1)?.emit("close")
+    dropUnexpectedly: () => clients.at(-1)?.emitter.emit("close"),
+    releaseConnectionResolution: () => releaseConnectionResolution?.(),
+    waitForConnectionResolution: () => connectionResolutionStarted
   }
 }
 
