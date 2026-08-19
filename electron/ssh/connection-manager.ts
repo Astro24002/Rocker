@@ -123,7 +123,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     this.createClient = options.createClient ?? (() => new Client())
     this.scheduler = options.scheduler ?? defaultScheduler
     this.random = options.random ?? Math.random
-    this.maxRetryAttempts = Math.max(1, Math.floor(options.maxRetryAttempts ?? 6))
+    this.maxRetryAttempts = Math.max(1, Math.floor(options.maxRetryAttempts ?? 8))
   }
 
   public onEvent(listener: (event: ConnectionEvent) => void): () => void {
@@ -141,7 +141,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
         kind: "failed",
         connectionId: randomUUID(),
         ownerWebContentsId: request.ownerWebContentsId,
-        reason: "configuration"
+        reason: failureReason(error)
       })
       throw error
     }
@@ -150,10 +150,16 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       const reusable = [...this.connections.values()].find((record) =>
         record.ownerWebContentsId === request.ownerWebContentsId &&
         record.identityKey === identityKey &&
-        record.verifiedFingerprint !== undefined &&
-        record.state === "ready"
+        ((record.verifiedFingerprint !== undefined && record.state === "ready") ||
+          (record.state === "connecting" && record.connectPromise !== undefined))
       )
-      if (reusable) return this.addLease(reusable, request.ownerWebContentsId, "terminal")
+      if (reusable) {
+        const connecting = reusable.connectPromise
+        if (connecting) await connecting
+        if (reusable.state === "ready" && reusable.verifiedFingerprint !== undefined) {
+          return this.addLease(reusable, request.ownerWebContentsId, "terminal")
+        }
+      }
     }
 
     const record = this.createRecord(request, resolved, identityKey)
@@ -246,8 +252,9 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
         settled = true
         reject(error)
       }
+      const isCurrentTransport = (): boolean => record.client === client && this.connections.has(record.connectionId)
       const ready = (): void => {
-        if (settled) return
+        if (settled || !isCurrentTransport()) return
         settled = true
         record.state = "ready"
         record.retryAttempt = 0
@@ -262,10 +269,12 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       }
       client.once("ready", ready)
       client.on("error", (error: Error) => {
+        if (!isCurrentTransport()) return
         if (!settled) fail(error)
         else this.handleLostTransport(record, failureReason(error))
       })
       client.on("close", () => {
+        if (!isCurrentTransport()) return
         if (!settled) fail(new Error("SSH connection closed before it was ready"))
         else this.handleLostTransport(record, "network")
       })
@@ -288,13 +297,12 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     resolved: ResolvedConnectionRequest,
     fail: (error: Error) => void
   ): Promise<ConnectConfig> {
-    const hostVerifier: HostFingerprintVerifier = (fingerprint, verify) => {
+    const hostVerifier = ((fingerprint: string, verify: (accepted: boolean) => void): void => {
       void this.verifyHostKey(record, resolved, fingerprint).then((accepted) => verify(accepted)).catch((error: unknown) => {
         verify(false)
         fail(error instanceof Error ? error : new Error("Host Key was rejected"))
       })
-      return true
-    }
+    }) as unknown as HostFingerprintVerifier
     const config: ConnectConfig = {
       host: resolved.host,
       port: resolved.port,
@@ -453,7 +461,7 @@ function failureReason(error: unknown): TerminalFailureReason {
   if (error instanceof HostKeyError) return error.reason
   const message = error instanceof Error ? error.message.toLowerCase() : ""
   if (message.includes("authentication") || message.includes("auth failed")) return "authentication"
-  if (message.includes("private key") || message.includes("security context")) return "configuration"
+  if (message.includes("private key") || message.includes("security context") || message.includes("credential") || message.includes("configuration")) return "configuration"
   if (message.includes("cancelled") || message.includes("canceled")) return "cancelled"
   if (message.includes("timeout") || message.includes("timed out")) return "timeout"
   if (message.includes("dns") || message.includes("enotfound")) return "dns"

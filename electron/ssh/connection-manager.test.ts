@@ -18,6 +18,17 @@ describe("SshConnectionManager", () => {
     expect(otherWindow.connectionId).not.toBe(first.connectionId)
   })
 
+  it("coalesces concurrent matching acquisitions in one owner window", async () => {
+    const { clients, manager, request } = createConnectionHarness({})
+    const [first, second] = await Promise.all([
+      manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" }),
+      manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    ])
+
+    expect(clients).toHaveLength(1)
+    expect(second.connectionId).toBe(first.connectionId)
+  })
+
   it("does not reuse a connection after its credential context changes", async () => {
     const { manager, request, setSecurityContext } = createConnectionHarness({})
     const first = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
@@ -41,6 +52,36 @@ describe("SshConnectionManager", () => {
       ownerWebContentsId: 11,
       attempt: 1
     })
+  })
+
+  it("exhausts the default eight retry attempts", async () => {
+    const { clients, events, manager, request, scheduler, setConnectFailure } = createConnectionHarness({})
+    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    setConnectFailure(new Error("Network unavailable"))
+    clients[0].emitter.emit("close")
+
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      await scheduler.runNext()
+      if (attempt < 8) await waitFor(() => scheduler.pendingTimers().length === 1)
+    }
+
+    await waitFor(() => events.at(-1)?.kind === "failed")
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "network" })
+  })
+
+  it("ignores stale transport callbacks after a retry succeeds", async () => {
+    const { clients, events, manager, request, scheduler } = createConnectionHarness({})
+    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const staleClient = clients[0]
+    staleClient.emitter.emit("close")
+    await scheduler.runNext()
+    await waitFor(() => clients.length === 2 && events.filter((event) => event.kind === "ready").length === 2)
+
+    staleClient.emitter.emit("close")
+
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+    expect(events.filter((event) => event.kind === "retrying")).toHaveLength(1)
   })
 
   it("marks a changed host key as non-retryable without replacing it", async () => {
@@ -128,31 +169,41 @@ interface HarnessOptions {
 function createConnectionHarness(options: HarnessOptions) {
   const scheduled = new Map<number, () => void>()
   let nextTimer = 1
-  const scheduler: RetryScheduler & { pendingTimers(): number[] } = {
+  const scheduler: RetryScheduler & { pendingTimers(): number[]; runNext(): Promise<void> } = {
     schedule: (_delayMs, action) => {
       const id = nextTimer++
       scheduled.set(id, action)
       return id
     },
     cancel: (id) => scheduled.delete(id),
-    pendingTimers: () => [...scheduled.keys()]
+    pendingTimers: () => [...scheduled.keys()],
+    runNext: async () => {
+      const next = scheduled.entries().next().value as [number, () => void] | undefined
+      if (!next) throw new Error("No retry timer is scheduled")
+      scheduled.delete(next[0])
+      next[1]()
+      await waitFor(() => scheduled.size > 0 || clients.length > 1 || events.some((event) => event.kind === "failed"))
+    }
   }
   const events: ConnectionEvent[] = []
   const clients: Array<{ emitter: EventEmitter }> = []
   let securityContextKey = "profile-and-credential-hash"
+  let connectFailure = options.connectFailure
   const createClient = (): Client => {
     const emitter = new EventEmitter()
     const client = {
       connect: (config: ConnectConfig) => {
-        if (options.connectFailure) {
-          queueMicrotask(() => emitter.emit("error", options.connectFailure))
+        if (connectFailure) {
+          queueMicrotask(() => emitter.emit("error", connectFailure))
           return
         }
         const hostVerifier = config.hostVerifier as HostFingerprintVerifier | undefined
         if (hostVerifier) {
-          hostVerifier(options.nextFingerprint ?? "fingerprint-a", (accepted) => {
+          const verify = (accepted: boolean) => {
             if (accepted) emitter.emit("ready")
-          })
+          }
+          const result = hostVerifier(options.nextFingerprint ?? "fingerprint-a", verify)
+          if (result !== undefined) verify(result)
         } else {
           queueMicrotask(() => emitter.emit("ready"))
         }
@@ -201,6 +252,15 @@ function createConnectionHarness(options: HarnessOptions) {
     manager,
     scheduler,
     request: { hostId: "host-a" },
-    setSecurityContext: (next: string) => { securityContextKey = next }
+    setSecurityContext: (next: string) => { securityContextKey = next },
+    setConnectFailure: (next: Error | undefined) => { connectFailure = next }
   }
+}
+
+async function waitFor(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    if (condition()) return
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error("Timed out waiting for the expected connection state")
 }
