@@ -195,6 +195,18 @@ describe("SshConnectionManager", () => {
     expect(scheduler.pendingTimers()).toHaveLength(0)
     expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-rejected", ownerWebContentsId: 11 })
   })
+
+  it("does not retry a Host Key inspection failure during recovery", async () => {
+    const { clients, events, manager, request, scheduler, setHostKeyInspectionFailure } = createConnectionHarness({})
+    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    setHostKeyInspectionFailure(new Error("Host Key storage is unavailable"))
+    clients[0].emitter.emit("close")
+
+    await scheduler.runNext()
+
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-rejected", ownerWebContentsId: 11 })
+  })
 })
 
 interface HarnessOptions {
@@ -235,6 +247,7 @@ function createConnectionHarness(options: HarnessOptions) {
   let storedFingerprint = options.storedFingerprint
   let nextFingerprint = options.nextFingerprint
   let inspection = options.inspection
+  let hostKeyInspectionFailure: Error | undefined
   const createClient = (): Client => {
     const emitter = new EventEmitter()
     const client = {
@@ -277,6 +290,7 @@ function createConnectionHarness(options: HarnessOptions) {
       }
     },
     inspectHostKey: async (_request, fingerprint) => {
+      if (hostKeyInspectionFailure) throw hostKeyInspectionFailure
       if (storedFingerprint) {
         return {
           status: "changed" as const,
@@ -309,6 +323,9 @@ function createConnectionHarness(options: HarnessOptions) {
     setHostKeyUnknown: () => {
       storedFingerprint = undefined
       inspection = "unknown"
+    },
+    setHostKeyInspectionFailure: (next: Error | undefined) => {
+      hostKeyInspectionFailure = next
     }
   }
 }

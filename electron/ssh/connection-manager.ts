@@ -332,43 +332,48 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
   }
 
   private async verifyHostKey(record: ConnectionRecord, resolved: ResolvedConnectionRequest, fingerprint: string): Promise<boolean> {
-    const inspection = await this.inspectHostKey(resolved, fingerprint)
-    if (inspection.status === "match") {
-      record.verifiedFingerprint = normalizeFingerprint(inspection.fingerprint)
-      return true
-    }
-    const approved = await this.options.promptForHostKey({
-      ownerWebContentsId: record.ownerWebContentsId,
-      host: resolved.host,
-      port: resolved.port,
-      inspection
-    })
-    if (!approved) {
-      throw new HostKeyError(
-        inspection.status === "changed" ? "Host Key changed" : "Host Key was rejected",
-        inspection.status === "changed" ? "host-key-changed" : "host-key-rejected"
-      )
-    }
-    if (inspection.status === "unknown") {
-      const trust = this.options.trustHostKey ?? this.options.hostKeys?.trust.bind(this.options.hostKeys)
-      if (!trust) throw new HostKeyError("Host Key was rejected", "host-key-rejected")
-      try {
-        await trust(resolved.host, resolved.port, inspection.fingerprint)
-      } catch {
-        throw new HostKeyError("Host Key could not be trusted", "host-key-rejected")
-      }
-      record.verifiedFingerprint = normalizeFingerprint(inspection.fingerprint)
-      return true
-    }
-    const replace = this.options.replaceHostKey ?? this.options.hostKeys?.replace?.bind(this.options.hostKeys)
-    if (!replace) throw new HostKeyError("Host Key changed", "host-key-changed")
     try {
-      await replace(resolved.host, resolved.port, inspection.storedFingerprint, inspection.receivedFingerprint)
-    } catch {
-      throw new HostKeyError("Host Key changed while saving replacement", "host-key-changed")
+      const inspection = await this.inspectHostKey(resolved, fingerprint)
+      if (inspection.status === "match") {
+        record.verifiedFingerprint = normalizeFingerprint(inspection.fingerprint)
+        return true
+      }
+      const approved = await this.options.promptForHostKey({
+        ownerWebContentsId: record.ownerWebContentsId,
+        host: resolved.host,
+        port: resolved.port,
+        inspection
+      })
+      if (!approved) {
+        throw new HostKeyError(
+          inspection.status === "changed" ? "Host Key changed" : "Host Key was rejected",
+          inspection.status === "changed" ? "host-key-changed" : "host-key-rejected"
+        )
+      }
+      if (inspection.status === "unknown") {
+        const trust = this.options.trustHostKey ?? this.options.hostKeys?.trust.bind(this.options.hostKeys)
+        if (!trust) throw new HostKeyError("Host Key was rejected", "host-key-rejected")
+        try {
+          await trust(resolved.host, resolved.port, inspection.fingerprint)
+        } catch {
+          throw new HostKeyError("Host Key could not be trusted", "host-key-rejected")
+        }
+        record.verifiedFingerprint = normalizeFingerprint(inspection.fingerprint)
+        return true
+      }
+      const replace = this.options.replaceHostKey ?? this.options.hostKeys?.replace?.bind(this.options.hostKeys)
+      if (!replace) throw new HostKeyError("Host Key changed", "host-key-changed")
+      try {
+        await replace(resolved.host, resolved.port, inspection.storedFingerprint, inspection.receivedFingerprint)
+      } catch {
+        throw new HostKeyError("Host Key changed while saving replacement", "host-key-changed")
+      }
+      record.verifiedFingerprint = normalizeFingerprint(inspection.receivedFingerprint)
+      return true
+    } catch (error) {
+      if (error instanceof HostKeyError) throw error
+      throw new HostKeyError("Host Key verification failed", "host-key-rejected")
     }
-    record.verifiedFingerprint = normalizeFingerprint(inspection.receivedFingerprint)
-    return true
   }
 
   private async inspectHostKey(resolved: ResolvedConnectionRequest, fingerprint: string): Promise<HostKeyInspection> {
