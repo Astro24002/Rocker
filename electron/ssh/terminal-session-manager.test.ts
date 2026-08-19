@@ -46,6 +46,44 @@ describe("TerminalSessionManager", () => {
     expect(retryScheduler.pendingTimers()).toHaveLength(0)
   })
 
+  it("marks resume recovery as restoring and reports a restored shell", async () => {
+    const { sessions, transport, events } = createSessionHarness()
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    transport.dropUnexpectedly()
+
+    sessions.retryAfterResume()
+    await waitFor(() => events.some((event) => event.kind === "state" && event.state === "connected" && event.channelGeneration === 2))
+
+    const restoringIndex = events.findIndex((event) => event.kind === "state" && event.state === "restoring")
+    const restored = events.at(-1)
+    expect(restoringIndex).toBeGreaterThan(-1)
+    expect(restored).toMatchObject({ kind: "state", state: "connected", notice: "restored-new-shell", channelGeneration: 2 })
+  })
+
+  it("starts a workspace-restored session as restoring before its new shell opens", async () => {
+    const { sessions, events } = createSessionHarness()
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+
+    const opened = await sessions.open({
+      sessionId,
+      hostId: "host-a",
+      cols: 120,
+      rows: 40,
+      ownerWebContentsId: 7,
+      restorePriority: "active"
+    })
+
+    expect(events[0]).toMatchObject({ kind: "state", state: "restoring", channelGeneration: 0 })
+    expect(events.at(-1)).toMatchObject({
+      kind: "state",
+      state: "connected",
+      channelGeneration: 1,
+      notice: "restored-new-shell"
+    })
+    expect(opened.state).toBe("connected")
+  })
+
   it("releases a lease acquired after its logical session was closed", async () => {
     const { sessions, transport } = createSessionHarness({ deferConnectionResolution: true })
     const sessionId = "11111111-1111-4111-8111-111111111111"
@@ -69,6 +107,21 @@ describe("TerminalSessionManager", () => {
     await retryScheduler.runNext()
 
     expect(events.filter((event) => event.kind === "state" && event.state === "connected")).toHaveLength(2)
+  })
+
+  it("rejects a shell callback from the transport attempt lost while the callback was pending", async () => {
+    const { sessions, transport, shellFactory, channels, retryScheduler, events } = createSessionHarness({ deferShellCallbacks: true })
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await waitFor(() => shellFactory.started.length === 1)
+
+    transport.dropUnexpectedly()
+    shellFactory.settleNext()
+    await expect(opening).rejects.toThrow("Terminal transport attempt changed")
+    await retryScheduler.runNext()
+
+    expect(channels.get(1)!.end).toHaveBeenCalledOnce()
+    expect(events.some((event) => event.kind === "state" && event.state === "connected")).toBe(false)
   })
 
   it("rejects input, resize, and acknowledgement from a prior channel generation", async () => {
@@ -122,6 +175,48 @@ describe("TerminalSessionManager", () => {
     expect(channels.get(1)!.write).toHaveBeenCalledWith("still-connected")
   })
 
+  it("does not reconnect a session whose PTY is already connected", async () => {
+    const { sessions, channels } = createSessionHarness()
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+
+    await expect(sessions.reconnect(sessionId)).rejects.toThrow("not reconnectable")
+
+    expect(channels).toHaveLength(1)
+    expect(channels.get(1)!.end).not.toHaveBeenCalled()
+  })
+
+  it("retains a cancelled connecting session for a later manual reconnect", async () => {
+    const { sessions, transport, channels } = createSessionHarness({ deferConnectionResolution: true })
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await transport.waitForConnectionResolution()
+
+    sessions.cancelReconnect(sessionId)
+    transport.releaseConnectionResolution()
+    await expect(opening).rejects.toThrow("Terminal session is closed")
+
+    await sessions.reconnect(sessionId)
+    expect(channels).toHaveLength(1)
+  })
+
+  it("reports an error when an automatically recovered PTY cannot open", async () => {
+    const { sessions, transport, retryScheduler, shellFactory, events } = createSessionHarness({ deferShellCallbacks: true })
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    const initial = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await waitFor(() => shellFactory.started.length === 1)
+    shellFactory.settleNext()
+    await initial
+
+    transport.dropUnexpectedly()
+    await retryScheduler.runNext()
+    await waitFor(() => shellFactory.started.length === 2)
+    shellFactory.failNext(new Error("PTY unavailable"))
+
+    await waitFor(() => events.some((event) => event.kind === "state" && event.state === "error"))
+    expect(events.at(-1)).toMatchObject({ kind: "state", state: "error" })
+  })
+
   it("releases every session belonging to a closed owner", async () => {
     const { sessions, channels } = createSessionHarness()
     const owned = "11111111-1111-4111-8111-111111111111"
@@ -149,6 +244,32 @@ describe("TerminalSessionManager", () => {
     shellFactory.settleNext()
     await Promise.all([backgroundOpen, activeOpen])
   })
+
+  it("serializes active-priority acquisition and shell creation before background restoration", async () => {
+    const { sessions, transport, shellFactory } = createSessionHarness({
+      deferShellCallbacks: true,
+      deferEachConnectionResolution: true
+    })
+    const background = "11111111-1111-4111-8111-111111111111"
+    const active = "22222222-2222-4222-8222-222222222222"
+    const backgroundOpen = sessions.open({ sessionId: background, hostId: "background-host", cols: 120, rows: 40, ownerWebContentsId: 7, restorePriority: "background" })
+    const activeOpen = sessions.open({ sessionId: active, hostId: "active-host", cols: 121, rows: 40, ownerWebContentsId: 7, restorePriority: "active" })
+
+    await waitFor(() => transport.connectionRequests.length === 1)
+    expect(transport.connectionRequests).toEqual(["active-host"])
+    transport.resolveNextConnection()
+    await waitFor(() => shellFactory.started.length === 1)
+    expect(shellFactory.started.map((entry) => entry.cols)).toEqual([121])
+    expect(transport.connectionRequests).toEqual(["active-host"])
+
+    shellFactory.settleNext()
+    await waitFor(() => transport.connectionRequests.length === 2)
+    expect(transport.connectionRequests).toEqual(["active-host", "background-host"])
+    transport.resolveNextConnection()
+    await waitFor(() => shellFactory.started.length === 2)
+    shellFactory.settleNext()
+    await Promise.all([backgroundOpen, activeOpen])
+  })
 })
 
 interface FakeChannel {
@@ -165,6 +286,7 @@ interface FakeChannel {
 interface HarnessOptions {
   deferShellCallbacks?: boolean
   deferConnectionResolution?: boolean
+  deferEachConnectionResolution?: boolean
 }
 
 function createSessionHarness(options: HarnessOptions = {}) {
@@ -172,14 +294,19 @@ function createSessionHarness(options: HarnessOptions = {}) {
   const channels = new Map<number, FakeChannel>()
   const shellFactory = createShellFactory(channels, options.deferShellCallbacks ?? false)
   const retryScheduler = createRetryScheduler()
-  const transport = createTransport(shellFactory, retryScheduler, options.deferConnectionResolution ?? false)
+  const transport = createTransport(
+    shellFactory,
+    retryScheduler,
+    options.deferConnectionResolution ?? false,
+    options.deferEachConnectionResolution ?? false
+  )
   const sessions = new TerminalSessionManager({ connections: transport.connections })
   sessions.onEvent(({ event }) => events.push(event))
   return { sessions, transport, retryScheduler, events, channels, shellFactory }
 }
 
 function createShellFactory(channels: Map<number, FakeChannel>, deferred: boolean) {
-  const pending: Array<() => void> = []
+  const pending: Array<(error?: Error) => void> = []
   const started: Array<{ cols: number }> = []
   let nextGeneration = 1
   return {
@@ -188,12 +315,13 @@ function createShellFactory(channels: Map<number, FakeChannel>, deferred: boolea
       const generation = nextGeneration++
       const channel = createFakeChannel()
       channels.set(generation, channel)
-      const start = () => callback(undefined, channel)
+      const start = (error?: Error) => callback(error, error ? undefined : channel)
       started.push({ cols: shellOptions.cols })
       if (deferred) pending.push(start)
       else queueMicrotask(start)
     },
-    settleNext: () => pending.shift()?.()
+    settleNext: () => pending.shift()?.(),
+    failNext: (error: Error) => pending.shift()?.(error)
   }
 }
 
@@ -236,13 +364,16 @@ function createRetryScheduler() {
 function createTransport(
   shellFactory: ReturnType<typeof createShellFactory>,
   retryScheduler: ReturnType<typeof createRetryScheduler>,
-  deferConnectionResolution: boolean
+  deferConnectionResolution: boolean,
+  deferEachConnectionResolution = false
 ) {
   const clients: Array<{ emitter: EventEmitter; end: ReturnType<typeof vi.fn> }> = []
   let releaseConnectionResolution: (() => void) | undefined
   let signalConnectionResolution: (() => void) | undefined
   const connectionResolution = new Promise<void>((resolve) => { releaseConnectionResolution = resolve })
   const connectionResolutionStarted = new Promise<void>((resolve) => { signalConnectionResolution = resolve })
+  const connectionRequests: string[] = []
+  const pendingConnectionResolutions: Array<() => void> = []
   const connections = new SshConnectionManager({
     createClient: () => {
       const emitter = new EventEmitter()
@@ -263,9 +394,13 @@ function createTransport(
     },
     scheduler: retryScheduler satisfies RetryScheduler,
     random: () => 0.5,
-    resolve: async () => {
+    resolve: async (request) => {
+      connectionRequests.push(request.hostId)
       signalConnectionResolution?.()
       if (deferConnectionResolution) await connectionResolution
+      if (deferEachConnectionResolution) {
+        await new Promise<void>((resolve) => pendingConnectionResolutions.push(resolve))
+      }
       return {
         host: "127.0.0.1",
         port: 22,
@@ -282,7 +417,9 @@ function createTransport(
     clients,
     connections,
     dropUnexpectedly: () => clients.at(-1)?.emitter.emit("close"),
+    connectionRequests,
     releaseConnectionResolution: () => releaseConnectionResolution?.(),
+    resolveNextConnection: () => pendingConnectionResolutions.shift()?.(),
     waitForConnectionResolution: () => connectionResolutionStarted
   }
 }
