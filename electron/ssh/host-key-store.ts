@@ -1,5 +1,5 @@
 import { JsonStore } from "../storage/json-store"
-import type { HostKeyStore } from "./host-keys"
+import { normalizeFingerprint, type HostKeyStore } from "./host-keys"
 
 interface HostKeyDocument {
   fingerprints: Record<string, string>
@@ -19,7 +19,23 @@ export class JsonHostKeyStore implements HostKeyStore {
 
   public async trust(host: string, port: number, fingerprint: string): Promise<void> {
     const document = await this.readDocument()
-    document.fingerprints[this.key(host, port)] = fingerprint
+    const key = this.key(host, port)
+    const stored = document.fingerprints[key]
+    if (stored !== undefined && normalizeFingerprint(stored) !== normalizeFingerprint(fingerprint)) {
+      throw new Error("Host Key changed; replacement confirmation is required")
+    }
+    document.fingerprints[key] = normalizeFingerprint(fingerprint)
+    await this.store.write(document)
+  }
+
+  public async replace(host: string, port: number, expectedFingerprint: string, replacementFingerprint: string): Promise<void> {
+    const document = await this.readDocument()
+    const key = this.key(host, port)
+    const stored = document.fingerprints[key]
+    if (stored === undefined || normalizeFingerprint(stored) !== normalizeFingerprint(expectedFingerprint)) {
+      throw new Error("Host Key changed while awaiting replacement confirmation")
+    }
+    document.fingerprints[key] = normalizeFingerprint(replacementFingerprint)
     await this.store.write(document)
   }
 
