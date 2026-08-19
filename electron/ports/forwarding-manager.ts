@@ -31,7 +31,11 @@ interface ForwardingRecord {
   lease?: ConnectionLease
   listener?: LocalListener
   listenerClose?: Promise<void>
-  activation?: Promise<void>
+  activationGeneration: number
+  activation?: {
+    generation: number
+    promise: Promise<void>
+  }
   stopPromise?: Promise<void>
 }
 
@@ -52,7 +56,7 @@ export class ForwardingManager {
       status: "starting"
     }
     const lease = this.connections.retain(connectionId, ownerWebContentsId, "forward")
-    const record: ForwardingRecord = { info, ownerWebContentsId, lease }
+    const record: ForwardingRecord = { info, ownerWebContentsId, lease, activationGeneration: 0 }
     this.records.set(info.id, record)
     try {
       await this.scheduleActivation(record)
@@ -100,6 +104,7 @@ export class ForwardingManager {
       await this.releaseLease(record)
       return
     }
+    this.invalidateActivation(record)
     record.info.status = "stopping"
     await this.closeCurrentListener(record)
     record.info.status = "stopped"
@@ -108,18 +113,24 @@ export class ForwardingManager {
   }
 
   private scheduleActivation(record: ForwardingRecord): Promise<void> {
-    const previous = record.activation ?? Promise.resolve()
-    const activation = previous.catch(() => undefined).then(() => this.activate(record))
+    const generation = record.activationGeneration
+    if (record.activation?.generation === generation) return record.activation.promise
+
+    const previous = record.activation?.promise ?? Promise.resolve()
+    const activation = {
+      generation,
+      promise: previous.catch(() => undefined).then(() => this.activate(record, generation))
+    }
     record.activation = activation
-    void activation.finally(() => {
+    void activation.promise.finally(() => {
       if (record.activation === activation) record.activation = undefined
     }).catch(() => undefined)
-    return activation
+    return activation.promise
   }
 
-  private async activate(record: ForwardingRecord): Promise<void> {
+  private async activate(record: ForwardingRecord, generation: number): Promise<void> {
     await record.listenerClose
-    if (!record.lease || record.info.status === "stopped" || record.info.status === "stopping" || record.info.status === "error") return
+    if (!this.isActivationCurrent(record, generation)) return
 
     let listener: LocalListener | undefined
     try {
@@ -127,7 +138,7 @@ export class ForwardingManager {
       record.listener = listener
       record.info.status = "starting"
       const localPort = await listen(listener, record.info)
-      if (record.listener !== listener || record.info.status !== "starting") {
+      if (!this.isActivationCurrent(record, generation, listener)) {
         await closeListener(listener)
         return
       }
@@ -135,8 +146,8 @@ export class ForwardingManager {
       record.info.status = "forwarding"
       delete record.info.error
     } catch (error) {
-      if (listener && record.listener !== listener) {
-        await closeListener(listener)
+      if (!this.isActivationCurrent(record, generation, listener)) {
+        if (listener) await closeListener(listener)
         return
       }
       if (listener) {
@@ -190,14 +201,41 @@ export class ForwardingManager {
           void this.scheduleActivation(record).catch(() => undefined)
         }
       }
+      return
+    }
+    if (event.kind === "failed") {
+      for (const record of affected) this.fail(record, event.reason)
     }
   }
 
   private suspend(record: ForwardingRecord): void {
     if (!record.lease || record.info.status === "stopped" || record.info.status === "stopping" || record.info.status === "error") return
+    this.invalidateActivation(record)
     record.info.status = "suspended"
     delete record.info.error
     void this.closeCurrentListener(record)
+  }
+
+  private fail(record: ForwardingRecord, reason: string): void {
+    if (!record.lease || record.info.status === "stopped" || record.info.status === "stopping" || record.info.status === "error") return
+    this.invalidateActivation(record)
+    record.info.status = "error"
+    record.info.error = reason
+    void this.closeCurrentListener(record)
+    void this.releaseLease(record).catch(() => undefined)
+  }
+
+  private invalidateActivation(record: ForwardingRecord): void {
+    record.activationGeneration += 1
+  }
+
+  private isActivationCurrent(record: ForwardingRecord, generation: number, listener?: LocalListener): boolean {
+    if (
+      record.activationGeneration !== generation ||
+      !record.lease ||
+      (record.info.status !== "starting" && record.info.status !== "suspended")
+    ) return false
+    return !listener || record.listener === listener
   }
 
   private closeCurrentListener(record: ForwardingRecord): Promise<void> {

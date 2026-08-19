@@ -65,6 +65,75 @@ describe("ForwardingManager", () => {
     expect(listeners.created).toHaveLength(2)
   })
 
+  it("deduplicates concurrent manual resumes for one suspended forward", async () => {
+    const connections = new FakeConnections()
+    const listeners = createListenerFactory()
+    const forwards = new ForwardingManager(connections, { createListener: listeners.create })
+    const forward = await forwards.start(connectionId, { ...loopbackSpec, localAddress: "0.0.0.0" }, ownerWebContentsId)
+    connections.emit({ kind: "lost", connectionId, ownerWebContentsId, reason: "network" })
+
+    const resumed = await Promise.all([forwards.resume(forward.id), forwards.resume(forward.id)])
+
+    expect(resumed).toEqual([
+      expect.objectContaining({ id: forward.id, status: "forwarding" }),
+      expect.objectContaining({ id: forward.id, status: "forwarding" })
+    ])
+    expect(listeners.created).toHaveLength(2)
+    expect(connections.activeLeaseCount()).toBe(1)
+  })
+
+  it("deduplicates repeated ready events for one suspended loopback forward", async () => {
+    const connections = new FakeConnections()
+    const listeners = createListenerFactory()
+    const forwards = new ForwardingManager(connections, { createListener: listeners.create })
+    const forward = await forwards.start(connectionId, loopbackSpec, ownerWebContentsId)
+    connections.emit({ kind: "lost", connectionId, ownerWebContentsId, reason: "network" })
+
+    connections.emit({ kind: "ready", connectionId, ownerWebContentsId, transportGeneration: 2 })
+    connections.emit({ kind: "ready", connectionId, ownerWebContentsId, transportGeneration: 2 })
+    await flush()
+
+    expect(forwards.get(forward.id)).toMatchObject({ status: "forwarding" })
+    expect(listeners.created).toHaveLength(2)
+    expect(connections.activeLeaseCount()).toBe(1)
+  })
+
+  it("ignores a stale listener activation after transport recovery is queued", async () => {
+    const connections = new FakeConnections()
+    const listeners = createListenerFactory({ deferListen: true })
+    const forwards = new ForwardingManager(connections, { createListener: listeners.create })
+    const starting = forwards.start(connectionId, loopbackSpec, ownerWebContentsId)
+
+    await waitFor(() => listeners.created.length === 1)
+    connections.emit({ kind: "lost", connectionId, ownerWebContentsId, reason: "network" })
+    connections.emit({ kind: "ready", connectionId, ownerWebContentsId, transportGeneration: 2 })
+    listeners.created[0].finishListen()
+
+    await waitFor(() => listeners.created.length === 2)
+    listeners.created[1].finishListen()
+    const forward = await starting
+    await waitFor(() => forwards.get(forward.id)?.status === "forwarding")
+
+    expect(listeners.created).toHaveLength(2)
+    expect(listeners.created[0].closed).toBe(true)
+    expect(connections.activeLeaseCount()).toBe(1)
+  })
+
+  it("closes a forward and clears its lease when the shared connection fails", async () => {
+    const connections = new FakeConnections()
+    const listeners = createListenerFactory()
+    const forwards = new ForwardingManager(connections, { createListener: listeners.create })
+    const forward = await forwards.start(connectionId, loopbackSpec, ownerWebContentsId)
+
+    connections.emit({ kind: "failed", connectionId, ownerWebContentsId, reason: "network" })
+    await flush()
+
+    expect(forwards.get(forward.id)).toMatchObject({ status: "error", error: "network" })
+    expect(listeners.created[0].closed).toBe(true)
+    expect(connections.activeLeaseCount()).toBe(0)
+    await expect(forwards.resume(forward.id)).rejects.toThrow("Port forwarding is not suspended")
+  })
+
   it("releases its forward lease after a local port conflict", async () => {
     const connections = new FakeConnections()
     const listeners = createListenerFactory({ listenError: Object.assign(new Error("in use"), { code: "EADDRINUSE" }) })
@@ -170,12 +239,13 @@ class FakeConnections implements ForwardingConnectionAccess {
 
 interface ListenerFactoryOptions {
   listenError?: NodeJS.ErrnoException
+  deferListen?: boolean
 }
 
 function createListenerFactory(options: ListenerFactoryOptions = {}) {
   const created: FakeListener[] = []
   const create: LocalListenerFactory = (_onConnection) => {
-    const listener = new FakeListener(43123 + created.length, options.listenError)
+    const listener = new FakeListener(43123 + created.length, options.listenError, options.deferListen)
     created.push(listener)
     return listener
   }
@@ -184,15 +254,24 @@ function createListenerFactory(options: ListenerFactoryOptions = {}) {
 
 class FakeListener implements LocalListener {
   private readonly emitter = new EventEmitter()
+  private listenCallback?: () => void
   public closed = false
 
-  public constructor(private readonly port: number, private readonly listenError?: NodeJS.ErrnoException) {}
+  public constructor(
+    private readonly port: number,
+    private readonly listenError?: NodeJS.ErrnoException,
+    private readonly deferListen = false
+  ) {}
 
   public once(event: "error", listener: (error: NodeJS.ErrnoException) => void): void {
     this.emitter.once(event, listener)
   }
 
   public listen(_port: number, _host: string, callback: () => void): void {
+    if (this.deferListen) {
+      this.listenCallback = callback
+      return
+    }
     queueMicrotask(() => {
       if (this.listenError) {
         this.emitter.emit("error", this.listenError)
@@ -200,6 +279,11 @@ class FakeListener implements LocalListener {
       }
       callback()
     })
+  }
+
+  public finishListen(): void {
+    this.listenCallback?.()
+    this.listenCallback = undefined
   }
 
   public close(callback: (error?: Error) => void): void {
