@@ -1,5 +1,5 @@
 export type PortSource = "ss" | "netstat" | "manual"
-export type PortStatus = "discovered" | "starting" | "forwarding" | "stopping" | "stopped" | "error"
+export type PortStatus = "discovered" | "starting" | "forwarding" | "suspended" | "stopping" | "stopped" | "error"
 
 export interface DiscoveredPort {
   id: string
@@ -24,7 +24,6 @@ export interface ForwardingSpec {
 export interface ForwardingInfo extends ForwardingSpec {
   id: string
   connectionId: string
-  sessionId?: string
   status: PortStatus
   error?: string
 }

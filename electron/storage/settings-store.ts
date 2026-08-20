@@ -8,7 +8,9 @@ export const defaultSettings: AppSettings = {
   terminalFontSize: 13,
   connectionTimeout: 15,
   autoReconnect: true,
-  portScanInterval: 15,
+  reconnectMode: "limited",
+  restorePreviousWorkspace: true,
+  confirmMultilinePaste: true,
   bindAddress: "127.0.0.1"
 }
 
@@ -30,16 +32,18 @@ export class SettingsStore {
   }
 }
 
-function normalizeSettings(settings: AppSettings): AppSettings {
+function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
   return {
     locale: settings.locale === "zh-CN" ? "zh-CN" : "en",
-    sidebarWidth: clamp(settings.sidebarWidth, 180, 360, 220),
+    sidebarWidth: clamp(settings.sidebarWidth ?? defaultSettings.sidebarWidth, 180, 360, 220),
     terminalFont: typeof settings.terminalFont === "string" && settings.terminalFont.length <= 80 ? settings.terminalFont : defaultSettings.terminalFont,
-    terminalFontSize: clamp(settings.terminalFontSize, 10, 24, 13),
-    connectionTimeout: clamp(settings.connectionTimeout, 5, 120, 15),
-    autoReconnect: Boolean(settings.autoReconnect),
-    portScanInterval: [0, 15, 30, 60].includes(settings.portScanInterval) ? settings.portScanInterval : 15,
-    bindAddress: ["127.0.0.1", "::1", "0.0.0.0"].includes(settings.bindAddress) ? settings.bindAddress : "127.0.0.1"
+    terminalFontSize: clamp(settings.terminalFontSize ?? defaultSettings.terminalFontSize, 10, 24, 13),
+    connectionTimeout: clamp(settings.connectionTimeout ?? defaultSettings.connectionTimeout, 5, 120, 15),
+    autoReconnect: settings.autoReconnect !== false,
+    reconnectMode: settings.reconnectMode === "continuous" ? "continuous" : "limited",
+    restorePreviousWorkspace: settings.restorePreviousWorkspace !== false,
+    confirmMultilinePaste: settings.confirmMultilinePaste !== false,
+    bindAddress: settings.bindAddress === "::1" || settings.bindAddress === "0.0.0.0" ? settings.bindAddress : "127.0.0.1"
   }
 }
 

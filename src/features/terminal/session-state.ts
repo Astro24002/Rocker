@@ -1,139 +1,85 @@
-export type TerminalTabState = "connecting" | "connected" | "disconnected" | "error" | "reconnecting"
-
-export interface SessionPane {
-  orientation: "horizontal"
-  parentId: string
-}
+import type { TerminalDimensions, TerminalFailureReason, TerminalSessionInfo, TerminalSessionState, TerminalStateEvent } from "../../../electron/ssh/types"
+import { removeSessionFromLayout, type TerminalLayout } from "./layout"
 
 export interface WorkspaceSession {
   id: string
-  sessionId?: string
-  connectionId?: string
   hostId: string
   label: string
-  state: TerminalTabState
-  output: string
-  error?: string
-  pane?: SessionPane
+  state: TerminalSessionState
+  channelGeneration: number
+  dimensions?: TerminalDimensions
+  reason?: TerminalFailureReason
+  attempt?: number
+  nextRetryAt?: string
 }
 
-export type TerminalTab = WorkspaceSession
-
-export interface TerminalSessionState {
-  tabs: TerminalTab[]
-  activeId?: string
+export interface TerminalWorkspaceState {
+  sessions: WorkspaceSession[]
+  activeSessionId?: string
+  layout?: TerminalLayout
 }
 
-export function createSessionState(): TerminalSessionState {
-  return { tabs: [] }
+export function createTerminalWorkspaceState(): TerminalWorkspaceState {
+  return { sessions: [] }
 }
 
-export function openTab(
-  state: TerminalSessionState,
-  input: Pick<TerminalTab, "id" | "hostId" | "label">
-): TerminalSessionState {
-  return {
-    tabs: [...state.tabs, { ...input, state: "connecting", output: "" }],
-    activeId: input.id
+export function openSession(
+  state: TerminalWorkspaceState,
+  input: Pick<WorkspaceSession, "id" | "hostId" | "label" | "dimensions">
+): TerminalWorkspaceState {
+  const session: WorkspaceSession = {
+    ...input,
+    state: "idle",
+    channelGeneration: 0
   }
-}
-
-export function attachSession(state: TerminalSessionState, localId: string, sessionId: string, connectionId?: string): TerminalSessionState {
-  return {
-    ...state,
-    tabs: state.tabs.map((tab) => tab.id === localId ? { ...tab, sessionId, connectionId, state: "connected" } : tab)
-  }
-}
-
-export function duplicateSession(
-  state: TerminalSessionState,
-  sourceId: string,
-  input: Pick<WorkspaceSession, "id" | "label"> & Partial<Pick<WorkspaceSession, "hostId">>
-): TerminalSessionState {
-  const source = state.tabs.find((tab) => tab.id === sourceId)
-  if (!source) return state
-  const clone: WorkspaceSession = {
-    id: input.id,
-    hostId: input.hostId ?? source.hostId,
-    label: input.label,
-    state: "connecting",
-    output: ""
-  }
-  return { ...state, tabs: [...state.tabs, clone], activeId: clone.id }
-}
-
-export function renameSession(state: TerminalSessionState, localId: string, label: string): TerminalSessionState {
-  const nextLabel = label.trim()
-  return nextLabel ? { ...state, tabs: state.tabs.map((tab) => tab.id === localId ? { ...tab, label: nextLabel } : tab) } : state
-}
-
-export function splitSession(
-  state: TerminalSessionState,
-  sourceId: string,
-  input: Pick<WorkspaceSession, "id" | "label"> & Partial<Pick<WorkspaceSession, "hostId">>
-): TerminalSessionState {
-  const source = state.tabs.find((tab) => tab.id === sourceId)
-  if (!source) return state
-  const clone: WorkspaceSession = {
-    id: input.id,
-    hostId: input.hostId ?? source.hostId,
-    label: input.label,
-    state: "connecting",
-    output: "",
-    pane: { orientation: "horizontal", parentId: sourceId }
-  }
-  return { ...state, tabs: [...state.tabs, clone], activeId: clone.id }
-}
-
-export const closeSession = closeTab
-
-export function closeTab(state: TerminalSessionState, localId: string): TerminalSessionState {
-  const index = state.tabs.findIndex((tab) => tab.id === localId)
-  const tabs = state.tabs.filter((tab) => tab.id !== localId)
-  const activeId = state.activeId === localId
-    ? tabs[Math.max(0, Math.min(index - 1, tabs.length - 1))]?.id
-    : state.activeId
-  return { tabs, activeId }
-}
-
-export function activateTab(state: TerminalSessionState, localId: string): TerminalSessionState {
-  return state.tabs.some((tab) => tab.id === localId) ? { ...state, activeId: localId } : state
-}
-
-export function appendOutput(state: TerminalSessionState, sessionId: string, output: string): TerminalSessionState {
   return {
     ...state,
-    tabs: state.tabs.map((tab) => tab.sessionId === sessionId ? { ...tab, output: `${tab.output}${output}` } : tab)
+    sessions: [...state.sessions, session],
+    activeSessionId: session.id
   }
 }
 
-export function setTabState(
-  state: TerminalSessionState,
-  sessionId: string,
-  tabState: TerminalTabState,
-  error?: string
-): TerminalSessionState {
+export function closeSession(state: TerminalWorkspaceState, sessionId: string): TerminalWorkspaceState {
+  const index = state.sessions.findIndex((session) => session.id === sessionId)
+  if (index === -1) return state
+  const sessions = state.sessions.filter((session) => session.id !== sessionId)
+  const activeSessionId = state.activeSessionId === sessionId
+    ? sessions[Math.max(0, Math.min(index - 1, sessions.length - 1))]?.id
+    : state.activeSessionId
   return {
-    ...state,
-    tabs: state.tabs.map((tab) => tab.sessionId === sessionId ? { ...tab, state: tabState, error } : tab)
+    sessions,
+    activeSessionId,
+    layout: state.layout ? removeSessionFromLayout(state.layout, sessionId) : undefined
   }
 }
 
-export function setLocalTabState(
-  state: TerminalSessionState,
-  localId: string,
-  tabState: TerminalTabState,
-  error?: string
-): TerminalSessionState {
+export function activateSession(state: TerminalWorkspaceState, sessionId: string): TerminalWorkspaceState {
+  return state.sessions.some((session) => session.id === sessionId)
+    ? { ...state, activeSessionId: sessionId }
+    : state
+}
+
+export function applyTerminalState(state: TerminalWorkspaceState, event: TerminalStateEvent): TerminalWorkspaceState {
   return {
     ...state,
-    tabs: state.tabs.map((tab) => tab.id === localId ? { ...tab, state: tabState, error } : tab)
+    sessions: state.sessions.map((session) => session.id === event.sessionId
+      ? {
+          ...session,
+          channelGeneration: event.channelGeneration,
+          state: event.state,
+          reason: event.reason,
+          attempt: event.attempt,
+          nextRetryAt: event.nextRetryAt
+        }
+      : session)
   }
 }
 
-export function clearTabOutput(state: TerminalSessionState, localId: string): TerminalSessionState {
+export function attachChannel(state: TerminalWorkspaceState, info: TerminalSessionInfo): TerminalWorkspaceState {
   return {
     ...state,
-    tabs: state.tabs.map((tab) => tab.id === localId ? { ...tab, output: "" } : tab)
+    sessions: state.sessions.map((session) => session.id === info.sessionId
+      ? { ...session, channelGeneration: info.channelGeneration, state: info.state }
+      : session)
   }
 }

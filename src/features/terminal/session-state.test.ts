@@ -1,51 +1,71 @@
 import { describe, expect, it } from "vitest"
-import { appendOutput, attachSession, closeTab, createSessionState, duplicateSession, openTab, renameSession, setTabState, splitSession } from "./session-state"
+import { activateSession, applyTerminalState, attachChannel, closeSession, createTerminalWorkspaceState, openSession } from "./session-state"
 
-describe("terminal tab state", () => {
-  it("creates independent tabs and activates the newest one", () => {
-    let state = createSessionState()
-    state = openTab(state, { id: "local-a", hostId: "a", label: "G11" })
-    state = openTab(state, { id: "local-b", hostId: "b", label: "Database" })
+describe("terminal workspace state", () => {
+  it("stores session metadata without terminal output", () => {
+    const state = openSession(createTerminalWorkspaceState(), {
+      id: "11111111-1111-4111-8111-111111111111",
+      hostId: "host-a",
+      label: "G11"
+    })
 
-    expect(state.tabs.map((tab) => tab.id)).toEqual(["local-a", "local-b"])
-    expect(state.activeId).toBe("local-b")
+    expect(state.sessions[0]).toMatchObject({ state: "idle", channelGeneration: 0 })
+    expect(state.sessions[0]).not.toHaveProperty("output")
   })
 
-  it("falls back to a neighboring tab after close", () => {
-    let state = createSessionState()
-    state = openTab(state, { id: "one", hostId: "a", label: "A" })
-    state = openTab(state, { id: "two", hostId: "b", label: "B" })
-    state = closeTab(state, "two")
+  it("selects a neighboring session after the active session closes", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "one", hostId: "host-a", label: "A" })
+    state = openSession(state, { id: "two", hostId: "host-b", label: "B" })
+    state = closeSession(state, "two")
 
-    expect(state.activeId).toBe("one")
+    expect(state.activeSessionId).toBe("one")
   })
 
-  it("retains terminal output after disconnect", () => {
-    let state = openTab(createSessionState(), { id: "one", hostId: "a", label: "A" })
-    state = attachSession(state, "one", "6fa459ea-ee8a-3ca4-894e-db77e160355e")
-    state = appendOutput(state, "6fa459ea-ee8a-3ca4-894e-db77e160355e", "hello\n")
-    state = setTabState(state, "6fa459ea-ee8a-3ca4-894e-db77e160355e", "disconnected")
+  it("copies only channel metadata when a channel attaches", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "one", hostId: "host-a", label: "A" })
+    state = attachChannel(state, {
+      sessionId: "one",
+      hostId: "host-a",
+      channelGeneration: 2,
+      state: "connected"
+    })
 
-    expect(state.tabs[0]).toMatchObject({ output: "hello\n", state: "disconnected" })
+    expect(state.sessions[0]).toEqual({
+      id: "one",
+      hostId: "host-a",
+      label: "A",
+      state: "connected",
+      channelGeneration: 2
+    })
   })
 
-  it("duplicates and renames a session without copying its live channel", () => {
-    let state = openTab(createSessionState(), { id: "one", hostId: "a", label: "A" })
-    state = attachSession(state, "one", "session-one", "connection-one")
-    state = duplicateSession(state, "one", { id: "two", label: "A copy" })
-    state = renameSession(state, "two", "Production shell")
+  it("applies a terminal state event to its matching session", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "one", hostId: "host-a", label: "A" })
+    state = applyTerminalState(state, {
+      kind: "state",
+      sessionId: "one",
+      channelGeneration: 1,
+      state: "reconnecting",
+      reason: "network",
+      attempt: 2,
+      nextRetryAt: "2026-08-19T12:00:00.000Z"
+    })
 
-    expect(state.tabs[1]).toMatchObject({ id: "two", label: "Production shell", hostId: "a", state: "connecting", output: "" })
-    expect(state.tabs[1].sessionId).toBeUndefined()
-    expect(state.tabs[1].connectionId).toBeUndefined()
+    expect(state.sessions[0]).toMatchObject({
+      state: "reconnecting",
+      channelGeneration: 1,
+      reason: "network",
+      attempt: 2,
+      nextRetryAt: "2026-08-19T12:00:00.000Z"
+    })
   })
 
-  it("adds a horizontal split session and activates it", () => {
-    let state = openTab(createSessionState(), { id: "one", hostId: "a", label: "A" })
-    state = splitSession(state, "one", { id: "two", label: "A split" })
+  it("activates an existing session without changing session metadata", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "one", hostId: "host-a", label: "A" })
+    state = openSession(state, { id: "two", hostId: "host-b", label: "B" })
+    state = activateSession(state, "one")
 
-    expect(state.activeId).toBe("two")
-    expect(state.tabs.map((tab) => tab.id)).toEqual(["one", "two"])
-    expect(state.tabs[1].pane).toEqual({ orientation: "horizontal", parentId: "one" })
+    expect(state.activeSessionId).toBe("one")
+    expect(state.sessions).toHaveLength(2)
   })
 })

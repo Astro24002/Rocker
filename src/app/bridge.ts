@@ -1,5 +1,5 @@
 import type { RockerBridge } from "../../electron/ipc/bridge-contract"
-import type { HostProfile } from "./types"
+import type { AppSettings, ForwardingInfo, HostProfile, StoredWorkspaceWindow } from "./types"
 
 const demoHosts: HostProfile[] = [
   { id: "demo-g11", name: "G11", host: "47.97.162.53", port: 22, username: "root", authMethod: "agent", group: "Personal", favorite: true, notes: "" },
@@ -7,8 +7,32 @@ const demoHosts: HostProfile[] = [
   { id: "demo-db", name: "Database", host: "db.internal", port: 2222, username: "ops", authMethod: "password", group: "Production", favorite: false, notes: "" }
 ]
 
-const mockListeners = new Set<(event: Parameters<RockerBridge["events"]["onSessionEvent"]>[0] extends (event: infer Event) => void ? Event : never) => void>()
+type PreviewSession = {
+  hostId: string
+  connectionId: string
+  channelGeneration: number
+  nextSequence: number
+}
+
+type TerminalEvent = Parameters<RockerBridge["events"]["onSessionEvent"]>[0] extends (event: infer Event) => void ? Event : never
+
+const mockListeners = new Set<(event: TerminalEvent) => void>()
+const mockSessions = new Map<string, PreviewSession>()
+const mockForwards = new Map<string, ForwardingInfo>()
 let mockHosts = [...demoHosts]
+let mockWorkspace: StoredWorkspaceWindow | undefined
+let mockSettings: AppSettings = {
+  locale: "en",
+  sidebarWidth: 220,
+  terminalFont: "JetBrains Mono",
+  terminalFontSize: 13,
+  connectionTimeout: 15,
+  autoReconnect: true,
+  reconnectMode: "limited",
+  restorePreviousWorkspace: true,
+  confirmMultilinePaste: true,
+  bindAddress: "127.0.0.1"
+}
 
 export function getRockerBridge(): RockerBridge {
   if (window.rocker) return window.rocker
@@ -29,25 +53,87 @@ function createBrowserPreviewBridge(): RockerBridge {
       importSshConfig: async () => []
     },
     sessions: {
-      open: async ({ hostId }) => {
-        const sessionId = crypto.randomUUID()
+      open: async ({ sessionId, hostId }) => {
         const connectionId = `preview-${hostId}`
-        window.setTimeout(() => emitMock({ kind: "state", sessionId, connectionId, state: "connected" }), 100)
-        window.setTimeout(() => emitMock({ kind: "data", sessionId, connectionId, data: `Rocker preview session for ${hostId}\\r\\n$ ` }), 160)
-        return { sessionId, connectionId, hostId, state: "connected" }
+        const channelGeneration = 1
+        mockSessions.set(sessionId, { hostId, connectionId, channelGeneration, nextSequence: 1 })
+        window.setTimeout(() => emitMock({ kind: "state", sessionId, connectionId, channelGeneration, state: "connected" }), 100)
+        window.setTimeout(() => emitPreviewOutput(sessionId, channelGeneration, `Rocker preview session for ${hostId}\r\n$ `), 160)
+        return { sessionId, hostId, channelGeneration, state: "connected" }
       },
-      write: async (sessionId, data) => emitMock({ kind: "data", sessionId, connectionId: "preview", data: `preview:${data}` }),
+      write: async (sessionId, channelGeneration, data) => emitPreviewOutput(sessionId, channelGeneration, `preview:${data}`),
       resize: async () => undefined,
-      close: async (sessionId) => emitMock({ kind: "state", sessionId, connectionId: "preview", state: "closed" }),
-      reconnect: async (sessionId) => ({ sessionId, connectionId: "preview", hostId: sessionId, state: "connected" }),
+      ackOutput: async () => undefined,
+      reconnect: async (sessionId) => {
+        const session = mockSessions.get(sessionId)
+        if (!session) return
+        session.channelGeneration += 1
+        session.nextSequence = 1
+        emitMock({
+          kind: "state",
+          sessionId,
+          connectionId: session.connectionId,
+          channelGeneration: session.channelGeneration,
+          state: "connected",
+          notice: "reconnected"
+        })
+      },
+      cancelReconnect: async (sessionId) => {
+        const session = mockSessions.get(sessionId)
+        if (!session) return
+        emitMock({
+          kind: "state",
+          sessionId,
+          connectionId: session.connectionId,
+          channelGeneration: session.channelGeneration,
+          state: "disconnected",
+          reason: "cancelled"
+        })
+      },
+      close: async (sessionId) => {
+        const session = mockSessions.get(sessionId)
+        if (!session) return
+        mockSessions.delete(sessionId)
+        emitMock({
+          kind: "state",
+          sessionId,
+          connectionId: session.connectionId,
+          channelGeneration: session.channelGeneration,
+          state: "closing"
+        })
+      },
+      beginRestore: async () => undefined,
+      completeRestore: async () => undefined,
       duplicateInNewWindow: async () => undefined
     },
     ports: {
       scan: async () => [],
-      start: async (connectionId, spec) => ({ ...spec, id: crypto.randomUUID(), connectionId, status: "forwarding" }),
-      stop: async () => undefined,
-      list: async () => [],
+      start: async (connectionId, spec) => {
+        const forwarding: ForwardingInfo = { ...spec, id: crypto.randomUUID(), connectionId, status: "forwarding" }
+        mockForwards.set(forwarding.id, forwarding)
+        return forwarding
+      },
+      resume: async (forwardingId) => {
+        const forwarding = mockForwards.get(forwardingId)
+        if (!forwarding) throw new Error("Port forwarding was not found")
+        const resumed: ForwardingInfo = { ...forwarding, status: "forwarding" }
+        mockForwards.set(forwardingId, resumed)
+        return resumed
+      },
+      stop: async (forwardingId) => { mockForwards.delete(forwardingId) },
+      list: async () => [...mockForwards.values()],
       openAddress: async () => undefined
+    },
+    workspace: {
+      load: async () => mockWorkspace,
+      save: async (snapshot) => {
+        mockWorkspace = {
+          workspaceId: mockWorkspace?.workspaceId ?? crypto.randomUUID(),
+          bounds: mockWorkspace?.bounds,
+          maximized: mockWorkspace?.maximized ?? false,
+          ...snapshot
+        }
+      }
     },
     monitor: {
       sample: async (sessionId) => ({ sessionId, latencyMs: 18, cpuPercent: 12, memoryPercent: 41, diskPercent: 58, loadAverage: 0.42, receiveBytesPerSecond: 0, transmitBytesPerSecond: 0, sampledAt: new Date().toISOString() })
@@ -59,8 +145,11 @@ function createBrowserPreviewBridge(): RockerBridge {
       clear: async () => undefined
     },
     settings: {
-      get: async () => ({ locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, connectionTimeout: 15, autoReconnect: true, portScanInterval: 15, bindAddress: "127.0.0.1" }),
-      update: async (update) => ({ locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, connectionTimeout: 15, autoReconnect: true, portScanInterval: 15, bindAddress: "127.0.0.1", ...update })
+      get: async () => ({ ...mockSettings }),
+      update: async (update) => {
+        mockSettings = { ...mockSettings, ...update }
+        return { ...mockSettings }
+      }
     },
     events: {
       onSessionEvent: (listener) => {
@@ -72,6 +161,20 @@ function createBrowserPreviewBridge(): RockerBridge {
   }
 }
 
-function emitMock(event: Parameters<RockerBridge["events"]["onSessionEvent"]>[0] extends (event: infer Event) => void ? Event : never): void {
+function emitMock(event: TerminalEvent): void {
   for (const listener of mockListeners) listener(event)
+}
+
+function emitPreviewOutput(sessionId: string, channelGeneration: number, data: string): void {
+  const session = mockSessions.get(sessionId)
+  if (!session || session.channelGeneration !== channelGeneration) return
+  emitMock({
+    kind: "output",
+    packet: {
+      sessionId,
+      channelGeneration,
+      sequence: session.nextSequence++,
+      bytes: new TextEncoder().encode(data)
+    }
+  })
 }

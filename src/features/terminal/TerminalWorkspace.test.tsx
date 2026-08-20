@@ -1,10 +1,15 @@
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { I18nProvider } from "../../i18n"
-import { createMonitorState, applyMetrics } from "../monitoring/monitor-state"
+import { applyMetrics, createMonitorState } from "../monitoring/monitor-state"
+import type { TerminalWorkspaceState } from "./session-state"
 import { TerminalWorkspace } from "./TerminalWorkspace"
 
-vi.mock("./TerminalView", () => ({ TerminalView: () => <div data-testid="terminal-surface" /> }))
+vi.mock("./TerminalView", () => ({
+  TerminalView: ({ session, visible }: { session: { id: string }; visible: boolean }) => (
+    <div data-testid={`terminal-surface-${session.id}`} data-visible={String(visible)} />
+  )
+}))
 
 describe("TerminalWorkspace layout", () => {
   it("places host metrics above terminal content without a session toolbar", () => {
@@ -20,13 +25,17 @@ describe("TerminalWorkspace layout", () => {
       sampledAt: "2026-08-18T12:00:00.000Z"
     })
     render(<I18nProvider><TerminalWorkspace
-      tabs={[{ id: "local-1", hostId: "host-1", sessionId: "ssh-1", connectionId: "connection-1", label: "G11", state: "connected", output: "" }]}
-      activeId="local-1"
+      workspace={workspace}
       monitor={monitor}
       monitorHostName="G11"
       onMonitorToggle={vi.fn()}
+      fontFamily="JetBrains Mono"
+      fontSize={13}
+      confirmMultilinePaste
       onInput={vi.fn()}
       onResize={vi.fn()}
+      onAck={vi.fn()}
+      onController={vi.fn()}
     /></I18nProvider>)
 
     expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument()
@@ -39,6 +48,36 @@ describe("TerminalWorkspace layout", () => {
     expect(screen.getByText("Load")).toBeInTheDocument()
     expect(screen.getByText("1.25")).toBeInTheDocument()
     expect(screen.getByTestId("terminal-monitor")).toHaveClass("terminal-monitor-hud")
-    expect(screen.getByTestId("terminal-monitor").compareDocumentPosition(screen.getByTestId("terminal-surface")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId("terminal-monitor").compareDocumentPosition(screen.getByTestId("terminal-surface-a")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it("renders every session surface but hides non-visible layout leaves", () => {
+    render(<I18nProvider><TerminalWorkspace
+      workspace={workspace}
+      monitor={createMonitorState()}
+      onMonitorToggle={vi.fn()}
+      fontFamily="JetBrains Mono"
+      fontSize={13}
+      confirmMultilinePaste
+      onInput={vi.fn()}
+      onResize={vi.fn()}
+      onAck={vi.fn()}
+      onController={vi.fn()}
+    /></I18nProvider>)
+
+    expect(screen.getAllByTestId(/terminal-surface-/)).toHaveLength(3)
+    expect(screen.getByTestId("terminal-surface-a")).toHaveAttribute("data-visible", "true")
+    expect(screen.getByTestId("terminal-surface-b")).toHaveAttribute("data-visible", "false")
+    expect(screen.getByTestId("terminal-surface-c")).toHaveAttribute("data-visible", "false")
   })
 })
+
+const workspace: TerminalWorkspaceState = {
+  activeSessionId: "a",
+  layout: { kind: "leaf", sessionId: "a" },
+  sessions: [
+    { id: "a", hostId: "host-a", label: "G11", state: "connected", channelGeneration: 1 },
+    { id: "b", hostId: "host-b", label: "Build", state: "disconnected", channelGeneration: 2 },
+    { id: "c", hostId: "host-c", label: "Logs", state: "idle", channelGeneration: 0 }
+  ]
+}

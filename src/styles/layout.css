@@ -140,6 +140,11 @@
   min-height: 0;
 }
 
+.terminal-workspace-host {
+  width: 100%;
+  height: 100%;
+}
+
 .terminal-workspace {
   position: relative;
   overflow: hidden;

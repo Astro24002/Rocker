@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks"
-import type { SshManager } from "../ssh/ssh-manager"
+import type { SessionCommandExecutor } from "../ssh/types"
 
 export interface NetworkTotals {
   receivedBytes: number
@@ -27,7 +27,7 @@ interface PreviousSample {
 export class LinuxMetricsSampler {
   private readonly previous = new Map<string, PreviousSample>()
 
-  public constructor(private readonly sessions: Pick<SshManager, "exec">) {}
+  public constructor(private readonly sessions: SessionCommandExecutor) {}
 
   public async sample(sessionId: string): Promise<HostMetrics> {
     const startedAt = performance.now()
