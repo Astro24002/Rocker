@@ -147,7 +147,7 @@ describe("TerminalSessionManager", () => {
     expect(events.filter((event) => event.kind === "state" && event.state === "connected")).toHaveLength(2)
   })
 
-  it("rejects a shell callback from the transport attempt lost while the callback was pending", async () => {
+  it("waits for recovery when the initial shell callback loses its transport", async () => {
     const { sessions, transport, shellFactory, channels, retryScheduler, events } = createSessionHarness({ deferShellCallbacks: true })
     const sessionId = "11111111-1111-4111-8111-111111111111"
     const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
@@ -155,11 +155,13 @@ describe("TerminalSessionManager", () => {
 
     transport.dropUnexpectedly()
     shellFactory.settleNext()
-    await expect(opening).rejects.toThrow("Terminal transport attempt changed")
     await retryScheduler.runNext()
+    await waitFor(() => shellFactory.started.length === 2)
+    shellFactory.settleNext()
 
     expect(channels.get(1)!.end).toHaveBeenCalledOnce()
-    expect(events.some((event) => event.kind === "state" && event.state === "connected")).toBe(false)
+    await expect(opening).resolves.toMatchObject({ sessionId, channelGeneration: 1, state: "connected" })
+    expect(events.at(-1)).toMatchObject({ kind: "state", state: "connected", channelGeneration: 1 })
   })
 
   it("rejects input, resize, and acknowledgement from a prior channel generation", async () => {
@@ -176,13 +178,18 @@ describe("TerminalSessionManager", () => {
     expect(channels.get(1)!.pause).not.toHaveBeenCalled()
   })
 
-  it("does not retry after a normal shell-channel close", async () => {
-    const { sessions, channels, events, retryScheduler } = createSessionHarness()
+  it("releases its terminal lease after a normal shell-channel close", async () => {
+    const { sessions, channels, events, retryScheduler, transport } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
     await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
     channels.get(1)!.emitClose()
 
     expect(events.at(-1)).toMatchObject({ kind: "state", state: "disconnected", reason: "channel-ended" })
+    expect(retryScheduler.pendingTimers()).toHaveLength(0)
+    await waitFor(() => transport.clients[0]?.end.mock.calls.length === 1)
+
+    transport.dropUnexpectedly()
+
     expect(retryScheduler.pendingTimers()).toHaveLength(0)
   })
 

@@ -52,11 +52,17 @@ interface SessionRecord {
   channel?: TerminalChannel
   output?: TerminalOutputPump
   pendingStart?: PendingStart
+  recoveryWaiters: Set<RecoveryWaiter>
 }
 
 interface PendingStart {
   attempt: number
   promise: Promise<TerminalSessionInfo>
+}
+
+interface RecoveryWaiter {
+  resolve(info: TerminalSessionInfo): void
+  reject(error: Error): void
 }
 
 interface RestoreAdmission {
@@ -117,7 +123,8 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
       state: isWorkspaceRestore ? "restoring" : "connecting",
       channelGeneration: 0,
       transportAttempt: 1,
-      recoveryDesired: true
+      recoveryDesired: true,
+      recoveryWaiters: new Set()
     }
     this.sessions.set(request.sessionId, record)
     this.emitState(record, record.state)
@@ -125,6 +132,9 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     try {
       return await this.queueStart(record, isWorkspaceRestore ? "restored-new-shell" : undefined, attempt)
     } catch (error) {
+      if (error instanceof TerminalStartInvalidatedError && this.isCurrent(record) && record.recoveryDesired) {
+        return this.waitForRecovery(record)
+      }
       await this.handleStartFailure(record, attempt, error)
       throw error
     }
@@ -194,6 +204,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     }
     record.state = "disconnected"
     this.emitState(record, "disconnected", "cancelled")
+    this.rejectRecoveryWaiters(record, new Error("Terminal reconnect was cancelled"))
     this.releaseRestoreAdmission(record)
   }
 
@@ -207,6 +218,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     record.output = undefined
     record.channel?.end()
     record.channel = undefined
+    this.rejectRecoveryWaiters(record, new Error("Terminal session was closed"))
     this.releaseRestoreAdmission(record)
     await this.removeRecord(sessionId, false)
   }
@@ -321,6 +333,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     channel.on("close", () => this.handleChannelClose(record, generation, channel))
     record.state = "connected"
     this.emitState(record, "connected", undefined, notice)
+    this.resolveRecoveryWaiters(record)
     return this.info(record)
   }
 
@@ -330,8 +343,12 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     record.output?.close()
     record.output = undefined
     record.channel = undefined
+    const lease = record.lease
+    record.lease = undefined
+    record.connectionId = undefined
     record.state = "disconnected"
     this.emitState(record, "disconnected", "channel-ended")
+    if (lease) void this.options.connections.release(lease.id).catch(() => undefined)
   }
 
   private handleConnectionEvent(event: ConnectionEvent): void {
@@ -379,6 +396,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
         record.channel = undefined
         record.state = "error"
         this.emitState(record, "error", event.reason)
+        this.rejectRecoveryWaiters(record, new Error(`SSH connection failed: ${event.reason}`))
         this.releaseRestoreAdmission(record)
       }
     }
@@ -399,6 +417,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     record.lease = undefined
     record.connectionId = undefined
     this.emitState(record, "error", sessionFailureReason(error))
+    this.rejectRecoveryWaiters(record, error instanceof Error ? error : new Error("Terminal session failed"))
     this.releaseRestoreAdmission(record)
     if (lease) {
       try {
@@ -457,6 +476,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     const record = this.sessions.get(sessionId)
     if (!record) return
     if (emitClosing) this.emitState(record, "closing")
+    this.rejectRecoveryWaiters(record, new Error("Terminal session was closed"))
     this.sessions.delete(sessionId)
     if (record.lease) {
       const leaseId = record.lease.id
@@ -491,6 +511,24 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
 
   private info(record: SessionRecord): TerminalSessionInfo {
     return { sessionId: record.request.sessionId, hostId: record.request.hostId, channelGeneration: record.channelGeneration, state: record.state }
+  }
+
+  private waitForRecovery(record: SessionRecord): Promise<TerminalSessionInfo> {
+    if (record.state === "connected" && record.channel) return Promise.resolve(this.info(record))
+    return new Promise<TerminalSessionInfo>((resolve, reject) => {
+      record.recoveryWaiters.add({ resolve, reject })
+    })
+  }
+
+  private resolveRecoveryWaiters(record: SessionRecord): void {
+    const info = this.info(record)
+    for (const waiter of record.recoveryWaiters) waiter.resolve(info)
+    record.recoveryWaiters.clear()
+  }
+
+  private rejectRecoveryWaiters(record: SessionRecord, error: Error): void {
+    for (const waiter of record.recoveryWaiters) waiter.reject(error)
+    record.recoveryWaiters.clear()
   }
 
   private emitState(

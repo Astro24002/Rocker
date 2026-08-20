@@ -70,6 +70,27 @@ describe("registerIpcHandlers", () => {
     await expect(invokeFrom(22, ipcChannels.portsScan, connectionId)).rejects.toThrow("SSH connection is owned by another window")
     expect(harness.ports.scan).not.toHaveBeenCalled()
   })
+
+  it("applies updated reconnect settings to the connection manager", async () => {
+    const harness = createHarness()
+    const nextSettings = {
+      locale: "en" as const,
+      sidebarWidth: 220,
+      terminalFont: "JetBrains Mono",
+      terminalFontSize: 13,
+      connectionTimeout: 15,
+      autoReconnect: false,
+      reconnectMode: "limited" as const,
+      restorePreviousWorkspace: true,
+      confirmMultilinePaste: true,
+      bindAddress: "127.0.0.1" as const
+    }
+    harness.settings.update.mockResolvedValue(nextSettings)
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.settingsUpdate, { autoReconnect: false })).resolves.toEqual(nextSettings)
+    expect(harness.connections.updateRetryPolicy).toHaveBeenCalledWith(nextSettings)
+  })
 })
 
 function invokeFrom(ownerWebContentsId: number, channel: string, ...args: unknown[]): Promise<unknown> {
@@ -102,8 +123,10 @@ function createHarness() {
   }
   const connections = {
     ownerForConnection: vi.fn(),
-    releaseOwner: vi.fn()
+    releaseOwner: vi.fn(),
+    updateRetryPolicy: vi.fn()
   }
+  const settings = { get: vi.fn(), update: vi.fn() }
   const dependencies = {
     hosts: { list: vi.fn(), save: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn() },
     credentials: { get: vi.fn(), set: vi.fn(), clear: vi.fn() },
@@ -113,7 +136,7 @@ function createHarness() {
     forwarding: { start: vi.fn(), stop: vi.fn(), list: vi.fn(), get: vi.fn(), resume: vi.fn(), ownerForForwarding: vi.fn(), releaseOwner: vi.fn() },
     monitoring: { sample: vi.fn(), clear: vi.fn() },
     history: { add: vi.fn(), list: vi.fn(), clear: vi.fn() },
-    settings: { get: vi.fn(), update: vi.fn() },
+    settings,
     snapshots: { load: vi.fn(), saveWindow: vi.fn(), removeWindow: vi.fn(), flush: vi.fn() },
     windows: {
       windowForWebContents: vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined),
@@ -129,6 +152,7 @@ function createHarness() {
     other,
     sessions,
     connections,
+    settings,
     ports: dependencies.ports,
     emitSession(event: unknown): void {
       if (!sessionListener) throw new Error("Session listener was not registered")

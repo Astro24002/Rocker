@@ -96,6 +96,18 @@ describe("SshConnectionManager", () => {
     expect(scheduler.pendingTimers()).toHaveLength(0)
   })
 
+  it("attaches a new terminal lease to the matching retrying connection", async () => {
+    const { clients, manager, request, scheduler } = createConnectionHarness({})
+    const first = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    clients[0].emitter.emit("close")
+
+    const second = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+
+    expect(second.connectionId).toBe(first.connectionId)
+    expect(clients).toHaveLength(2)
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+  })
+
   it("does not create a transport after the final lease is released during retry resolution", async () => {
     const { clients, manager, request, releaseRetryResolution, scheduler, waitForRetryResolution } = createConnectionHarness({
       deferRetryResolution: true
@@ -137,6 +149,17 @@ describe("SshConnectionManager", () => {
 
     expect(scheduler.pendingTimers()).toHaveLength(0)
     expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "network" })
+  })
+
+  it("applies a runtime reconnect-policy change to an existing retry loop", async () => {
+    const { clients, events, manager, request, scheduler } = createConnectionHarness({})
+    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    clients[0].emitter.emit("close")
+
+    manager.updateRetryPolicy({ autoReconnect: false, reconnectMode: "limited" })
+
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "cancelled" })
   })
 
   it("ignores stale transport callbacks after a retry succeeds", async () => {
@@ -419,6 +442,7 @@ function createConnectionHarness(options: HarnessOptions) {
     setHostKeyInspectionFailure: (next: Error | undefined) => {
       hostKeyInspectionFailure = next
     },
+    updateRetryPolicy: (update: { autoReconnect: boolean; reconnectMode: "limited" | "continuous" }) => manager.updateRetryPolicy(update),
     releaseRetryResolution: () => releaseRetryResolution?.(),
     waitForRetryResolution: async () => retryResolutionStarted
   }

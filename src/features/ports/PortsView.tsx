@@ -1,5 +1,5 @@
 import { Clipboard, ExternalLink, Play, RefreshCw, Square } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import type { AppSettings, DiscoveredPort, ForwardingInfo, PortStatus } from "../../app/types"
 import { IconButton } from "../../components/IconButton"
@@ -20,6 +20,16 @@ export function PortsView({ bridge, connectionId, session, username, bindAddress
   const [state, setState] = useState(createPortState)
   const [localPorts, setLocalPorts] = useState<Record<string, number>>({})
 
+  useEffect(() => {
+    let cancelled = false
+    void bridge.ports.list().then((forwardings) => {
+      if (!cancelled) setState((current) => ({ ...current, forwardings }))
+    }).catch((error) => {
+      if (!cancelled) setState((current) => setPortError(current, error instanceof Error ? error.message : String(error)))
+    })
+    return () => { cancelled = true }
+  }, [bridge])
+
   const scan = async (): Promise<void> => {
     if (!connectionId) return
     setState((current) => setPortLoading(current, true))
@@ -35,6 +45,11 @@ export function PortsView({ bridge, connectionId, session, username, bindAddress
   const forwardingByPort = useMemo(() => new Map(state.forwardings
     .filter((forwarding) => forwarding.connectionId === connectionId && forwarding.status !== "stopped")
     .map((forwarding) => [forwarding.remotePort, forwarding])), [state.forwardings, connectionId])
+  const standaloneForwardings = useMemo(() => state.forwardings
+    .filter((forwarding) => forwarding.status !== "stopped")
+    .filter((forwarding) => !state.ports.some((port) =>
+      forwarding.connectionId === connectionId && forwarding.remotePort === port.remotePort
+    )), [connectionId, state.forwardings, state.ports])
 
   const startForwarding = async (port: DiscoveredPort): Promise<void> => {
     if (!connectionId) return
@@ -71,11 +86,38 @@ export function PortsView({ bridge, connectionId, session, username, bindAddress
         <div><span className="view-eyebrow">Rocker / {session?.label ?? t("workspace.personal")}</span><h1>{t("ports.title")}</h1><p>{t("ports.subtitle")}</p></div>
         <button className="secondary-command" type="button" disabled={!connectionId || state.loading} onClick={() => void scan()}><RefreshCw size={15} className={state.loading ? "is-spinning" : ""} />{t("ports.scan")}</button>
       </header>
-      {!connectionId ? (
-        <div className="port-empty"><strong>{t("ports.noConnection")}</strong><span>{t("ports.noConnectionBody")}</span></div>
-      ) : (
-        <div className="ports-content">
-          {state.error && <div className="inline-error">{formatPortError(state.error, t("ports.localPortInUse"))}</div>}
+      <div className="ports-content">
+        {state.error && <div className="inline-error">{formatPortError(state.error, t("ports.localPortInUse"))}</div>}
+        {standaloneForwardings.length > 0 && <div className="ports-table">
+          <div className="ports-heading"><span>{t("ports.port")}</span><span>{t("ports.forwardedAddress")}</span><span>{t("ports.process")}</span><span>{t("ports.source")}</span><span>{t("ports.user")}</span><span>{t("ports.status")}</span><span /></div>
+          {standaloneForwardings.map((forwarding) => {
+            const address = formatAddress(forwarding.localAddress, forwarding.localPort)
+            return (
+              <div key={forwarding.id} className="port-row">
+                <code>:{forwarding.localPort}</code>
+                <code>{address}</code>
+                <span>{forwarding.remoteAddress}:{forwarding.remotePort}</span>
+                <span className="source-label">SSH</span>
+                <span>{username ?? "-"}</span>
+                <span className="port-status" data-status={forwarding.status}>{t(statusKey(forwarding.status))}</span>
+                <div className="port-actions">
+                  {forwarding.status === "suspended" ? <>
+                    <IconButton label={t("ports.resumeForwarding")} onClick={() => void resumeForwarding(forwarding)}><Play size={14} /></IconButton>
+                    <IconButton label={t("ports.stopForwarding")} onClick={() => void stopForwarding(forwarding)}><Square size={13} /></IconButton>
+                  </> : forwarding.status === "forwarding" ? <>
+                    <IconButton label={t("ports.copyAddress")} onClick={() => void navigator.clipboard?.writeText(address)}><Clipboard size={14} /></IconButton>
+                    <IconButton label={t("ports.openAddress")} onClick={() => void bridge.ports.openAddress(forwarding.id)}><ExternalLink size={14} /></IconButton>
+                    <IconButton label={t("ports.stopForwarding")} onClick={() => void stopForwarding(forwarding)}><Square size={13} /></IconButton>
+                  </> : <IconButton label={t("ports.stopForwarding")} onClick={() => void stopForwarding(forwarding)}><Square size={13} /></IconButton>}
+                </div>
+              </div>
+            )
+          })}
+        </div>}
+        {!connectionId ? (
+          <div className="port-empty"><strong>{t("ports.noConnection")}</strong><span>{t("ports.noConnectionBody")}</span></div>
+        ) : (
+          <>
           <div className="ports-table">
             <div className="ports-heading"><span>{t("ports.port")}</span><span>{t("ports.forwardedAddress")}</span><span>{t("ports.process")}</span><span>{t("ports.source")}</span><span>{t("ports.user")}</span><span>{t("ports.status")}</span><span /></div>
             {state.ports.map((port) => {
@@ -104,8 +146,9 @@ export function PortsView({ bridge, connectionId, session, username, bindAddress
             })}
           </div>
           {state.ports.length === 0 && !state.loading && <div className="port-empty"><strong>{t("ports.idleTitle")}</strong><span>{t("ports.idleBody")}</span></div>}
-        </div>
-      )}
+          </>
+        )}
+      </div>
     </section>
   )
 }
@@ -116,6 +159,10 @@ function normalizeRemoteAddress(address: string): string {
 
 function formatPortError(error: string, localPortInUse: string): string {
   return error.includes("LOCAL_PORT_IN_USE") ? localPortInUse : error
+}
+
+function formatAddress(address: string, port: number): string {
+  return address.includes(":") ? `[${address}]:${port}` : `${address}:${port}`
 }
 
 function statusKey(status: PortStatus): "ports.status.discovered" | "ports.status.starting" | "ports.status.forwarding" | "ports.status.suspended" | "ports.status.stopping" | "ports.status.stopped" | "ports.status.error" {

@@ -54,4 +54,41 @@ describe("PortsView", () => {
 
     expect(resume).toHaveBeenCalledWith("forward-1")
   })
+
+  it("keeps a suspended forward visible after its last terminal closes", async () => {
+    const resume = vi.fn(async () => ({
+      id: "forward-1",
+      connectionId: "connection",
+      localAddress: "0.0.0.0",
+      localPort: 3000,
+      remoteAddress: "127.0.0.1",
+      remotePort: 3000,
+      status: "forwarding" as const
+    }))
+    const bridge = {
+      ports: {
+        scan: vi.fn(async () => []),
+        list: vi.fn(async () => [{
+          id: "forward-1",
+          connectionId: "connection",
+          localAddress: "0.0.0.0",
+          localPort: 3000,
+          remoteAddress: "127.0.0.1",
+          remotePort: 3000,
+          status: "suspended" as const
+        }]),
+        start: vi.fn(),
+        resume,
+        stop: vi.fn(),
+        openAddress: vi.fn()
+      }
+    } as unknown as RockerBridge
+
+    render(<I18nProvider><PortsView bridge={bridge} /></I18nProvider>)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Resume forwarding" }))
+
+    expect(resume).toHaveBeenCalledWith("forward-1")
+    expect(bridge.ports.scan).not.toHaveBeenCalled()
+  })
 })

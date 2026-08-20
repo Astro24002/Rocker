@@ -273,10 +273,7 @@ function Workspace() {
 
   useEffect(() => {
     if (!workspaceHydrated) return
-    const timer = window.setTimeout(() => {
-      void bridge.workspace.save(serializeWorkspace(workspace)).catch(() => undefined)
-    }, 220)
-    return () => window.clearTimeout(timer)
+    void bridge.workspace.save(serializeWorkspace(workspace)).catch(() => undefined)
   }, [bridge, workspace, workspaceHydrated])
 
   const activeSession = workspace.sessions.find((session) => session.id === workspace.activeSessionId)

@@ -87,6 +87,11 @@ async function startApplication(): Promise<void> {
       await forwarding.releaseOwner(ownerWebContentsId)
       await sessions.releaseOwner(ownerWebContentsId)
       await connections.releaseOwner(ownerWebContentsId)
+    },
+    onRendererReload: async (ownerWebContentsId) => {
+      await forwarding.releaseOwner(ownerWebContentsId)
+      await sessions.releaseOwner(ownerWebContentsId)
+      await connections.releaseOwner(ownerWebContentsId)
     }
   })
   const dependencies: IpcDependencies = {
@@ -146,6 +151,7 @@ async function promptForHostKey(windows: WorkspaceWindowManager, request: HostKe
 
 async function shutdownApplication(applicationRuntime: ApplicationRuntime): Promise<void> {
   applicationRuntime.windows.beginQuit()
+  applicationRuntime.windows.flushWindowBounds()
   try {
     await applicationRuntime.snapshots.flush()
   } catch {

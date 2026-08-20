@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { RockerBridge } from "../../electron/ipc/bridge-contract"
 import type { TerminalSessionEvent } from "../../electron/ssh/types"
@@ -151,6 +151,25 @@ describe("desktop workspace shell", () => {
     expect(bridge.sessions.close).not.toHaveBeenCalled()
     expect(bridge.sessions.reconnect).not.toHaveBeenCalled()
     expect(bridge.sessions.cancelReconnect).not.toHaveBeenCalled()
+  })
+
+  it("submits hydrated workspace metadata without a renderer-side debounce", async () => {
+    vi.useFakeTimers()
+    try {
+      bridge.hosts.list.mockResolvedValue([host])
+      bridge.workspace.load.mockResolvedValue(workspaceSnapshot(host.id))
+      render(<App />)
+
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(bridge.workspace.save).toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

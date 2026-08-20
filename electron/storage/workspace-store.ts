@@ -49,6 +49,24 @@ export class WorkspaceSnapshotStore {
     })
   }
 
+  public updateWindowBounds(
+    workspaceId: string,
+    update: Pick<StoredWorkspaceWindow, "bounds" | "maximized">
+  ): void {
+    if (!isUuid(workspaceId)) return
+    const bounds = normalizeBounds(update.bounds)
+    if (!bounds) return
+    this.mutate((document) => {
+      const index = document.windows.findIndex((window) => window.workspaceId === workspaceId)
+      if (index === -1) return
+      document.windows[index] = {
+        ...document.windows[index],
+        bounds,
+        maximized: update.maximized === true
+      }
+    })
+  }
+
   public async flush(): Promise<void> {
     if (this.writeTimer) {
       clearTimeout(this.writeTimer)

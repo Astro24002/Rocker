@@ -137,6 +137,31 @@ describe("WorkspaceSnapshotStore", () => {
       sessions: []
     }])
   })
+
+  it("updates persisted native bounds without receiving a new renderer workspace", async () => {
+    const filePath = await temporaryFilePath()
+    const store = new WorkspaceSnapshotStore(filePath)
+    store.saveWindow({
+      workspaceId,
+      bounds: { x: 10, y: 20, width: 1200, height: 800 },
+      maximized: false,
+      sessions: [{ sessionId, hostId: "host-a", label: "G11", cols: 120, rows: 40 }]
+    })
+    await store.flush()
+
+    store.updateWindowBounds(workspaceId, {
+      bounds: { x: 42, y: 56, width: 1520, height: 940 },
+      maximized: true
+    })
+    await store.flush()
+
+    expect((await store.load()).windows).toEqual([{
+      workspaceId,
+      bounds: { x: 42, y: 56, width: 1520, height: 940 },
+      maximized: true,
+      sessions: [{ sessionId, hostId: "host-a", label: "G11", cols: 120, rows: 40 }]
+    }])
+  })
 })
 
 async function temporaryFilePath(): Promise<string> {

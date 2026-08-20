@@ -161,7 +161,11 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   ipcMain.handle(ipcChannels.historyList, () => dependencies.history.list())
   ipcMain.handle(ipcChannels.historyClear, () => dependencies.history.clear())
   ipcMain.handle(ipcChannels.settingsGet, () => dependencies.settings.get())
-  ipcMain.handle(ipcChannels.settingsUpdate, (_event, update: unknown) => dependencies.settings.update(normalizeSettingsUpdate(update)))
+  ipcMain.handle(ipcChannels.settingsUpdate, async (_event, update: unknown) => {
+    const next = await dependencies.settings.update(normalizeSettingsUpdate(update))
+    dependencies.connections.updateRetryPolicy(next)
+    return next
+  })
   ipcMain.handle(ipcChannels.windowMinimize, (event) => BrowserWindow.fromWebContents(event.sender)?.minimize())
   ipcMain.handle(ipcChannels.windowToggleMaximize, (event) => {
     const target = BrowserWindow.fromWebContents(event.sender)

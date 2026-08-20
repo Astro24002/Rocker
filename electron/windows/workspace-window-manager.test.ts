@@ -36,7 +36,7 @@ describe("WorkspaceWindowManager", () => {
       createWindow: windows.create,
       preserveLastWindowWorkspace: true
     })
-    const window = manager.createNew(createWorkspace(firstWorkspace))
+    const window = manager.createNew(createWorkspace(firstWorkspace)) as FakeWindow
 
     await manager.handleClosed(window.webContents.id)
 
@@ -61,7 +61,7 @@ describe("WorkspaceWindowManager", () => {
     const store = createStore()
     const windows = createWindowFactory()
     const manager = new WorkspaceWindowManager({ snapshots: store, createWindow: windows.create })
-    const window = manager.createNew(createWorkspace(firstWorkspace))
+    const window = manager.createNew(createWorkspace(firstWorkspace)) as FakeWindow
 
     manager.saveWorkspace(window.webContents.id, { sessions: [] })
 
@@ -70,6 +70,41 @@ describe("WorkspaceWindowManager", () => {
       bounds: { x: 18, y: 24, width: 1440, height: 900 },
       maximized: false,
       sessions: []
+    })
+  })
+
+  it("releases renderer-owned runtime resources after a completed renderer reload", async () => {
+    const store = createStore()
+    const windows = createWindowFactory()
+    const onRendererReload = vi.fn(async () => undefined)
+    const manager = new WorkspaceWindowManager({
+      snapshots: store,
+      createWindow: windows.create,
+      onRendererReload
+    } as unknown as ConstructorParameters<typeof WorkspaceWindowManager>[0])
+    const window = manager.createNew(createWorkspace(firstWorkspace)) as FakeWindow
+
+    window.webContents.emit("did-finish-load")
+    window.webContents.emit("did-start-loading")
+    await flush()
+
+    expect(onRendererReload).toHaveBeenCalledWith(window.webContents.id)
+    expect(manager.workspaceForWebContents(window.webContents.id)).toBe(firstWorkspace)
+    expect(store.removeWindow).not.toHaveBeenCalled()
+  })
+
+  it("captures native bounds when a window moves without waiting for renderer state", async () => {
+    const store = createStore()
+    const windows = createWindowFactory()
+    const manager = new WorkspaceWindowManager({ snapshots: store, createWindow: windows.create })
+    const window = manager.createNew(createWorkspace(firstWorkspace)) as FakeWindow
+
+    window.emit("move")
+    await flush()
+
+    expect(store.updateWindowBounds).toHaveBeenCalledWith(firstWorkspace, {
+      bounds: { x: 18, y: 24, width: 1440, height: 900 },
+      maximized: false
     })
   })
 
@@ -94,7 +129,8 @@ function createStore(document: StoredWorkspaceDocument = { version: 1, windows: 
   return {
     load: vi.fn(async () => structuredClone(document)),
     saveWindow: vi.fn(),
-    removeWindow: vi.fn()
+    removeWindow: vi.fn(),
+    updateWindowBounds: vi.fn()
   }
 }
 
@@ -116,8 +152,25 @@ function createWindowFactory() {
 
 function createWindow(id: number): FakeWindow {
   const closedListeners: Array<() => void> = []
+  const listeners = new Map<string, Array<() => void>>()
+  const webContentsListeners = new Map<string, Array<() => void>>()
   return {
-    webContents: { id, send: vi.fn(), once: vi.fn() },
+    webContents: {
+      id,
+      send: vi.fn(),
+      once: vi.fn((event: string, listener: () => void) => {
+        const once = (): void => {
+          listener()
+          const entries = webContentsListeners.get(event)
+          if (entries) webContentsListeners.set(event, entries.filter((entry) => entry !== once))
+        }
+        webContentsListeners.set(event, [...(webContentsListeners.get(event) ?? []), once])
+      }),
+      on: vi.fn((event: string, listener: () => void) => {
+        webContentsListeners.set(event, [...(webContentsListeners.get(event) ?? []), listener])
+      }),
+      emit: (event: string) => webContentsListeners.get(event)?.forEach((listener) => listener())
+    },
     maximize: vi.fn(),
     isDestroyed: vi.fn(() => false),
     getBounds: vi.fn(() => ({ x: 18, y: 24, width: 1440, height: 900 })),
@@ -125,13 +178,27 @@ function createWindow(id: number): FakeWindow {
     once: vi.fn((event: "closed", listener: () => void) => {
       if (event === "closed") closedListeners.push(listener)
     }),
+    on: vi.fn((event: string, listener: () => void) => {
+      listeners.set(event, [...(listeners.get(event) ?? []), listener])
+    }),
+    emit: (event: string) => listeners.get(event)?.forEach((listener) => listener()),
     close: () => closedListeners.forEach((listener) => listener())
   }
 }
 
 interface FakeWindow extends WorkspaceWindow {
+  webContents: WorkspaceWindow["webContents"] & {
+    on(event: string, listener: () => void): void
+    emit(event: string): void
+  }
   maximize: Mock<() => void>
+  on(event: string, listener: () => void): void
+  emit(event: string): void
   close(): void
+}
+
+async function flush(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
 }
 
 function createWorkspace(

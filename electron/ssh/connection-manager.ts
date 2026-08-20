@@ -107,6 +107,12 @@ interface ConnectionRecord {
   retryAttempt: number
   connectPromise?: Promise<void>
   cancelConnect?: () => void
+  readyWaiters: Set<ConnectionReadyWaiter>
+}
+
+interface ConnectionReadyWaiter {
+  resolve(): void
+  reject(error: Error): void
 }
 
 class HostKeyError extends Error {
@@ -127,7 +133,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
   private readonly createClient: () => Client
   private readonly scheduler: RetryScheduler
   private readonly random: () => number
-  private readonly maxRetryAttempts: number
+  private maxRetryAttempts: number
 
   public constructor(private readonly options: SshConnectionManagerOptions) {
     this.createClient = options.createClient ?? (() => new Client())
@@ -166,13 +172,19 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
         record.identityKey === identityKey &&
         matchesKnownHostKey(record, resolved) &&
         ((record.verifiedFingerprint !== undefined && record.state === "ready") ||
-          (record.state === "connecting" && record.connectPromise !== undefined))
+          (record.state === "connecting" && record.connectPromise !== undefined) ||
+          (record.verifiedFingerprint !== undefined && record.state === "retrying"))
       )
       if (reusable) {
-        const connecting = reusable.connectPromise
-        if (connecting) await connecting
-        if (reusable.state === "ready" && reusable.verifiedFingerprint !== undefined) {
-          return this.addLease(reusable, request.ownerWebContentsId, "terminal")
+        const lease = this.addLease(reusable, request.ownerWebContentsId, "terminal")
+        if (reusable.state === "retrying") this.retryNow(reusable.connectionId)
+        try {
+          await this.waitForReady(reusable)
+          if (reusable.state === "ready" && reusable.verifiedFingerprint !== undefined) return lease
+          throw new Error("SSH connection is not ready")
+        } catch (error) {
+          await this.release(lease.id)
+          throw error
         }
       }
     }
@@ -224,6 +236,22 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     }
   }
 
+  public updateRetryPolicy(policy: { autoReconnect: boolean; reconnectMode: "limited" | "continuous" }): void {
+    const maxRetryAttempts = !policy.autoReconnect
+      ? 0
+      : policy.reconnectMode === "continuous"
+        ? Number.POSITIVE_INFINITY
+        : 8
+    this.maxRetryAttempts = maxRetryAttempts
+    if (maxRetryAttempts > 0) return
+    for (const record of [...this.connections.values()]) {
+      if (record.state !== "retrying") continue
+      if (record.retryTimer !== undefined) this.scheduler.cancel(record.retryTimer)
+      record.retryTimer = undefined
+      this.discard(record, "cancelled")
+    }
+  }
+
   public async execOnConnection(connectionId: string, command: string): Promise<string> {
     if (!command || command.includes("\u0000") || command.length > 4_096) throw new Error("Invalid remote command")
     const client = this.getClientForConnection(connectionId)
@@ -262,7 +290,8 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       transportGeneration: 0,
       leases: new Map(),
       state: "connecting",
-      retryAttempt: 0
+      retryAttempt: 0,
+      readyWaiters: new Set()
     }
   }
 
@@ -286,6 +315,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
         record.state = "ready"
         record.retryAttempt = 0
         record.transportGeneration += 1
+        this.resolveReadyWaiters(record)
         this.emit({
           kind: "ready",
           connectionId: record.connectionId,
@@ -480,6 +510,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     record.cancelConnect?.()
     record.client?.end()
     this.connections.delete(record.connectionId)
+    this.rejectReadyWaiters(record, new Error("SSH connection was closed"))
   }
 
   private discard(record: ConnectionRecord, reason: TerminalFailureReason): void {
@@ -498,6 +529,22 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
 
   private isCurrent(record: ConnectionRecord): boolean {
     return this.connections.get(record.connectionId) === record
+  }
+
+  private waitForReady(record: ConnectionRecord): Promise<void> {
+    if (record.state === "ready" && record.verifiedFingerprint !== undefined) return Promise.resolve()
+    if (!this.isCurrent(record)) return Promise.reject(new Error("SSH connection was closed"))
+    return new Promise<void>((resolve, reject) => record.readyWaiters.add({ resolve, reject }))
+  }
+
+  private resolveReadyWaiters(record: ConnectionRecord): void {
+    for (const waiter of record.readyWaiters) waiter.resolve()
+    record.readyWaiters.clear()
+  }
+
+  private rejectReadyWaiters(record: ConnectionRecord, error: Error): void {
+    for (const waiter of record.readyWaiters) waiter.reject(error)
+    record.readyWaiters.clear()
   }
 
   private emit(event: ConnectionEvent): void {
