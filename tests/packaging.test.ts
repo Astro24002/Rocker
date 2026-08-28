@@ -43,7 +43,9 @@ describe("desktop packaging metadata", () => {
     expect(workflow).toContain("env npm_config_registry=https://registry.npmjs.org")
     expect(workflow).toContain("timeout 90s env npm_config_registry=https://registry.npmjs.org npm audit")
     expect(workflow).toContain("::error::")
-    expect(workflow).toContain("node scripts/verify-release-assets.mjs \"$release_version\" release")
+    expect(workflow).toContain("mkdir -p release-publish")
+    expect(workflow).toContain("cp \"$asset\" \"release-publish/$asset_name\"")
+    expect(workflow).toContain("node scripts/verify-release-assets.mjs \"$release_version\" release-publish")
     expect(workflow).toMatch(/gh release upload \"\$GITHUB_REF_NAME\" \"\$asset\"/)
     expect(workflow).not.toMatch(/gh release (?:create|upload).*release\/\*/)
     for (const asset of ["x64.exe", "arm64.exe", "x64.dmg", "arm64.dmg", "x64.zip", "arm64.zip"]) {
