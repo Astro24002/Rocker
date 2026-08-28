@@ -51,10 +51,10 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
         ptyRequests.push(info)
         ptyAccept()
       })
-      session.on("window-change", (windowAccept, _windowReject, info) => {
+      session.on("window-change", (...args: unknown[]) => {
+        const info = (args.length === 1 ? args[0] : args[2]) as WindowChangeInfo
         ptyResizes.push(info)
         options.onPtyResize?.(info)
-        windowAccept()
       })
       session.on("shell", (shellAccept, shellReject) => {
         const channel = shellAccept()

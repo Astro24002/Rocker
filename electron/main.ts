@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, powerMonitor } from "electron"
 import { join } from "node:path"
+import { DiagnosticLogger } from "./diagnostics/diagnostic-logger"
 import { registerIpcHandlers, type IpcDependencies } from "./ipc/register"
 import { ipcChannels } from "./ipc/bridge-contract"
 import { LinuxMetricsSampler } from "./monitoring/linux-metrics"
@@ -13,10 +14,11 @@ import { createSafeStorageCipher } from "./storage/safe-storage"
 import { SettingsStore } from "./storage/settings-store"
 import type { AppSettings } from "./storage/types"
 import { WorkspaceSnapshotStore } from "./storage/workspace-store"
-import { SshConnectionManager, type HostKeyPromptRequest } from "./ssh/connection-manager"
+import { SshConnectionManager, type ConnectionEvent, type HostKeyPromptRequest } from "./ssh/connection-manager"
 import { createConnectionResolver } from "./ssh/connection-resolver"
 import { JsonHostKeyStore } from "./ssh/host-key-store"
 import { TerminalSessionManager } from "./ssh/terminal-session-manager"
+import type { OwnedTerminalSessionEvent } from "./ssh/types"
 import {
   WorkspaceWindowManager,
   type WorkspaceWindowOptions
@@ -28,6 +30,7 @@ interface ApplicationRuntime {
   forwarding: ForwardingManager
   snapshots: WorkspaceSnapshotStore
   windows: WorkspaceWindowManager
+  diagnostics: DiagnosticLogger
 }
 
 let runtime: ApplicationRuntime | undefined
@@ -61,6 +64,7 @@ function createNativeWindow(options: WorkspaceWindowOptions = {}): BrowserWindow
 
 async function startApplication(): Promise<void> {
   const userDataPath = app.getPath("userData")
+  const diagnostics = new DiagnosticLogger(userDataPath)
   const hosts = createHostStore(userDataPath)
   const credentials = new CredentialVault(
     new JsonCredentialValueStore(join(userDataPath, "credentials.json")),
@@ -75,9 +79,13 @@ async function startApplication(): Promise<void> {
     resolve: createConnectionResolver({ hosts, credentials, settings, hostKeys }),
     hostKeys,
     maxRetryAttempts: retryLimit(initialSettings),
-    promptForHostKey: async (request) => promptForHostKey(windows, request)
+    promptForHostKey: async (request) => promptForHostKey(windows, request),
+    onEvent: (event) => recordConnectionDiagnostic(diagnostics, event)
   })
-  const sessions = new TerminalSessionManager({ connections })
+  const sessions = new TerminalSessionManager({
+    connections,
+    onEvent: (event) => recordSessionDiagnostic(diagnostics, event)
+  })
   const forwarding = new ForwardingManager(connections)
   windows = new WorkspaceWindowManager({
     snapshots,
@@ -120,7 +128,7 @@ async function startApplication(): Promise<void> {
   app.on("activate", () => {
     if (windows.ownerWebContentsIds().length === 0) windows.createNew()
   })
-  runtime = { connections, sessions, forwarding, snapshots, windows }
+  runtime = { connections, sessions, forwarding, snapshots, windows, diagnostics }
 }
 
 function retryLimit(settings: AppSettings): number {
@@ -162,6 +170,41 @@ async function shutdownApplication(applicationRuntime: ApplicationRuntime): Prom
     await applicationRuntime.sessions.releaseOwner(ownerWebContentsId)
     await applicationRuntime.connections.releaseOwner(ownerWebContentsId)
   }))
+  await applicationRuntime.diagnostics.close()
+}
+
+function recordConnectionDiagnostic(logger: DiagnosticLogger, event: ConnectionEvent): void {
+  logger.record({
+    category: "connection",
+    action: event.kind,
+    connectionId: event.connectionId,
+    reason: "reason" in event ? event.reason : undefined,
+    attempt: "attempt" in event ? event.attempt : undefined,
+    details: "transportGeneration" in event
+      ? { transportGeneration: event.transportGeneration }
+      : "nextRetryAt" in event
+        ? { nextRetryAt: event.nextRetryAt }
+        : undefined
+  })
+}
+
+function recordSessionDiagnostic(logger: DiagnosticLogger, ownedEvent: OwnedTerminalSessionEvent): void {
+  const event = ownedEvent.event
+  if (event.kind !== "state") return
+  logger.record({
+    category: "session",
+    action: "state",
+    state: event.state,
+    sessionId: event.sessionId,
+    connectionId: event.connectionId,
+    reason: event.reason,
+    attempt: event.attempt,
+    details: event.notice
+      ? { notice: event.notice }
+      : event.nextRetryAt
+        ? { nextRetryAt: event.nextRetryAt }
+        : undefined
+  })
 }
 
 void app.whenReady().then(startApplication).catch(() => {
