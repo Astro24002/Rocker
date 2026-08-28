@@ -106,22 +106,25 @@ jobs:
             esac
           done
 
+          echo "Downloaded release files:"
+          find release -type f -print | sort
           release_version="${GITHUB_REF_NAME#v}"
           node scripts/verify-release-assets.mjs "$release_version" release
           missing=0
-          for asset in \
-            "release/Rocker-v${release_version}-x64.exe" \
-            "release/Rocker-v${release_version}-arm64.exe" \
-            "release/Rocker-v${release_version}-x64.dmg" \
-            "release/Rocker-v${release_version}-arm64.dmg" \
-            "release/Rocker-v${release_version}-x64.zip" \
-            "release/Rocker-v${release_version}-arm64.zip"; do
-            if [ -f "$asset" ]; then
+          for asset_name in \
+            "Rocker-v${release_version}-x64.exe" \
+            "Rocker-v${release_version}-arm64.exe" \
+            "Rocker-v${release_version}-x64.dmg" \
+            "Rocker-v${release_version}-arm64.dmg" \
+            "Rocker-v${release_version}-x64.zip" \
+            "Rocker-v${release_version}-arm64.zip"; do
+            asset="$(find release -type f -name "$asset_name" -print -quit)"
+            if [ -n "$asset" ]; then
               gh release upload "$GITHUB_REF_NAME" "$asset" \
                 --repo "$GITHUB_REPOSITORY" \
                 --clobber
             else
-              echo "::error::Missing expected release asset: $asset"
+              echo "::error::Missing expected release asset: $asset_name"
               missing=1
             fi
           done

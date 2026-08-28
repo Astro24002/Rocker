@@ -24,6 +24,21 @@ describe("release asset allow-list", () => {
     await expect(execFile(process.execPath, [scriptPath, "0.3.1", directory])).resolves.toBeTruthy()
   })
 
+  it("accepts installers nested under downloaded artifact directories", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-release-assets-"))
+    directories.push(directory)
+    await Promise.all(
+      assetSuffixes.map(async (suffix: string) => {
+        const artifactDirectory = suffix.endsWith(".exe") ? "rocker-Windows" : "rocker-macOS"
+        const nestedDirectory = join(directory, artifactDirectory)
+        await mkdir(nestedDirectory, { recursive: true })
+        await writeFile(join(nestedDirectory, `Rocker-v0.3.1-${suffix}`), "asset")
+      })
+    )
+
+    await expect(execFile(process.execPath, [scriptPath, "0.3.1", directory])).resolves.toBeTruthy()
+  })
+
   it("rejects debug metadata, blockmaps, and unpacked application directories", async () => {
     const directory = await mkdtemp(join(tmpdir(), "rocker-release-assets-"))
     directories.push(directory)
