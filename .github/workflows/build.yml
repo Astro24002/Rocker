@@ -93,10 +93,12 @@ jobs:
               --generate-notes
           fi
 
-          gh release view "$GITHUB_REF_NAME" \
+          existing_assets="$(gh release view "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --json assets \
-            --jq '.assets[].name' | while IFS= read -r existing; do
+            --jq '.assets | map(.name) | .[]' || true)"
+          while IFS= read -r existing; do
+            [ -z "$existing" ] && continue
             release_version="${GITHUB_REF_NAME#v}"
             case "$existing" in
               "Rocker-v${release_version}-x64.exe"|"Rocker-v${release_version}-arm64.exe"|\
@@ -104,7 +106,7 @@ jobs:
               "Rocker-v${release_version}-x64.zip"|"Rocker-v${release_version}-arm64.zip") ;;
               *) gh release delete-asset "$GITHUB_REF_NAME" "$existing" --repo "$GITHUB_REPOSITORY" --yes ;;
             esac
-          done
+          done <<< "$existing_assets"
 
           echo "Downloaded release files:"
           find release -type f -print | sort

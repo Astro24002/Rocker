@@ -46,6 +46,7 @@ describe("desktop packaging metadata", () => {
     expect(workflow).toContain("mkdir -p release-publish")
     expect(workflow).toContain("cp \"$asset\" \"release-publish/$asset_name\"")
     expect(workflow).toContain("node scripts/verify-release-assets.mjs \"$release_version\" release-publish")
+    expect(workflow).toContain("--jq '.assets | map(.name) | .[]' || true")
     expect(workflow).toMatch(/gh release upload \"\$GITHUB_REF_NAME\" \"\$asset\"/)
     expect(workflow).not.toMatch(/gh release (?:create|upload).*release\/\*/)
     for (const asset of ["x64.exe", "arm64.exe", "x64.dmg", "arm64.dmg", "x64.zip", "arm64.zip"]) {
