@@ -27,9 +27,11 @@ jobs:
         run: |
           set -o pipefail
           audit_log="$(mktemp)"
-          if ! npm_config_registry=https://registry.npmjs.org npm audit --omit=dev --audit-level=moderate >"$audit_log" 2>&1; then
+          audit_status=0
+          timeout 90s env npm_config_registry=https://registry.npmjs.org npm audit --omit=dev --audit-level=moderate >"$audit_log" 2>&1 || audit_status=$?
+          if [ "$audit_status" -ne 0 ]; then
             cat "$audit_log"
-            if grep -Eqi 'EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed|audit endpoint|service unavailable|registry unavailable' "$audit_log"; then
+            if [ "$audit_status" -eq 124 ] || grep -Eqi 'EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed|audit endpoint|service unavailable|registry unavailable' "$audit_log"; then
               echo "::error::npm audit endpoint unavailable at https://registry.npmjs.org"
             else
               echo "::error::npm audit reported vulnerabilities or failed"
