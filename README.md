@@ -55,9 +55,9 @@ npm run typecheck
 npm run build
 ```
 
-The test suite includes SSH mock-server integration, host-key verification,
-encrypted storage boundaries, Linux port/metric parsing, forwarding lifecycle,
-state models, localization, and packaging metadata.
+The test suite includes connection and terminal lifecycle fakes, host-key
+verification, encrypted storage boundaries, Linux port/metric parsing,
+forwarding lifecycle, state models, localization, and packaging metadata.
 
 ## Packaging
 
