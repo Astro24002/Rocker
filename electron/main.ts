@@ -170,7 +170,11 @@ async function shutdownApplication(applicationRuntime: ApplicationRuntime): Prom
     await applicationRuntime.sessions.releaseOwner(ownerWebContentsId)
     await applicationRuntime.connections.releaseOwner(ownerWebContentsId)
   }))
-  await applicationRuntime.diagnostics.close()
+  try {
+    await applicationRuntime.diagnostics.close()
+  } catch {
+    // Diagnostics are best effort and must not prevent resource cleanup or quit.
+  }
 }
 
 function recordConnectionDiagnostic(logger: DiagnosticLogger, event: ConnectionEvent): void {
