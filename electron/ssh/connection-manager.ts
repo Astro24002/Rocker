@@ -105,6 +105,7 @@ interface ConnectionRecord {
   state: ConnectionState
   retryTimer?: number
   retryAttempt: number
+  connectFailureReason?: TerminalFailureReason
   connectPromise?: Promise<void>
   cancelConnect?: () => void
   readyWaiters: Set<ConnectionReadyWaiter>
@@ -195,8 +196,9 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       await this.connect(record, resolved)
       return this.addLease(record, request.ownerWebContentsId, "terminal")
     } catch (error) {
-      this.discard(record, failureReason(error))
-      throw error
+      const reason = failureReason(error, record.connectFailureReason)
+      this.discard(record, reason)
+      throw withFailureReason(error, reason)
     }
   }
 
@@ -298,6 +300,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
   private async connect(record: ConnectionRecord, resolved: ResolvedConnectionRequest): Promise<void> {
     if (!this.isCurrent(record)) throw new Error("SSH connection was closed")
     record.state = "connecting"
+    record.connectFailureReason = undefined
     const client = this.createClient()
     record.client = client
     const promise = new Promise<void>((resolve, reject) => {
@@ -363,6 +366,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
   ): Promise<ConnectConfig> {
     const hostVerifier = ((fingerprint: string, verify: (accepted: boolean) => void): void => {
       void this.verifyHostKey(record, resolved, fingerprint).then((accepted) => verify(accepted)).catch((error: unknown) => {
+        if (error instanceof HostKeyError) record.connectFailureReason = error.reason
         verify(false)
         fail(error instanceof Error ? error : new Error("Host Key was rejected"))
       })
@@ -490,7 +494,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       }
       await this.connect(record, resolved)
     } catch (error) {
-      const reason = failureReason(error)
+      const reason = failureReason(error, record.connectFailureReason)
       if (isRetryable(reason)) this.scheduleRetry(record, reason)
       else this.discard(record, reason)
     }
@@ -571,15 +575,26 @@ function matchesKnownHostKey(record: ConnectionRecord, resolved: ResolvedConnect
     record.verifiedFingerprint === normalizeFingerprint(resolved.knownHostKeyFingerprint)
 }
 
-function failureReason(error: unknown): TerminalFailureReason {
+function failureReason(error: unknown, fallback?: TerminalFailureReason): TerminalFailureReason {
+  if (fallback !== undefined) return fallback
   if (error instanceof HostKeyError) return error.reason
   const message = error instanceof Error ? error.message.toLowerCase() : ""
+  const code = error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code).toLowerCase()
+    : ""
   if (message.includes("authentication") || message.includes("auth failed")) return "authentication"
   if (message.includes("private key") || message.includes("security context") || message.includes("credential") || message.includes("configuration")) return "configuration"
   if (message.includes("cancelled") || message.includes("canceled")) return "cancelled"
-  if (message.includes("timeout") || message.includes("timed out")) return "timeout"
-  if (message.includes("dns") || message.includes("enotfound")) return "dns"
+  if (message.includes("timeout") || message.includes("timed out") || message.includes("etimedout") || code === "etimedout") return "timeout"
+  if (message.includes("dns") || message.includes("enotfound") || code === "enotfound" || code === "eai_again" || code === "eai_fail") return "dns"
   return "network"
+}
+
+function withFailureReason(error: unknown, reason: TerminalFailureReason): Error {
+  const normalized = error instanceof Error ? error : new Error("SSH connection failed")
+  if ("reason" in normalized) return normalized
+  Object.defineProperty(normalized, "reason", { configurable: true, enumerable: false, value: reason })
+  return normalized
 }
 
 function resolutionFailureReason(error: unknown): ConnectionResolutionFailureReason {

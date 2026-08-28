@@ -572,6 +572,10 @@ function isReconnectableState(state: TerminalSessionState): boolean {
 
 function sessionFailureReason(error: unknown): TerminalFailureReason {
   if (error instanceof ConnectionResolutionError) return error.reason
+  const typedReason = error && typeof error === "object" && "reason" in error
+    ? (error as { reason?: unknown }).reason
+    : undefined
+  if (isTerminalFailureReason(typedReason)) return typedReason
   const message = error instanceof Error ? error.message.toLowerCase() : ""
   if (message.includes("host key") && message.includes("changed")) return "host-key-changed"
   if (message.includes("host key")) return "host-key-rejected"
@@ -581,4 +585,10 @@ function sessionFailureReason(error: unknown): TerminalFailureReason {
   if (message.includes("timeout") || message.includes("timed out")) return "timeout"
   if (message.includes("dns") || message.includes("enotfound")) return "dns"
   return "unknown"
+}
+
+function isTerminalFailureReason(value: unknown): value is TerminalFailureReason {
+  return value === "network" || value === "timeout" || value === "dns" || value === "authentication" ||
+    value === "host-key-changed" || value === "host-key-rejected" || value === "configuration" ||
+    value === "channel-ended" || value === "local-port-in-use" || value === "cancelled" || value === "unknown"
 }

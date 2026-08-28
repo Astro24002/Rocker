@@ -4,7 +4,7 @@ import { DiagnosticLogger } from "./diagnostics/diagnostic-logger"
 import { registerIpcHandlers, type IpcDependencies } from "./ipc/register"
 import { ipcChannels } from "./ipc/bridge-contract"
 import { LinuxMetricsSampler } from "./monitoring/linux-metrics"
-import { ForwardingManager } from "./ports/forwarding-manager"
+import { ForwardingManager, type ForwardingEvent } from "./ports/forwarding-manager"
 import { PortService } from "./ports/port-service"
 import { CredentialVault } from "./storage/credentials"
 import { JsonCredentialValueStore } from "./storage/credential-store"
@@ -86,7 +86,9 @@ async function startApplication(): Promise<void> {
     connections,
     onEvent: (event) => recordSessionDiagnostic(diagnostics, event)
   })
-  const forwarding = new ForwardingManager(connections)
+  const forwarding = new ForwardingManager(connections, {
+    onEvent: (event) => recordForwardingDiagnostic(diagnostics, event)
+  })
   windows = new WorkspaceWindowManager({
     snapshots,
     createWindow: createNativeWindow,
@@ -112,6 +114,8 @@ async function startApplication(): Promise<void> {
     monitoring: new LinuxMetricsSampler(sessions),
     history: new HistoryStore(join(userDataPath, "history.json")),
     settings,
+    diagnostics,
+    diagnosticsAppVersion: app.getVersion(),
     windows
   }
   dependencies.createDuplicateWindow = async (hostId) => {
@@ -208,6 +212,15 @@ function recordSessionDiagnostic(logger: DiagnosticLogger, ownedEvent: OwnedTerm
       : event.nextRetryAt
         ? { nextRetryAt: event.nextRetryAt }
         : undefined
+  })
+}
+
+function recordForwardingDiagnostic(logger: DiagnosticLogger, event: ForwardingEvent): void {
+  logger.record({
+    category: "forwarding",
+    action: event.kind,
+    connectionId: event.connectionId,
+    reason: event.reason
   })
 }
 

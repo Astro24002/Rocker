@@ -51,6 +51,9 @@ const bridge: RockerBridge = {
     get: () => ipcRenderer.invoke(ipcChannels.settingsGet),
     update: (update) => ipcRenderer.invoke(ipcChannels.settingsUpdate, update)
   },
+  diagnostics: {
+    export: () => ipcRenderer.invoke(ipcChannels.diagnosticsExport)
+  },
   events: {
     onSessionEvent: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: TerminalSessionEvent): void => listener(payload)

@@ -85,6 +85,24 @@ describe("SshConnectionManager", () => {
     })
   })
 
+  it("classifies ETIMEDOUT transport failures as retryable timeouts", async () => {
+    const { manager, request, events, setConnectFailure } = createConnectionHarness({})
+    setConnectFailure(Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" }))
+
+    await expect(manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })).rejects.toThrow("ETIMEDOUT")
+
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "timeout" })
+  })
+
+  it("classifies ENOTFOUND resolver failures as DNS errors", async () => {
+    const { manager, request, events, setConnectFailure } = createConnectionHarness({})
+    setConnectFailure(Object.assign(new Error("getaddrinfo ENOTFOUND host.invalid"), { code: "ENOTFOUND" }))
+
+    await expect(manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })).rejects.toThrow("ENOTFOUND")
+
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "dns" })
+  })
+
   it("runs a shared retry immediately without leaving the delayed timer behind", async () => {
     const { clients, manager, request, scheduler } = createConnectionHarness({})
     const lease = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })

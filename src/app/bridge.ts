@@ -151,6 +151,9 @@ function createBrowserPreviewBridge(): RockerBridge {
         return { ...mockSettings }
       }
     },
+    diagnostics: {
+      export: async () => ({ canceled: true })
+    },
     events: {
       onSessionEvent: (listener) => {
         mockListeners.add(listener)

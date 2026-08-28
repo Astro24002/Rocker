@@ -779,6 +779,7 @@
 
 .terminal-connection-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   margin-left: 4px;
@@ -1060,6 +1061,51 @@
 .number-setting {
   min-width: 80px;
   width: 80px;
+}
+
+.settings-action-group {
+  display: flex;
+  max-width: min(100%, 460px);
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-action {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: var(--workspace-raised);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.settings-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--workspace-hover);
+}
+
+.settings-action:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.settings-action-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.settings-action-status-error {
+  color: var(--danger);
 }
 
 .toggle-input {

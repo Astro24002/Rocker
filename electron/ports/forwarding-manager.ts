@@ -6,6 +6,7 @@ import type {
   ConnectionLease,
   ConnectionLeaseController
 } from "../ssh/connection-manager"
+import type { TerminalFailureReason } from "../ssh/types"
 import type { ForwardingInfo, ForwardingSpec } from "./types"
 
 export interface LocalListener {
@@ -23,6 +24,14 @@ export interface ForwardingConnectionAccess extends ConnectionLeaseController, C
 
 export interface ForwardingManagerOptions {
   createListener?: LocalListenerFactory
+  onEvent?: (event: ForwardingEvent) => void
+}
+
+export type ForwardingEvent = {
+  kind: "started" | "resumed" | "suspended" | "stopped" | "error"
+  connectionId: string
+  ownerWebContentsId: number
+  reason?: TerminalFailureReason
 }
 
 interface ForwardingRecord {
@@ -42,9 +51,11 @@ interface ForwardingRecord {
 export class ForwardingManager {
   private readonly records = new Map<string, ForwardingRecord>()
   private readonly createListener: LocalListenerFactory
+  private readonly onEvent?: (event: ForwardingEvent) => void
 
   public constructor(private readonly connections: ForwardingConnectionAccess, options: ForwardingManagerOptions = {}) {
     this.createListener = options.createListener ?? defaultListenerFactory
+    this.onEvent = options.onEvent
     this.connections.onEvent((event) => this.handleConnectionEvent(event))
   }
 
@@ -60,6 +71,7 @@ export class ForwardingManager {
     this.records.set(info.id, record)
     try {
       await this.scheduleActivation(record)
+      this.emit({ kind: "started", connectionId, ownerWebContentsId })
       return this.copyInfo(record)
     } catch (error) {
       await this.releaseLease(record)
@@ -72,6 +84,7 @@ export class ForwardingManager {
     if (!record) throw new Error("Port forwarding was not found")
     if (record.info.status !== "suspended" || !record.lease) throw new Error("Port forwarding is not suspended")
     await this.scheduleActivation(record)
+    this.emit({ kind: "resumed", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId })
     return this.copyInfo(record)
   }
 
@@ -114,6 +127,7 @@ export class ForwardingManager {
     await this.closeCurrentListener(record)
     record.info.status = "stopped"
     delete record.info.error
+    this.emit({ kind: "stopped", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId })
     await this.releaseLease(record)
   }
 
@@ -160,6 +174,7 @@ export class ForwardingManager {
         await closeListener(listener)
       }
       this.setListenerFailure(record, error)
+      this.emit({ kind: "error", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId, reason: forwardingFailureReason(error) })
       await this.releaseLease(record)
       throw new Error(record.info.error)
     }
@@ -197,13 +212,17 @@ export class ForwardingManager {
       record.info.connectionId === event.connectionId && record.ownerWebContentsId === event.ownerWebContentsId
     )
     if (event.kind === "lost") {
-      for (const record of affected) this.suspend(record)
+      for (const record of affected) this.suspend(record, event.reason)
       return
     }
     if (event.kind === "ready") {
       for (const record of affected) {
         if (record.info.status === "suspended" && isLoopback(record.info.localAddress)) {
-          void this.scheduleActivation(record).catch(() => undefined)
+          void this.scheduleActivation(record).then(() => {
+            if (record.info.status === "forwarding") {
+              this.emit({ kind: "resumed", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId })
+            }
+          }).catch(() => undefined)
         }
       }
       return
@@ -213,11 +232,12 @@ export class ForwardingManager {
     }
   }
 
-  private suspend(record: ForwardingRecord): void {
+  private suspend(record: ForwardingRecord, reason: TerminalFailureReason = "network"): void {
     if (!record.lease || record.info.status === "stopped" || record.info.status === "stopping" || record.info.status === "error") return
     this.invalidateActivation(record)
     record.info.status = "suspended"
     delete record.info.error
+    this.emit({ kind: "suspended", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId, reason })
     void this.closeCurrentListener(record)
   }
 
@@ -226,6 +246,7 @@ export class ForwardingManager {
     this.invalidateActivation(record)
     record.info.status = "error"
     record.info.error = reason
+    this.emit({ kind: "error", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId, reason: forwardingFailureReason(reason) })
     void this.closeCurrentListener(record)
     void this.releaseLease(record).catch(() => undefined)
   }
@@ -270,6 +291,14 @@ export class ForwardingManager {
 
   private copyInfo(record: ForwardingRecord): ForwardingInfo {
     return { ...record.info }
+  }
+
+  private emit(event: ForwardingEvent): void {
+    try {
+      this.onEvent?.(event)
+    } catch {
+      // Diagnostics must never change forwarding behavior.
+    }
   }
 }
 
@@ -321,4 +350,16 @@ function isLoopback(address: string): boolean {
 
 function messageFor(error: unknown): string {
   return error instanceof Error && error.message ? error.message : "LOCAL_LISTENER_FAILED"
+}
+
+function forwardingFailureReason(error: unknown): TerminalFailureReason {
+  if (error === "network" || error === "timeout" || error === "dns" || error === "authentication" ||
+    error === "host-key-changed" || error === "host-key-rejected" || error === "configuration" ||
+    error === "channel-ended" || error === "local-port-in-use" || error === "cancelled" || error === "unknown") {
+    return error
+  }
+  const code = error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code).toUpperCase()
+    : ""
+  return code === "EADDRINUSE" || error === "LOCAL_PORT_IN_USE" ? "local-port-in-use" : "unknown"
 }

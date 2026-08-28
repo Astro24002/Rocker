@@ -62,16 +62,21 @@ export function activateSession(state: TerminalWorkspaceState, sessionId: string
 export function applyTerminalState(state: TerminalWorkspaceState, event: TerminalStateEvent): TerminalWorkspaceState {
   return {
     ...state,
-    sessions: state.sessions.map((session) => session.id === event.sessionId
-      ? {
-          ...session,
-          channelGeneration: event.channelGeneration,
-          state: event.state,
-          reason: event.reason,
-          attempt: event.attempt,
-          nextRetryAt: event.nextRetryAt
-        }
-      : session)
+    sessions: state.sessions.map((session) => {
+      if (session.id !== event.sessionId || event.channelGeneration < session.channelGeneration) return session
+      const updated = {
+        ...session,
+        channelGeneration: event.channelGeneration,
+        state: event.state,
+        reason: event.reason,
+        attempt: event.attempt,
+        nextRetryAt: event.nextRetryAt
+      }
+      if (event.reason === undefined) delete updated.reason
+      if (event.attempt === undefined) delete updated.attempt
+      if (event.nextRetryAt === undefined) delete updated.nextRetryAt
+      return updated
+    })
   }
 }
 

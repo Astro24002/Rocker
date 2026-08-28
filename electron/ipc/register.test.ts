@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 const electron = vi.hoisted(() => {
   const handlers = new Map<string, (event: { sender: { id: number } }, ...args: unknown[]) => unknown>()
@@ -15,7 +18,8 @@ const electron = vi.hoisted(() => {
     },
     dialog: {
       showOpenDialog: vi.fn(),
-      showMessageBox: vi.fn()
+      showMessageBox: vi.fn(),
+      showSaveDialog: vi.fn()
     },
     shell: {
       openExternal: vi.fn()
@@ -91,6 +95,37 @@ describe("registerIpcHandlers", () => {
     await expect(invokeFrom(21, ipcChannels.settingsUpdate, { autoReconnect: false })).resolves.toEqual(nextSettings)
     expect(harness.connections.updateRetryPolicy).toHaveBeenCalledWith(nextSettings)
   })
+
+  it("returns a canceled diagnostics export without writing a file", async () => {
+    const harness = createHarness()
+    electron.BrowserWindow.fromWebContents.mockReturnValue(harness.owner)
+    electron.dialog.showSaveDialog.mockResolvedValue({ canceled: true })
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.diagnosticsExport)).resolves.toEqual({ canceled: true })
+    expect(electron.dialog.showSaveDialog).toHaveBeenCalledWith(harness.owner, expect.objectContaining({
+      defaultPath: expect.stringMatching(/^rocker-diagnostics-\d{8}-\d{6}\.json$/)
+    }))
+    expect(harness.diagnostics.snapshot).not.toHaveBeenCalled()
+  })
+
+  it("writes a versioned diagnostics export selected by the owning window", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-ipc-diagnostics-"))
+    try {
+      const target = join(directory, "diagnostics.json")
+      const harness = createHarness()
+      electron.BrowserWindow.fromWebContents.mockReturnValue(harness.owner)
+      electron.dialog.showSaveDialog.mockResolvedValue({ canceled: false, filePath: target })
+      registerIpcHandlers(harness.dependencies)
+
+      await expect(invokeFrom(21, ipcChannels.diagnosticsExport)).resolves.toEqual({ canceled: false, path: target })
+      const payload = JSON.parse(await readFile(target, "utf8")) as { schemaVersion: number; events: unknown[] }
+      expect(payload.schemaVersion).toBe(1)
+      expect(payload.events).toHaveLength(1)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
 })
 
 function invokeFrom(ownerWebContentsId: number, channel: string, ...args: unknown[]): Promise<unknown> {
@@ -127,6 +162,7 @@ function createHarness() {
     updateRetryPolicy: vi.fn()
   }
   const settings = { get: vi.fn(), update: vi.fn() }
+  const diagnostics = { snapshot: vi.fn(() => [{ at: "2026-08-28T12:00:00.000Z", category: "session", action: "connected" }]) }
   const dependencies = {
     hosts: { list: vi.fn(), save: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn() },
     credentials: { get: vi.fn(), set: vi.fn(), clear: vi.fn() },
@@ -137,6 +173,8 @@ function createHarness() {
     monitoring: { sample: vi.fn(), clear: vi.fn() },
     history: { add: vi.fn(), list: vi.fn(), clear: vi.fn() },
     settings,
+    diagnostics,
+    diagnosticsAppVersion: "0.3.1",
     snapshots: { load: vi.fn(), saveWindow: vi.fn(), removeWindow: vi.fn(), flush: vi.fn() },
     windows: {
       windowForWebContents: vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined),
@@ -153,6 +191,7 @@ function createHarness() {
     sessions,
     connections,
     settings,
+    diagnostics,
     ports: dependencies.ports,
     emitSession(event: unknown): void {
       if (!sessionListener) throw new Error("Session listener was not registered")

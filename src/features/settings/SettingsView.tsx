@@ -1,4 +1,5 @@
-import type { ReactNode } from "react"
+import { useState, type ReactNode } from "react"
+import { AlertTriangle, CheckCircle2, Download } from "lucide-react"
 import type { AppSettings } from "../../app/types"
 import type { Locale } from "../../i18n"
 import { useI18n } from "../../i18n"
@@ -8,10 +9,34 @@ interface SettingsViewProps {
   onLocaleChange(locale: Locale): void
   settings: AppSettings
   onUpdate(update: Partial<AppSettings>): void
+  onExportDiagnostics(): Promise<{ canceled: boolean; path?: string }>
 }
 
-export function SettingsView({ locale, onLocaleChange, settings, onUpdate }: SettingsViewProps) {
+type ExportStatus =
+  | { kind: "idle" }
+  | { kind: "success"; path: string }
+  | { kind: "cancelled" }
+  | { kind: "error" }
+
+export function SettingsView({ locale, onLocaleChange, settings, onUpdate, onExportDiagnostics }: SettingsViewProps) {
   const { t } = useI18n()
+  const [exporting, setExporting] = useState(false)
+  const [exportStatus, setExportStatus] = useState<ExportStatus>({ kind: "idle" })
+
+  const exportDiagnostics = async (): Promise<void> => {
+    if (exporting) return
+    setExporting(true)
+    setExportStatus({ kind: "idle" })
+    try {
+      const result = await onExportDiagnostics()
+      setExportStatus(result.canceled || !result.path ? { kind: "cancelled" } : { kind: "success", path: result.path })
+    } catch {
+      setExportStatus({ kind: "error" })
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <section className="settings-view">
       <header className="view-header"><div><span className="view-eyebrow">Rocker</span><h1>{t("settings.title")}</h1><p>{t("settings.subtitle")}</p></div></header>
@@ -27,6 +52,17 @@ export function SettingsView({ locale, onLocaleChange, settings, onUpdate }: Set
         <SettingRow title={t("settings.restorePreviousWorkspace")} description={t("settings.restorePreviousWorkspaceHint")}><input aria-label={t("settings.restorePreviousWorkspace")} className="toggle-input" type="checkbox" checked={settings.restorePreviousWorkspace} onChange={(event) => onUpdate({ restorePreviousWorkspace: event.target.checked })} /></SettingRow>
         <SettingRow title={t("settings.confirmMultilinePaste")} description={t("settings.confirmMultilinePasteHint")}><input aria-label={t("settings.confirmMultilinePaste")} className="toggle-input" type="checkbox" checked={settings.confirmMultilinePaste} onChange={(event) => onUpdate({ confirmMultilinePaste: event.target.checked })} /></SettingRow>
         <SettingRow title={t("settings.defaultBindAddress")} description={t("settings.defaultBindAddressHint")}><select aria-label={t("settings.defaultBindAddress")} value={settings.bindAddress} onChange={(event) => onUpdate({ bindAddress: event.target.value as AppSettings["bindAddress"] })}><option>127.0.0.1</option><option>::1</option><option>0.0.0.0</option></select></SettingRow>
+        <SettingRow title={t("settings.diagnostics")} description={t("settings.diagnosticsHint")}>
+          <div className="settings-action-group">
+            <button className="settings-action" type="button" disabled={exporting} onClick={() => void exportDiagnostics()}>
+              <Download size={15} aria-hidden="true" />
+              {t("settings.exportDiagnostics")}
+            </button>
+            {exportStatus.kind === "success" && <span className="settings-action-status" role="status"><CheckCircle2 size={14} aria-hidden="true" />{t("settings.diagnosticsExported")} {exportStatus.path}</span>}
+            {exportStatus.kind === "cancelled" && <span className="settings-action-status" role="status">{t("settings.diagnosticsExportCancelled")}</span>}
+            {exportStatus.kind === "error" && <span className="settings-action-status settings-action-status-error" role="status"><AlertTriangle size={14} aria-hidden="true" />{t("settings.diagnosticsExportError")}</span>}
+          </div>
+        </SettingRow>
       </div>
     </section>
   )

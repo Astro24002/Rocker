@@ -10,6 +10,7 @@ import {
 } from "../ssh/connection-manager"
 import {
   ForwardingManager,
+  type ForwardingEvent,
   type ForwardingConnectionAccess,
   type LocalListener,
   type LocalListenerFactory
@@ -73,6 +74,21 @@ describe("ForwardingManager", () => {
     expect(forwards.ownerForForwarding(forward.id)).toBe(ownerWebContentsId)
     await forwards.stop(forward.id)
     expect(forwards.ownerForForwarding(forward.id)).toBeUndefined()
+  })
+
+  it("emits bounded lifecycle events for diagnostics", async () => {
+    const connections = new FakeConnections()
+    const events: ForwardingEvent[] = []
+    const forwards = new ForwardingManager(connections, { createListener: createListenerFactory().create, onEvent: (event) => events.push(event) })
+    const forward = await forwards.start(connectionId, loopbackSpec, ownerWebContentsId)
+
+    connections.emit({ kind: "lost", connectionId, ownerWebContentsId, reason: "network" })
+    connections.emit({ kind: "ready", connectionId, ownerWebContentsId, transportGeneration: 2 })
+    await waitFor(() => events.some((event) => event.kind === "resumed"))
+    await forwards.stop(forward.id)
+
+    expect(events.map((event) => event.kind)).toEqual(["started", "suspended", "resumed", "stopped"])
+    expect(events.every((event) => event.connectionId === connectionId && event.ownerWebContentsId === ownerWebContentsId)).toBe(true)
   })
 
   it("deduplicates concurrent manual resumes for one suspended forward", async () => {

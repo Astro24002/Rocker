@@ -6,6 +6,7 @@ import { createSshTestServer, TEST_PASSWORD, TEST_USERNAME } from "./test-fixtur
 const sessions: TerminalSessionManager[] = []
 const fixtures: Array<{ close(): Promise<void> }> = []
 afterEach(async () => {
+  await Promise.all(sessions.splice(0).map((terminal) => terminal.releaseOwner(1)))
   await Promise.all(fixtures.splice(0).map((fixture) => fixture.close()))
 })
 
@@ -14,6 +15,14 @@ class ManualScheduler implements RetryScheduler {
   schedule(_delay: number, action: () => void): number { this.actions.push(action); return this.actions.length }
   cancel(_id: number): void {}
   flush(): void { const actions = this.actions.splice(0); actions.forEach((action) => action()) }
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for SSH integration event")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
 }
 
 function request(port: number, password = TEST_PASSWORD): ResolvedConnectionRequest {
@@ -59,9 +68,9 @@ describe("real SSH terminal integration", () => {
     const second = await terminal.open(openRequest("00000000-0000-4000-8000-000000000004", fixture.port))
     terminal.write(first.sessionId, first.channelGeneration, "ping\n")
     terminal.write(second.sessionId, second.channelGeneration, "pong\n")
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await waitFor(() => events.some((event) => event.event.kind === "output" && new TextDecoder().decode(event.event.packet.bytes).includes("echo: ping")))
     terminal.resize(first.sessionId, first.channelGeneration, { cols: 120, rows: 40 })
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await waitFor(() => fixture.ptyResizes.some((resize) => resize.cols === 120 && resize.rows === 40))
     expect(events.some((event) => event.event.kind === "output" && new TextDecoder().decode(event.event.packet.bytes).includes("世界"))).toBe(true)
     expect(fixture.connectionCount).toBe(1)
     expect(fixture.ptyResizes).toContainEqual(expect.objectContaining({ cols: 120, rows: 40 }))
@@ -71,8 +80,10 @@ describe("real SSH terminal integration", () => {
     const fixture = await createSshTestServer(); fixtures.push(fixture)
     const scheduler = new ManualScheduler(); const { terminal, events } = setup(fixture.port, request(fixture.port), scheduler)
     const opened = await terminal.open(openRequest("00000000-0000-4000-8000-000000000005", fixture.port))
-    fixture.dropTransports(); await new Promise((resolve) => setTimeout(resolve, 20)); scheduler.flush()
-    await new Promise((resolve) => setTimeout(resolve, 80))
+    fixture.dropTransports()
+    await waitFor(() => events.some((event) => event.event.kind === "state" && event.event.state === "reconnecting"))
+    scheduler.flush()
+    await waitFor(() => events.some((event) => event.event.kind === "state" && event.event.notice === "reconnected" && event.event.channelGeneration > opened.channelGeneration))
     const states = events.map((event) => event.event).filter((event) => event.kind === "state")
     expect(states.some((event) => event.state === "reconnecting")).toBe(true)
     expect(states.some((event) => event.notice === "reconnected" && event.channelGeneration > opened.channelGeneration)).toBe(true)
@@ -94,14 +105,17 @@ describe("real SSH terminal integration", () => {
       const events: any[] = []; const terminal = new TerminalSessionManager({ connections, onEvent: (event) => events.push(event) }); sessions.push(terminal); return { terminal, events }
     })()
     await expect(terminal.open(openRequest("00000000-0000-4000-8000-000000000007", fixture.port))).rejects.toThrow()
-    expect(events.at(-1).event).toMatchObject({ state: "error" }); expect(replacementCalls).toHaveLength(0)
+    expect(events.at(-1).event).toMatchObject({ state: "error", reason: "host-key-changed" }); expect(replacementCalls).toHaveLength(0)
   })
 
   it("does not recover after the only terminal session is closed", async () => {
     const fixture = await createSshTestServer(); fixtures.push(fixture)
     const scheduler = new ManualScheduler(); const { terminal, events } = setup(fixture.port, request(fixture.port), scheduler)
     const opened = await terminal.open(openRequest("00000000-0000-4000-8000-000000000008", fixture.port))
-    await terminal.close(opened.sessionId); fixture.dropTransports(); scheduler.flush(); await new Promise((resolve) => setTimeout(resolve, 20))
+    await terminal.close(opened.sessionId)
+    fixture.dropTransports()
+    scheduler.flush()
+    await new Promise((resolve) => setImmediate(resolve))
     expect(events.some((event) => event.event.notice === "reconnected")).toBe(false)
   })
 })

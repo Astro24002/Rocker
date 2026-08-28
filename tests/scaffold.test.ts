@@ -16,6 +16,7 @@ describe("rocker package scaffold", () => {
       dev: expect.any(String),
       build: expect.any(String),
       test: expect.any(String),
+      "test:electron": expect.any(String),
       typecheck: expect.any(String)
     })
   })

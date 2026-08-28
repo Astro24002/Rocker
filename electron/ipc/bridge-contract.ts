@@ -10,6 +10,11 @@ import type { HostMetrics } from "../monitoring/linux-metrics"
 import type { DiscoveredPort, ForwardingInfo, ForwardingSpec } from "../ports/types"
 import type { TerminalSessionEvent, TerminalSessionInfo } from "../ssh/types"
 
+export interface DiagnosticsExportResult {
+  canceled: boolean
+  path?: string
+}
+
 export interface HostSaveRequest {
   profile: HostProfile
   credentials?: {
@@ -85,6 +90,9 @@ export interface RockerBridge {
     get(): Promise<AppSettings>
     update(update: Partial<AppSettings>): Promise<AppSettings>
   }
+  diagnostics: {
+    export(): Promise<DiagnosticsExportResult>
+  }
   events: {
     onSessionEvent(listener: (event: TerminalSessionEvent) => void): () => void
     onSessionLaunch(listener: (request: SessionLaunchRequest) => void): () => void
@@ -120,6 +128,7 @@ export const ipcChannels = {
   historyClear: "rocker:history:clear",
   settingsGet: "rocker:settings:get",
   settingsUpdate: "rocker:settings:update",
+  diagnosticsExport: "rocker:diagnostics:export",
   windowMinimize: "rocker:window:minimize",
   windowToggleMaximize: "rocker:window:toggle-maximize",
   windowClose: "rocker:window:close",

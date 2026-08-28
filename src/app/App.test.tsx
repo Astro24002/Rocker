@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { RockerBridge } from "../../electron/ipc/bridge-contract"
 import type { TerminalSessionEvent } from "../../electron/ssh/types"
@@ -23,6 +24,7 @@ vi.mock("../features/terminal/TerminalWorkspace", async () => {
   return {
     TerminalWorkspace: (props: {
       workspace: TerminalWorkspaceState
+      overlay?: ReactNode
       onController(sessionId: string, controller: typeof terminalHarness.controller | undefined): void
       onResize(sessionId: string, channelGeneration: number, dimensions: { cols: number; rows: number }): void
     }) => {
@@ -35,7 +37,7 @@ vi.mock("../features/terminal/TerminalWorkspace", async () => {
           props.onResize(session.id, session.channelGeneration, session.dimensions ?? { cols: 120, rows: 40 })
         }
       }, [props.workspace, props.onController, props.onResize])
-      return <div data-testid="terminal-workspace-mock">{props.workspace.sessions.map((session) => <span key={session.id}>{session.label}</span>)}</div>
+      return <><div data-testid="terminal-workspace-mock">{props.workspace.sessions.map((session) => <span key={session.id}>{session.label}</span>)}</div>{props.overlay}</>
     }
   }
 })
@@ -153,6 +155,33 @@ describe("desktop workspace shell", () => {
     expect(bridge.sessions.cancelReconnect).not.toHaveBeenCalled()
   })
 
+  it("routes terminal recovery actions through the bridge and closes only explicitly", async () => {
+    bridge.hosts.list.mockResolvedValue([host])
+    bridge.workspace.load.mockResolvedValue(workspaceSnapshot(host.id))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    await waitFor(() => expect(sessionListener).toBeTypeOf("function"))
+    const sessionId = workspace().sessions[0].id
+    act(() => sessionListener!({ kind: "state", sessionId, connectionId: "connection-1", channelGeneration: 1, state: "reconnecting", attempt: 2 }))
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Reconnect now" })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect now" }))
+    expect(bridge.sessions.reconnect).toHaveBeenCalledWith(sessionId)
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel reconnect" }))
+    expect(bridge.sessions.cancelReconnect).toHaveBeenCalledWith(sessionId)
+
+    act(() => sessionListener!({ kind: "state", sessionId, connectionId: "connection-1", channelGeneration: 1, state: "disconnected", reason: "cancelled" }))
+    expect(screen.getByTestId("terminal-workspace-mock")).toBeInTheDocument()
+
+    act(() => sessionListener!({ kind: "state", sessionId, connectionId: "connection-1", channelGeneration: 1, state: "error", reason: "authentication" }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close session" })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole("button", { name: "Close session" }))
+    expect(bridge.sessions.close).toHaveBeenCalledWith(sessionId)
+    expect(screen.queryByTestId("terminal-workspace-mock")).not.toBeInTheDocument()
+  })
+
   it("submits hydrated workspace metadata without a renderer-side debounce", async () => {
     vi.useFakeTimers()
     try {
@@ -236,6 +265,7 @@ function createBridge() {
       get: vi.fn(async () => ({ locale: "en" as const, sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited" as const, restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1" as const })),
       update: vi.fn(async (update: object) => ({ locale: "en" as const, sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited" as const, restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1" as const, ...update }))
     },
+    diagnostics: { export: vi.fn(async () => ({ canceled: true })) },
     events: {
       onSessionEvent: vi.fn((listener: (event: TerminalSessionEvent) => void) => {
         sessionListener = listener

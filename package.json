@@ -10,6 +10,7 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:electron": "vitest run --project=electron",
     "electron": "electron-vite dev",
     "dist": "npm run build && electron-builder --config electron-builder.yml --win --mac",
     "dist:win": "npm run build && electron-builder --config electron-builder.yml --win",

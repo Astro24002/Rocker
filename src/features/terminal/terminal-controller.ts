@@ -46,7 +46,7 @@ export class TerminalController {
   }
 
   public setChannelGeneration(generation: number): void {
-    if (this.disposed || !Number.isSafeInteger(generation) || generation < 0 || generation === this.channelGeneration) return
+    if (this.disposed || !Number.isSafeInteger(generation) || generation < 0 || generation <= this.channelGeneration) return
     this.channelGeneration = generation
     this.nextSequence = 1
     for (let index = this.queue.length - 1; index >= 0; index -= 1) {

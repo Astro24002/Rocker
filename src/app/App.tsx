@@ -408,6 +408,7 @@ function Workspace() {
                   session={activeSession}
                   onCancel={() => { if (activeSession) void bridge.sessions.cancelReconnect(activeSession.id).catch(() => undefined) }}
                   onReconnectNow={() => { if (activeSession) void bridge.sessions.reconnect(activeSession.id).catch(() => undefined) }}
+                  onClose={() => { if (activeSession) closeTerminalSession(activeSession) }}
                 />}
                 monitor={monitor}
                 monitorHostName={activeHost?.name}
@@ -424,7 +425,7 @@ function Workspace() {
             </div>
           )}
           {activeNav === "settings" ? (
-            <SettingsView locale={locale} settings={settings} onLocaleChange={(next) => { setLocale(next); updateSettings({ locale: next }) }} onUpdate={updateSettings} />
+            <SettingsView locale={locale} settings={settings} onLocaleChange={(next) => { setLocale(next); updateSettings({ locale: next }) }} onUpdate={updateSettings} onExportDiagnostics={() => bridge.diagnostics.export()} />
           ) : activeNav === "terminal" ? (
             workspace.sessions.length === 0 ? hostList : null
           ) : activeNav === "hosts" ? (
@@ -525,14 +526,27 @@ function validDimensions(cols: number, rows: number): boolean {
   return Number.isInteger(cols) && cols >= 1 && cols <= 1_000 && Number.isInteger(rows) && rows >= 1 && rows <= 1_000
 }
 
-function failureReasonFor(error: unknown): TerminalFailureReason {
+export function failureReasonFor(error: unknown): TerminalFailureReason {
+  const typedReason = error && typeof error === "object" && "reason" in error
+    ? (error as { reason?: unknown }).reason
+    : undefined
+  if (isTerminalFailureReason(typedReason)) return typedReason
   const message = error instanceof Error ? error.message.toLowerCase() : ""
+  const code = error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code).toLowerCase()
+    : ""
   if (message.includes("host key") && message.includes("changed")) return "host-key-changed"
   if (message.includes("host key")) return "host-key-rejected"
   if (message.includes("auth")) return "authentication"
   if (message.includes("credential") || message.includes("configuration") || message.includes("host profile")) return "configuration"
-  if (message.includes("timeout")) return "timeout"
-  if (message.includes("dns") || message.includes("enotfound")) return "dns"
+  if (message.includes("timeout") || message.includes("timed out") || message.includes("etimedout") || code === "etimedout") return "timeout"
+  if (message.includes("dns") || message.includes("enotfound") || code === "enotfound" || code === "eai_again" || code === "eai_fail") return "dns"
   if (message.includes("cancel")) return "cancelled"
   return "unknown"
+}
+
+function isTerminalFailureReason(value: unknown): value is TerminalFailureReason {
+  return value === "network" || value === "timeout" || value === "dns" || value === "authentication" ||
+    value === "host-key-changed" || value === "host-key-rejected" || value === "configuration" ||
+    value === "channel-ended" || value === "local-port-in-use" || value === "cancelled" || value === "unknown"
 }

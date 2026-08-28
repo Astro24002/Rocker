@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { BrowserWindow, dialog, ipcMain, shell } from "electron"
 import type { OpenDialogOptions } from "electron"
+import type { DiagnosticLogger } from "../diagnostics/diagnostic-logger"
+import { diagnosticFileName, writeDiagnosticExport } from "../diagnostics/diagnostic-export"
 import type { ForwardingManager } from "../ports/forwarding-manager"
 import type { PortService } from "../ports/port-service"
 import type { ForwardingSpec } from "../ports/types"
@@ -37,6 +39,8 @@ export interface IpcDependencies {
   monitoring: LinuxMetricsSampler
   history: HistoryStore
   settings: SettingsStore
+  diagnostics: DiagnosticLogger
+  diagnosticsAppVersion?: string
   windows: WorkspaceWindowManager
   createDuplicateWindow?(hostId: string): Promise<void>
 }
@@ -165,6 +169,30 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     const next = await dependencies.settings.update(normalizeSettingsUpdate(update))
     dependencies.connections.updateRetryPolicy(next)
     return next
+  })
+  ipcMain.handle(ipcChannels.diagnosticsExport, async (event) => {
+    const target = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: "Export Rocker diagnostics",
+      defaultPath: diagnosticFileName(),
+      filters: [{ name: "JSON files", extensions: ["json"] }]
+    }
+    const result = target
+      ? await dialog.showSaveDialog(target, options)
+      : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return { canceled: true }
+    try {
+      await writeDiagnosticExport(result.filePath, {
+        logger: dependencies.diagnostics,
+        settings: await dependencies.settings.get(),
+        appVersion: dependencies.diagnosticsAppVersion,
+        platform: process.platform,
+        arch: process.arch
+      })
+      return { canceled: false, path: result.filePath }
+    } catch {
+      throw new Error("Diagnostics export failed")
+    }
   })
   ipcMain.handle(ipcChannels.windowMinimize, (event) => BrowserWindow.fromWebContents(event.sender)?.minimize())
   ipcMain.handle(ipcChannels.windowToggleMaximize, (event) => {

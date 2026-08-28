@@ -60,6 +60,39 @@ describe("terminal workspace state", () => {
     })
   })
 
+  it("ignores a stale state event from an older channel generation", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "one", hostId: "host-a", label: "A" })
+    state = applyTerminalState(state, {
+      kind: "state",
+      sessionId: "one",
+      channelGeneration: 2,
+      state: "connected"
+    })
+    state = applyTerminalState(state, {
+      kind: "state",
+      sessionId: "one",
+      channelGeneration: 1,
+      state: "error",
+      reason: "network"
+    })
+
+    expect(state.sessions[0]).toMatchObject({ state: "connected", channelGeneration: 2 })
+  })
+
+  it("clears retry metadata when a current generation reaches a terminal state", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "one", hostId: "host-a", label: "A" })
+    state = applyTerminalState(state, {
+      kind: "state", sessionId: "one", channelGeneration: 1, state: "reconnecting", attempt: 3,
+      nextRetryAt: "2026-08-19T12:00:00.000Z", reason: "network"
+    })
+    state = applyTerminalState(state, { kind: "state", sessionId: "one", channelGeneration: 1, state: "connected" })
+
+    expect(state.sessions[0]).toMatchObject({ state: "connected", channelGeneration: 1 })
+    expect(state.sessions[0]).not.toHaveProperty("attempt")
+    expect(state.sessions[0]).not.toHaveProperty("nextRetryAt")
+    expect(state.sessions[0]).not.toHaveProperty("reason")
+  })
+
   it("activates an existing session without changing session metadata", () => {
     let state = openSession(createTerminalWorkspaceState(), { id: "one", hostId: "host-a", label: "A" })
     state = openSession(state, { id: "two", hostId: "host-b", label: "B" })

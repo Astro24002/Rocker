@@ -22,15 +22,38 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - name: Audit production dependencies
+        shell: bash
+        run: |
+          set -o pipefail
+          audit_log="$(mktemp)"
+          if ! npm_config_registry=https://registry.npmjs.org npm audit --omit=dev --audit-level=moderate >"$audit_log" 2>&1; then
+            cat "$audit_log"
+            if grep -Eqi 'EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed|audit endpoint|service unavailable|registry unavailable' "$audit_log"; then
+              echo "::error::npm audit endpoint unavailable at https://registry.npmjs.org"
+            else
+              echo "::error::npm audit reported vulnerabilities or failed"
+            fi
+            rm -f "$audit_log"
+            exit 1
+          fi
+          cat "$audit_log"
+          rm -f "$audit_log"
 
   package:
+    needs: verify
     strategy:
       matrix:
         include:
           - os: windows-latest
             command: npm run dist:win
+            artifacts: |
+              release/Rocker-v*.exe
           - os: macos-14
             command: npm run dist:mac
+            artifacts: |
+              release/Rocker-v*.dmg
+              release/Rocker-v*.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +66,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: rocker-${{ runner.os }}
-          path: release/*
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -81,6 +105,8 @@ jobs:
           done
 
           release_version="${GITHUB_REF_NAME#v}"
+          node scripts/verify-release-assets.mjs "$release_version" release
+          missing=0
           for asset in \
             "release/Rocker-v${release_version}-x64.exe" \
             "release/Rocker-v${release_version}-arm64.exe" \
@@ -92,5 +118,9 @@ jobs:
               gh release upload "$GITHUB_REF_NAME" "$asset" \
                 --repo "$GITHUB_REPOSITORY" \
                 --clobber
+            else
+              echo "::error::Missing expected release asset: $asset"
+              missing=1
             fi
           done
+          exit "$missing"

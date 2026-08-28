@@ -28,6 +28,16 @@ describe("TerminalController", () => {
     expect(terminal.writes.map((bytes) => Buffer.from(bytes).toString("utf8"))).toEqual(["b", "c"])
   })
 
+  it("ignores a state event that moves the channel generation backwards", () => {
+    const { controller, terminal } = createHarness()
+    controller.setChannelGeneration(2)
+    controller.setConnected(true)
+    controller.setChannelGeneration(1)
+    controller.acceptOutput({ sessionId, channelGeneration: 1, sequence: 1, bytes: Uint8Array.of(0x73) })
+
+    expect(terminal.writes).toHaveLength(0)
+  })
+
   it("sends a resize only for a changed valid fitted grid", () => {
     const { controller, fit, callbacks } = createHarness()
     fit.dimensions
