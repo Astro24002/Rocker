@@ -127,13 +127,9 @@ export class WorkspaceWindowManager {
     return [...this.windows.keys()]
   }
 
-  public async loadWorkspace(owner: RuntimeOwner): Promise<StoredWorkspaceWindow | undefined>
-  /** @deprecated Use the exact renderer owner. */
-  public async loadWorkspace(ownerWebContentsId: number): Promise<StoredWorkspaceWindow | undefined>
-  public async loadWorkspace(ownerOrWebContentsId: RuntimeOwner | number): Promise<StoredWorkspaceWindow | undefined> {
-    const owner = this.ownerFromInput(ownerOrWebContentsId)
-    const window = owner ? this.windowForOwner(owner) : undefined
-    if (!owner || !window) return undefined
+  public async loadWorkspace(owner: RuntimeOwner): Promise<StoredWorkspaceWindow | undefined> {
+    const window = this.windowForOwner(owner)
+    if (!window) return undefined
     const workspaceId = this.workspaceForWebContents(owner.webContentsId)
     if (!workspaceId) return undefined
     const snapshot = await this.options.snapshots.load()
@@ -144,19 +140,9 @@ export class WorkspaceWindowManager {
   public saveWorkspace(
     owner: RuntimeOwner,
     snapshot: Omit<StoredWorkspaceWindow, "workspaceId" | "bounds" | "maximized">
-  ): void
-  /** @deprecated Use the exact renderer owner. */
-  public saveWorkspace(
-    ownerWebContentsId: number,
-    snapshot: Omit<StoredWorkspaceWindow, "workspaceId" | "bounds" | "maximized">
-  ): void
-  public saveWorkspace(
-    ownerOrWebContentsId: RuntimeOwner | number,
-    snapshot: Omit<StoredWorkspaceWindow, "workspaceId" | "bounds" | "maximized">
   ): void {
-    const owner = this.ownerFromInput(ownerOrWebContentsId)
-    const window = owner ? this.windowForOwner(owner) : undefined
-    const workspaceId = owner ? this.workspaceForWebContents(owner.webContentsId) : undefined
+    const window = this.windowForOwner(owner)
+    const workspaceId = this.workspaceForWebContents(owner.webContentsId)
     if (!workspaceId || !window || window.isDestroyed()) throw new Error("Workspace window was not found")
     this.options.snapshots.saveWindow({
       ...snapshot,
@@ -197,12 +183,6 @@ export class WorkspaceWindowManager {
     } catch {
       // Window-close cleanup is best effort and must not escape the close handler.
     }
-  }
-
-  private ownerFromInput(ownerOrWebContentsId: RuntimeOwner | number): RuntimeOwner | undefined {
-    return typeof ownerOrWebContentsId === "number"
-      ? this.currentOwnerForWebContents(ownerOrWebContentsId)
-      : ownerOrWebContentsId
   }
 
   private invalidateRenderer(

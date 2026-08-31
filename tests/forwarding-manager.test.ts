@@ -7,7 +7,7 @@ import type {
   ConnectionEvent,
   ConnectionLease
 } from "../electron/ssh/connection-manager"
-import type { RuntimeOwner } from "../electron/runtime/owner"
+import { sameRuntimeOwner, type RuntimeOwner } from "../electron/runtime/owner"
 
 const occupiedServers: Server[] = []
 const owner7: RuntimeOwner = { webContentsId: 7, rendererGeneration: 1 }
@@ -79,7 +79,7 @@ function createConnections(): ForwardingConnectionAccess {
     release: async (leaseId) => { leases.delete(leaseId) },
     releaseOwner: async (owner) => {
       for (const lease of [...leases.values()]) {
-        if (lease.owner === owner) leases.delete(lease.id)
+        if (sameRuntimeOwner(lease.owner, owner)) leases.delete(lease.id)
       }
     },
     releaseWebContents: async (webContentsId) => {

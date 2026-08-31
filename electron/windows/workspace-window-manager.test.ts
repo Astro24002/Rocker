@@ -10,6 +10,13 @@ import type { StoredWorkspaceDocument, StoredWorkspaceWindow } from "../storage/
 const firstWorkspace = "11111111-1111-4111-8111-111111111111"
 const secondWorkspace = "22222222-2222-4222-8222-222222222222"
 
+type IsExactRuntimeOwner<T> = T extends RuntimeOwner
+  ? RuntimeOwner extends T ? true : false
+  : false
+type Assert<T extends true> = T
+type LoadWorkspaceOwnerIsExact = Assert<IsExactRuntimeOwner<Parameters<WorkspaceWindowManager["loadWorkspace"]>[0]>>
+type SaveWorkspaceOwnerIsExact = Assert<IsExactRuntimeOwner<Parameters<WorkspaceWindowManager["saveWorkspace"]>[0]>>
+
 describe("WorkspaceWindowManager", () => {
   it("keeps snapshots during app quit but removes a manually closed window", async () => {
     const store = createStore()
@@ -80,19 +87,22 @@ describe("WorkspaceWindowManager", () => {
   it("releases renderer-owned runtime resources after a completed renderer reload", async () => {
     const store = createStore()
     const windows = createWindowFactory()
-    const onRendererReload = vi.fn(async () => undefined)
+    const onRendererReleased = vi.fn(async () => undefined)
     const manager = new WorkspaceWindowManager({
       snapshots: store,
       createWindow: windows.create,
-      onRendererReload
-    } as unknown as ConstructorParameters<typeof WorkspaceWindowManager>[0])
+      onRendererReleased
+    })
     const window = manager.createNew(createWorkspace(firstWorkspace)) as FakeWindow
 
     window.webContents.emit("did-finish-load")
     window.webContents.emit("did-start-loading")
     await flush()
 
-    expect(onRendererReload).toHaveBeenCalledWith(window.webContents.id)
+    expect(onRendererReleased).toHaveBeenCalledWith({
+      webContentsId: window.webContents.id,
+      rendererGeneration: 1
+    })
     expect(manager.workspaceForWebContents(window.webContents.id)).toBe(firstWorkspace)
     expect(store.removeWindow).not.toHaveBeenCalled()
   })

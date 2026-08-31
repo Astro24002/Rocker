@@ -81,6 +81,9 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     const owner = currentOwnerForWebContents(dependencies, event.sender.id)
     const host = (await dependencies.hosts.list()).find((candidate) => candidate.id === request.hostId)
     if (!host) throw new Error("Host profile not found")
+    if (!sameRuntimeOwner(currentOwnerForWebContents(dependencies, event.sender.id), owner)) {
+      throw new Error("Renderer owner was replaced")
+    }
     try {
       const session = await dependencies.sessions.open({ ...request, owner })
       await dependencies.history.add({ id: randomUUID(), hostId: host.id, connectedAt: new Date().toISOString(), durationMs: 0, outcome: "connected" })

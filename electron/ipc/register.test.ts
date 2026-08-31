@@ -32,10 +32,12 @@ vi.mock("electron", () => electron)
 import { ipcChannels } from "./bridge-contract"
 import { registerIpcHandlers, type IpcDependencies } from "./register"
 import type { RuntimeOwner } from "../runtime/owner"
+import type { HostProfile } from "../storage/types"
 
 const sessionId = "11111111-1111-4111-8111-111111111111"
 const connectionId = "22222222-2222-4222-8222-222222222222"
 const owner21: RuntimeOwner = { webContentsId: 21, rendererGeneration: 1 }
+const owner21Generation2: RuntimeOwner = { webContentsId: 21, rendererGeneration: 2 }
 const owner22: RuntimeOwner = { webContentsId: 22, rendererGeneration: 1 }
 
 describe("registerIpcHandlers", () => {
@@ -67,6 +69,41 @@ describe("registerIpcHandlers", () => {
 
     await expect(invokeFrom(22, ipcChannels.sessionClose, sessionId)).rejects.toThrow("Session is owned by another window")
     expect(harness.sessions.close).not.toHaveBeenCalled()
+  })
+
+  it("rejects session open when the renderer owner changes while hosts are listed", async () => {
+    const harness = createHarness()
+    let resolveHosts!: (hosts: HostProfile[]) => void
+    const hostsListed = new Promise<HostProfile[]>((resolve) => { resolveHosts = resolve })
+    harness.hosts.list.mockReturnValueOnce(hostsListed)
+    harness.windows.currentOwnerForWebContents
+      .mockReturnValueOnce(owner21)
+      .mockReturnValue(owner21Generation2)
+    registerIpcHandlers(harness.dependencies)
+
+    const opening = invokeFrom(21, ipcChannels.sessionOpen, {
+      sessionId,
+      hostId: "host-a",
+      cols: 80,
+      rows: 24
+    })
+    await flush()
+
+    expect(harness.hosts.list).toHaveBeenCalledOnce()
+    resolveHosts([{
+      id: "host-a",
+      name: "Host A",
+      host: "127.0.0.1",
+      port: 22,
+      username: "rock",
+      authMethod: "password",
+      favorite: false,
+      notes: ""
+    }])
+
+    await expect(opening).rejects.toThrow("Renderer owner was replaced")
+    expect(harness.windows.currentOwnerForWebContents).toHaveBeenCalledTimes(2)
+    expect(harness.sessions.open).not.toHaveBeenCalled()
   })
 
   it("rejects a port scan for a connection owned by another window", async () => {
@@ -166,8 +203,16 @@ function createHarness() {
   }
   const settings = { get: vi.fn(), update: vi.fn() }
   const diagnostics = { snapshot: vi.fn(() => [{ at: "2026-08-28T12:00:00.000Z", category: "session", action: "connected" }]) }
+  const hosts = { list: vi.fn(), save: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn() }
+  const windows = {
+    currentOwnerForWebContents: vi.fn((id: number) => id === owner21.webContentsId ? owner21 : id === owner22.webContentsId ? owner22 : undefined),
+    windowForWebContents: vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined),
+    workspaceForWebContents: vi.fn(),
+    saveWorkspace: vi.fn(),
+    loadWorkspace: vi.fn()
+  }
   const dependencies = {
-    hosts: { list: vi.fn(), save: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn() },
+    hosts,
     credentials: { get: vi.fn(), set: vi.fn(), clear: vi.fn() },
     sessions,
     connections,
@@ -179,17 +224,13 @@ function createHarness() {
     diagnostics,
     diagnosticsAppVersion: "0.3.1",
     snapshots: { load: vi.fn(), saveWindow: vi.fn(), removeWindow: vi.fn(), flush: vi.fn() },
-    windows: {
-      currentOwnerForWebContents: vi.fn((id: number) => id === owner21.webContentsId ? owner21 : id === owner22.webContentsId ? owner22 : undefined),
-      windowForWebContents: vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined),
-      workspaceForWebContents: vi.fn(),
-      saveWorkspace: vi.fn(),
-      loadWorkspace: vi.fn()
-    },
+    windows,
     createDuplicateWindow: vi.fn()
   } as unknown as IpcDependencies
   return {
     dependencies,
+    hosts,
+    windows,
     owner,
     other,
     sessions,
@@ -209,4 +250,8 @@ function createWindow(id: number) {
     isDestroyed: vi.fn(() => false),
     webContents: { id, send: vi.fn() }
   }
+}
+
+async function flush(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
 }
