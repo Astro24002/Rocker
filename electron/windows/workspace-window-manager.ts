@@ -18,8 +18,12 @@ export interface WorkspaceWindow {
     on(event: "did-finish-load" | "did-start-loading" | "render-process-gone", listener: () => void): void
   }
   once(event: "closed", listener: () => void): void
-  on(event: "close" | "move" | "resize", listener: () => void): void
+  on(event: "close" | "move" | "resize" | "focus", listener: () => void): void
   isDestroyed(): boolean
+  isMinimized(): boolean
+  restore(): void
+  show(): void
+  focus(): void
   getBounds(): { x: number; y: number; width: number; height: number }
   isMaximized(): boolean
   maximize(): void
@@ -47,6 +51,7 @@ interface RendererGenerationRecord {
 export class WorkspaceWindowManager {
   private readonly workspaceByWebContentsId = new Map<number, string>()
   private readonly windows = new Map<number, WorkspaceWindow>()
+  private readonly focusedWebContentsIds = new Set<number>()
   private readonly rendererGenerations = new Map<number, RendererGenerationRecord>()
   private quitting = false
 
@@ -82,10 +87,21 @@ export class WorkspaceWindowManager {
     window.on("move", () => this.captureWindowBounds(ownerWebContentsId))
     window.on("resize", () => this.captureWindowBounds(ownerWebContentsId))
     window.on("close", () => this.captureWindowBounds(ownerWebContentsId))
+    window.on("focus", () => this.recordFocus(window, ownerWebContentsId))
     window.once("closed", () => {
       void this.handleClosed(ownerWebContentsId)
     })
     return window
+  }
+
+  public focusMostRecentOrCreate(): WorkspaceWindow {
+    const target = this.mostRecentLiveWindow()
+    if (!target) return this.createNew()
+
+    if (target.isMinimized()) target.restore()
+    target.show()
+    target.focus()
+    return target
   }
 
   public async restoreWindows(): Promise<WorkspaceWindow[]> {
@@ -159,6 +175,7 @@ export class WorkspaceWindowManager {
   public removeWorkspaceForWindow(ownerWebContentsId: number): void {
     this.workspaceByWebContentsId.delete(ownerWebContentsId)
     this.windows.delete(ownerWebContentsId)
+    this.focusedWebContentsIds.delete(ownerWebContentsId)
     const rendererRecord = this.rendererGenerations.get(ownerWebContentsId)
     if (rendererRecord) rendererRecord.owner = undefined
   }
@@ -224,5 +241,33 @@ export class WorkspaceWindowManager {
       bounds: window.getBounds(),
       maximized: window.isMaximized()
     })
+  }
+
+  private recordFocus(window: WorkspaceWindow, ownerWebContentsId: number): void {
+    if (this.windows.get(ownerWebContentsId) !== window || window.isDestroyed()) return
+    this.focusedWebContentsIds.delete(ownerWebContentsId)
+    this.focusedWebContentsIds.add(ownerWebContentsId)
+  }
+
+  private mostRecentLiveWindow(): WorkspaceWindow | undefined {
+    const focusedIds = [...this.focusedWebContentsIds].reverse()
+    for (const ownerWebContentsId of focusedIds) {
+      const window = this.windowForLiveWebContents(ownerWebContentsId)
+      if (window) return window
+    }
+
+    const entries = [...this.windows.entries()].reverse()
+    for (const [ownerWebContentsId] of entries) {
+      const window = this.windowForLiveWebContents(ownerWebContentsId)
+      if (window) return window
+    }
+
+    return undefined
+  }
+
+  private windowForLiveWebContents(ownerWebContentsId: number): WorkspaceWindow | undefined {
+    const window = this.windows.get(ownerWebContentsId)
+    if (!window || window.isDestroyed()) return undefined
+    return window
   }
 }

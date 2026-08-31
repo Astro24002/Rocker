@@ -216,6 +216,54 @@ describe("WorkspaceWindowManager", () => {
     expect(store.removeWindow).toHaveBeenCalledWith(firstWorkspace)
     expect(onWindowClosed).toHaveBeenCalledWith(window.webContents.id)
   })
+
+  it("restores and focuses the most recently focused live window", () => {
+    const store = createStore()
+    const windows = createWindowFactory()
+    const manager = new WorkspaceWindowManager({ snapshots: store, createWindow: windows.create })
+    const first = manager.createNew(createWorkspace(firstWorkspace)) as FakeWindow
+    const second = manager.createNew(createWorkspace(secondWorkspace)) as FakeWindow
+    vi.mocked(second.isMinimized).mockReturnValue(true)
+
+    first.emit("focus")
+    second.emit("focus")
+
+    expect(manager.focusMostRecentOrCreate()).toBe(second)
+    expect(second.restore).toHaveBeenCalledOnce()
+    expect(second.show).toHaveBeenCalledOnce()
+    expect(second.focus).toHaveBeenCalledOnce()
+    expect(first.focus).not.toHaveBeenCalled()
+  })
+
+  it("skips destroyed windows when focusing the most recent live window", () => {
+    const store = createStore()
+    const windows = createWindowFactory()
+    const manager = new WorkspaceWindowManager({ snapshots: store, createWindow: windows.create })
+    const first = manager.createNew(createWorkspace(firstWorkspace)) as FakeWindow
+    const second = manager.createNew(createWorkspace(secondWorkspace)) as FakeWindow
+
+    first.emit("focus")
+    second.emit("focus")
+    vi.mocked(second.isDestroyed).mockReturnValue(true)
+
+    expect(manager.focusMostRecentOrCreate()).toBe(first)
+    expect(first.show).toHaveBeenCalledOnce()
+    expect(first.focus).toHaveBeenCalledOnce()
+    expect(second.focus).not.toHaveBeenCalled()
+  })
+
+  it("creates a window when no live windows remain", () => {
+    const store = createStore()
+    const windows = createWindowFactory()
+    const manager = new WorkspaceWindowManager({ snapshots: store, createWindow: windows.create })
+    const existing = manager.createNew(createWorkspace(firstWorkspace)) as FakeWindow
+    vi.mocked(existing.isDestroyed).mockReturnValue(true)
+
+    const created = manager.focusMostRecentOrCreate()
+
+    expect(windows.create).toHaveBeenCalledTimes(2)
+    expect(created).toBe(windows.created[1])
+  })
 })
 
 function createStore(document: StoredWorkspaceDocument = { version: 1, windows: [] }) {
@@ -265,6 +313,10 @@ function createWindow(id: number): FakeWindow {
       emit: (event: string) => webContentsListeners.get(event)?.forEach((listener) => listener())
     },
     maximize: vi.fn(),
+    isMinimized: vi.fn(() => false),
+    restore: vi.fn(),
+    show: vi.fn(),
+    focus: vi.fn(),
     isDestroyed: vi.fn(() => false),
     getBounds: vi.fn(() => ({ x: 18, y: 24, width: 1440, height: 900 })),
     isMaximized: vi.fn(() => false),
@@ -279,12 +331,16 @@ function createWindow(id: number): FakeWindow {
   }
 }
 
-interface FakeWindow extends WorkspaceWindow {
+type FakeWindow = Omit<WorkspaceWindow, "maximize" | "isMinimized" | "restore" | "show" | "focus" | "on"> & {
   webContents: WorkspaceWindow["webContents"] & {
     on(event: string, listener: () => void): void
     emit(event: string): void
   }
   maximize: Mock<() => void>
+  isMinimized: Mock<() => boolean>
+  restore: Mock<() => void>
+  show: Mock<() => void>
+  focus: Mock<() => void>
   on(event: string, listener: () => void): void
   emit(event: string): void
   close(): void

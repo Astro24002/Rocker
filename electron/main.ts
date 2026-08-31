@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, powerMonitor } from "electron"
 import { join } from "node:path"
 import { DiagnosticLogger } from "./diagnostics/diagnostic-logger"
+import { bootstrapPrimaryInstance } from "./application/single-instance"
 import { registerIpcHandlers, type IpcDependencies } from "./ipc/register"
 import { ipcChannels } from "./ipc/bridge-contract"
 import { LinuxMetricsSampler } from "./monitoring/linux-metrics"
@@ -35,6 +36,7 @@ interface ApplicationRuntime {
 
 let runtime: ApplicationRuntime | undefined
 let shutdown: Promise<void> | undefined
+let pendingFocus = false
 
 function createNativeWindow(options: WorkspaceWindowOptions = {}): BrowserWindow {
   const window = new BrowserWindow({
@@ -134,6 +136,10 @@ async function startApplication(): Promise<void> {
     if (windows.ownerWebContentsIds().length === 0) windows.createNew()
   })
   runtime = { connections, sessions, forwarding, snapshots, windows, diagnostics }
+  if (pendingFocus) {
+    pendingFocus = false
+    windows.focusMostRecentOrCreate()
+  }
 }
 
 function retryLimit(settings: AppSettings): number {
@@ -225,8 +231,16 @@ function recordForwardingDiagnostic(logger: DiagnosticLogger, event: ForwardingE
   })
 }
 
-void app.whenReady().then(startApplication).catch(() => {
-  app.quit()
+bootstrapPrimaryInstance(app, {
+  start: startApplication,
+  focusExisting: () => {
+    if (!runtime) {
+      pendingFocus = true
+      return
+    }
+    runtime.windows.focusMostRecentOrCreate()
+  },
+  onStartError: () => app.quit()
 })
 
 app.on("before-quit", (event) => {
