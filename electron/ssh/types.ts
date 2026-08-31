@@ -1,3 +1,5 @@
+import type { RuntimeOwner } from "../runtime/owner"
+
 export type TerminalSessionState =
   | "idle"
   | "restoring"
@@ -39,7 +41,7 @@ export type TerminalSessionEvent =
   | TerminalStateEvent
 
 export interface OwnedTerminalSessionEvent {
-  ownerWebContentsId: number
+  owner: RuntimeOwner
   event: TerminalSessionEvent
 }
 

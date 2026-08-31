@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createConnectionResolver, type ConnectionResolverDependencies } from "./connection-resolver"
+import type { RuntimeOwner } from "../runtime/owner"
 
 const profile = {
   id: "host-a",
@@ -11,6 +12,7 @@ const profile = {
   favorite: false,
   notes: ""
 }
+const owner: RuntimeOwner = { webContentsId: 21, rendererGeneration: 1 }
 
 describe("createConnectionResolver", () => {
   it("derives timeout and reuse context from the current credential and verified Host Key", async () => {
@@ -21,11 +23,11 @@ describe("createConnectionResolver", () => {
       fingerprint: () => fingerprint
     }))
 
-    const first = await resolve({ hostId: profile.id, ownerWebContentsId: 21, kind: "terminal" })
+    const first = await resolve({ hostId: profile.id, owner, kind: "terminal" })
     password = "second-secret"
-    const changedCredential = await resolve({ hostId: profile.id, ownerWebContentsId: 21, kind: "terminal" })
+    const changedCredential = await resolve({ hostId: profile.id, owner, kind: "terminal" })
     fingerprint = "SHA256:second-key"
-    const changedHostKey = await resolve({ hostId: profile.id, ownerWebContentsId: 21, kind: "terminal" })
+    const changedHostKey = await resolve({ hostId: profile.id, owner, kind: "terminal" })
 
     expect(first).toMatchObject({ host: profile.host, port: profile.port, username: profile.username, password: "first-secret", readyTimeoutMs: 30_000 })
     expect(changedCredential.securityContextKey).not.toBe(first.securityContextKey)
@@ -37,7 +39,7 @@ describe("createConnectionResolver", () => {
   it("classifies a missing password credential as an authentication failure", async () => {
     const resolve = createConnectionResolver(createDependencies({ credential: () => undefined }))
 
-    await expect(resolve({ hostId: profile.id, ownerWebContentsId: 21, kind: "terminal" }))
+    await expect(resolve({ hostId: profile.id, owner, kind: "terminal" }))
       .rejects.toMatchObject({ reason: "authentication" })
   })
 
@@ -46,7 +48,7 @@ describe("createConnectionResolver", () => {
       profile: { ...profile, authMethod: "privateKey" }
     }))
 
-    await expect(resolve({ hostId: profile.id, ownerWebContentsId: 21, kind: "terminal" }))
+    await expect(resolve({ hostId: profile.id, owner, kind: "terminal" }))
       .rejects.toMatchObject({ reason: "configuration" })
   })
 })

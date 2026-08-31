@@ -7,8 +7,11 @@ import type {
   ConnectionEvent,
   ConnectionLease
 } from "../electron/ssh/connection-manager"
+import type { RuntimeOwner } from "../electron/runtime/owner"
 
 const occupiedServers: Server[] = []
+const owner7: RuntimeOwner = { webContentsId: 7, rendererGeneration: 1 }
+const owner8: RuntimeOwner = { webContentsId: 8, rendererGeneration: 1 }
 
 afterEach(async () => {
   await Promise.all(occupiedServers.splice(0).map(async (server) => {
@@ -32,7 +35,7 @@ describe("local forwarding", () => {
       localPort: address.port,
       remoteAddress: "127.0.0.1",
       remotePort: 3000
-    }, 7)).rejects.toThrow("LOCAL_PORT_IN_USE")
+    }, owner7)).rejects.toThrow("LOCAL_PORT_IN_USE")
   })
 
   it("releases listeners belonging to a closed window", async () => {
@@ -42,15 +45,15 @@ describe("local forwarding", () => {
       localPort: 0,
       remoteAddress: "127.0.0.1",
       remotePort: 3000
-    }, 7)
+    }, owner7)
     const second = await manager.start("connection-b", {
       localAddress: "127.0.0.1",
       localPort: 0,
       remoteAddress: "127.0.0.1",
       remotePort: 4000
-    }, 8)
+    }, owner8)
 
-    await manager.releaseOwner(7)
+    await manager.releaseOwner(owner7)
 
     expect(manager.get(first.id)?.status).toBe("stopped")
     expect(manager.get(second.id)?.status).toBe("forwarding")
@@ -63,20 +66,25 @@ function createConnections(): ForwardingConnectionAccess {
   const leases = new Map<string, ConnectionLease>()
   let nextLease = 1
   return {
-    retain: (connectionId, ownerWebContentsId, kind) => {
+    retain: (connectionId, owner, kind) => {
       const lease: ConnectionLease = {
         id: `lease-${nextLease++}`,
         connectionId,
-        ownerWebContentsId,
+        owner,
         kind
       }
       leases.set(lease.id, lease)
       return lease
     },
     release: async (leaseId) => { leases.delete(leaseId) },
-    releaseOwner: async (ownerWebContentsId) => {
+    releaseOwner: async (owner) => {
       for (const lease of [...leases.values()]) {
-        if (lease.ownerWebContentsId === ownerWebContentsId) leases.delete(lease.id)
+        if (lease.owner === owner) leases.delete(lease.id)
+      }
+    },
+    releaseWebContents: async (webContentsId) => {
+      for (const lease of [...leases.values()]) {
+        if (lease.owner.webContentsId === webContentsId) leases.delete(lease.id)
       }
     },
     execOnConnection: async (_connectionId, _command) => "",

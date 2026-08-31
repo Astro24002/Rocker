@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it } from "vitest"
 import { SshConnectionManager, type ResolvedConnectionRequest, type RetryScheduler } from "./connection-manager"
 import { TerminalSessionManager, type TerminalOpenRequest } from "./terminal-session-manager"
 import { createSshTestServer, TEST_PASSWORD, TEST_USERNAME } from "./test-fixtures/ssh-server"
+import type { RuntimeOwner } from "../runtime/owner"
 
 const sessions: TerminalSessionManager[] = []
 const fixtures: Array<{ close(): Promise<void> }> = []
+const owner1: RuntimeOwner = { webContentsId: 1, rendererGeneration: 1 }
 afterEach(async () => {
-  await Promise.all(sessions.splice(0).map((terminal) => terminal.releaseOwner(1)))
+  await Promise.all(sessions.splice(0).map((terminal) => terminal.releaseOwner(owner1)))
   await Promise.all(fixtures.splice(0).map((fixture) => fixture.close()))
 })
 
@@ -29,8 +31,8 @@ function request(port: number, password = TEST_PASSWORD): ResolvedConnectionRequ
   return { host: "127.0.0.1", port, username: TEST_USERNAME, authMethod: "password", password, readyTimeoutMs: 2_000, securityContextKey: "integration" }
 }
 
-function openRequest(sessionId: string, port: number, owner = 1): TerminalOpenRequest {
-  return { sessionId, hostId: "fixture", cols: 80, rows: 24, ownerWebContentsId: owner }
+function openRequest(sessionId: string, port: number, owner = owner1): TerminalOpenRequest {
+  return { sessionId, hostId: "fixture", cols: 80, rows: 24, owner }
 }
 
 function setup(port: number, resolved = request(port), scheduler?: ManualScheduler) {

@@ -6,13 +6,17 @@ import {
   type ConnectionEvent,
   type RetryScheduler
 } from "./connection-manager"
+import type { RuntimeOwner } from "../runtime/owner"
+
+const owner11: RuntimeOwner = { webContentsId: 11, rendererGeneration: 1 }
+const owner12: RuntimeOwner = { webContentsId: 12, rendererGeneration: 1 }
 
 describe("SshConnectionManager", () => {
   it("shares one verified connection only inside the owner window", async () => {
     const { manager, request } = createConnectionHarness({})
-    const first = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
-    const second = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
-    const otherWindow = await manager.acquire({ ...request, ownerWebContentsId: 12, kind: "terminal" })
+    const first = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    const second = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    const otherWindow = await manager.acquire({ ...request, owner: owner12, kind: "terminal" })
 
     expect(second.connectionId).toBe(first.connectionId)
     expect(otherWindow.connectionId).not.toBe(first.connectionId)
@@ -20,18 +24,31 @@ describe("SshConnectionManager", () => {
 
   it("reports the owner only while a connection record remains active", async () => {
     const { manager, request } = createConnectionHarness({})
-    const lease = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
 
-    expect(manager.ownerForConnection(lease.connectionId)).toBe(11)
+    expect(manager.ownerForConnection(lease.connectionId)).toEqual(owner11)
     await manager.release(lease.id)
+    expect(manager.ownerForConnection(lease.connectionId)).toBeUndefined()
+  })
+
+  it("releases only the matching runtime owner before broad webContents cleanup", async () => {
+    const { manager, request } = createConnectionHarness({})
+    const ownerV1: RuntimeOwner = { webContentsId: 7, rendererGeneration: 1 }
+    const ownerV2: RuntimeOwner = { webContentsId: 7, rendererGeneration: 2 }
+    const lease = await manager.acquire({ ...request, owner: ownerV2, kind: "terminal" })
+
+    expect(manager.ownerForConnection(lease.connectionId)).toEqual(ownerV2)
+    await manager.releaseOwner(ownerV1)
+    expect(manager.ownerForConnection(lease.connectionId)).toEqual(ownerV2)
+    await manager.releaseWebContents(7)
     expect(manager.ownerForConnection(lease.connectionId)).toBeUndefined()
   })
 
   it("coalesces concurrent matching acquisitions in one owner window", async () => {
     const { clients, manager, request } = createConnectionHarness({})
     const [first, second] = await Promise.all([
-      manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" }),
-      manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+      manager.acquire({ ...request, owner: owner11, kind: "terminal" }),
+      manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     ])
 
     expect(clients).toHaveLength(1)
@@ -40,18 +57,18 @@ describe("SshConnectionManager", () => {
 
   it("does not reuse a connection after its credential context changes", async () => {
     const { manager, request, setSecurityContext } = createConnectionHarness({})
-    const first = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const first = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     setSecurityContext("different-resolved-credential-hash")
-    const second = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const second = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
 
     expect(second.connectionId).not.toBe(first.connectionId)
   })
 
   it("does not reuse a verified connection after its known Host Key context changes", async () => {
     const { manager, request, setKnownHostKey } = createConnectionHarness({})
-    const first = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const first = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     setKnownHostKey("different-known-fingerprint")
-    const second = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const second = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
 
     expect(second.connectionId).not.toBe(first.connectionId)
   })
@@ -62,17 +79,17 @@ describe("SshConnectionManager", () => {
       promptForHostKey: async () => true,
       trustHostKey: async () => undefined
     })
-    const first = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const first = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     setKnownHostKey("fingerprint-a")
-    const second = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const second = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
 
     expect(second.connectionId).toBe(first.connectionId)
   })
 
   it("schedules one retry timer for all leases on a lost connection", async () => {
     const { clients, events, manager, request, scheduler } = createConnectionHarness({})
-    const first = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
-    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const first = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
 
     clients[0].emitter.emit("close")
 
@@ -80,7 +97,7 @@ describe("SshConnectionManager", () => {
     expect(events.at(-1)).toMatchObject({
       kind: "retrying",
       connectionId: first.connectionId,
-      ownerWebContentsId: 11,
+      owner: owner11,
       attempt: 1
     })
   })
@@ -89,7 +106,7 @@ describe("SshConnectionManager", () => {
     const { manager, request, events, setConnectFailure } = createConnectionHarness({})
     setConnectFailure(Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" }))
 
-    await expect(manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })).rejects.toThrow("ETIMEDOUT")
+    await expect(manager.acquire({ ...request, owner: owner11, kind: "terminal" })).rejects.toThrow("ETIMEDOUT")
 
     expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "timeout" })
   })
@@ -98,14 +115,14 @@ describe("SshConnectionManager", () => {
     const { manager, request, events, setConnectFailure } = createConnectionHarness({})
     setConnectFailure(Object.assign(new Error("getaddrinfo ENOTFOUND host.invalid"), { code: "ENOTFOUND" }))
 
-    await expect(manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })).rejects.toThrow("ENOTFOUND")
+    await expect(manager.acquire({ ...request, owner: owner11, kind: "terminal" })).rejects.toThrow("ENOTFOUND")
 
     expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "dns" })
   })
 
   it("runs a shared retry immediately without leaving the delayed timer behind", async () => {
     const { clients, manager, request, scheduler } = createConnectionHarness({})
-    const lease = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     clients[0].emitter.emit("close")
 
     manager.retryNow(lease.connectionId)
@@ -116,10 +133,10 @@ describe("SshConnectionManager", () => {
 
   it("attaches a new terminal lease to the matching retrying connection", async () => {
     const { clients, manager, request, scheduler } = createConnectionHarness({})
-    const first = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const first = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     clients[0].emitter.emit("close")
 
-    const second = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const second = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
 
     expect(second.connectionId).toBe(first.connectionId)
     expect(clients).toHaveLength(2)
@@ -130,7 +147,7 @@ describe("SshConnectionManager", () => {
     const { clients, manager, request, releaseRetryResolution, scheduler, waitForRetryResolution } = createConnectionHarness({
       deferRetryResolution: true
     })
-    const lease = await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     clients[0].emitter.emit("close")
 
     scheduler.fireNext()
@@ -145,7 +162,7 @@ describe("SshConnectionManager", () => {
 
   it("exhausts the default eight retry attempts", async () => {
     const { clients, events, manager, request, scheduler, setConnectFailure } = createConnectionHarness({})
-    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     setConnectFailure(new Error("Network unavailable"))
     clients[0].emitter.emit("close")
 
@@ -161,7 +178,7 @@ describe("SshConnectionManager", () => {
 
   it("does not schedule a retry when automatic reconnect is disabled", async () => {
     const { clients, events, manager, request, scheduler } = createConnectionHarness({ maxRetryAttempts: 0 })
-    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
 
     clients[0].emitter.emit("close")
 
@@ -171,7 +188,7 @@ describe("SshConnectionManager", () => {
 
   it("applies a runtime reconnect-policy change to an existing retry loop", async () => {
     const { clients, events, manager, request, scheduler } = createConnectionHarness({})
-    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     clients[0].emitter.emit("close")
 
     manager.updateRetryPolicy({ autoReconnect: false, reconnectMode: "limited" })
@@ -182,7 +199,7 @@ describe("SshConnectionManager", () => {
 
   it("ignores stale transport callbacks after a retry succeeds", async () => {
     const { clients, events, manager, request, scheduler } = createConnectionHarness({})
-    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     const staleClient = clients[0]
     staleClient.emitter.emit("close")
     await scheduler.runNext()
@@ -203,11 +220,11 @@ describe("SshConnectionManager", () => {
       replaceHostKey: async () => { replacements += 1 }
     })
 
-    await expect(manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" }))
+    await expect(manager.acquire({ ...request, owner: owner11, kind: "terminal" }))
       .rejects.toThrow("Host Key changed")
 
     expect(replacements).toBe(0)
-    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-changed", ownerWebContentsId: 11 })
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-changed", owner: owner11 })
     expect(scheduler.pendingTimers()).toHaveLength(0)
   })
 
@@ -219,7 +236,7 @@ describe("SshConnectionManager", () => {
       trustHostKey: async (_host, _port, fingerprint) => { trustedFingerprint = fingerprint }
     })
 
-    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
 
     expect(trustedFingerprint).toBe("fingerprint-a")
   })
@@ -235,7 +252,7 @@ describe("SshConnectionManager", () => {
       }
     })
 
-    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
 
     expect(replacement).toEqual(["127.0.0.1", 22, "old-fingerprint", "new-fingerprint"])
   })
@@ -245,10 +262,10 @@ describe("SshConnectionManager", () => {
       connectFailure: new Error("Authentication failed")
     })
 
-    await expect(manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" }))
+    await expect(manager.acquire({ ...request, owner: owner11, kind: "terminal" }))
       .rejects.toThrow("Authentication failed")
 
-    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "authentication", ownerWebContentsId: 11 })
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "authentication", owner: owner11 })
     expect(scheduler.pendingTimers()).toHaveLength(0)
   })
 
@@ -257,23 +274,23 @@ describe("SshConnectionManager", () => {
       resolveFailure: new Error("Credential configuration is unavailable")
     })
 
-    await expect(manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" }))
+    await expect(manager.acquire({ ...request, owner: owner11, kind: "terminal" }))
       .rejects.toThrow("Credential configuration is unavailable")
 
-    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "configuration", ownerWebContentsId: 11 })
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "configuration", owner: owner11 })
     expect(scheduler.pendingTimers()).toHaveLength(0)
   })
 
   it("does not retry an unclassified profile resolution failure", async () => {
     const { clients, events, manager, request, scheduler, setResolveFailure } = createConnectionHarness({})
-    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     setResolveFailure(new Error("Profile unavailable"))
     clients[0].emitter.emit("close")
 
     await scheduler.runNext()
 
     expect(scheduler.pendingTimers()).toHaveLength(0)
-    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "configuration", ownerWebContentsId: 11 })
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "configuration", owner: owner11 })
   })
 
   it("does not retry a Host Key persistence conflict during recovery", async () => {
@@ -281,14 +298,14 @@ describe("SshConnectionManager", () => {
       promptForHostKey: async () => true,
       replaceHostKey: async () => { throw new Error("Host Key changed while awaiting replacement confirmation") }
     })
-    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     setHostKeyChange("old-fingerprint", "new-fingerprint")
     clients[0].emitter.emit("close")
 
     await scheduler.runNext()
 
     expect(scheduler.pendingTimers()).toHaveLength(0)
-    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-changed", ownerWebContentsId: 11 })
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-changed", owner: owner11 })
   })
 
   it("does not retry a failed unknown Host Key trust during recovery", async () => {
@@ -296,26 +313,26 @@ describe("SshConnectionManager", () => {
       promptForHostKey: async () => true,
       trustHostKey: async () => { throw new Error("Host Key persistence is unavailable") }
     })
-    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     setHostKeyUnknown()
     clients[0].emitter.emit("close")
 
     await scheduler.runNext()
 
     expect(scheduler.pendingTimers()).toHaveLength(0)
-    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-rejected", ownerWebContentsId: 11 })
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-rejected", owner: owner11 })
   })
 
   it("does not retry a Host Key inspection failure during recovery", async () => {
     const { clients, events, manager, request, scheduler, setHostKeyInspectionFailure } = createConnectionHarness({})
-    await manager.acquire({ ...request, ownerWebContentsId: 11, kind: "terminal" })
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
     setHostKeyInspectionFailure(new Error("Host Key storage is unavailable"))
     clients[0].emitter.emit("close")
 
     await scheduler.runNext()
 
     expect(scheduler.pendingTimers()).toHaveLength(0)
-    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-rejected", ownerWebContentsId: 11 })
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "host-key-rejected", owner: owner11 })
   })
 })
 

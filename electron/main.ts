@@ -94,14 +94,14 @@ async function startApplication(): Promise<void> {
     createWindow: createNativeWindow,
     preserveLastWindowWorkspace: process.platform !== "darwin",
     onWindowClosed: async (ownerWebContentsId) => {
-      await forwarding.releaseOwner(ownerWebContentsId)
-      await sessions.releaseOwner(ownerWebContentsId)
-      await connections.releaseOwner(ownerWebContentsId)
+      await forwarding.releaseWebContents(ownerWebContentsId)
+      await sessions.releaseWebContents(ownerWebContentsId)
+      await connections.releaseWebContents(ownerWebContentsId)
     },
-    onRendererReload: async (ownerWebContentsId) => {
-      await forwarding.releaseOwner(ownerWebContentsId)
-      await sessions.releaseOwner(ownerWebContentsId)
-      await connections.releaseOwner(ownerWebContentsId)
+    onRendererReleased: async (owner) => {
+      await forwarding.releaseOwner(owner)
+      await sessions.releaseOwner(owner)
+      await connections.releaseOwner(owner)
     }
   })
   const dependencies: IpcDependencies = {
@@ -141,7 +141,7 @@ function retryLimit(settings: AppSettings): number {
 }
 
 async function promptForHostKey(windows: WorkspaceWindowManager, request: HostKeyPromptRequest): Promise<boolean> {
-  const target = windows.windowForWebContents(request.ownerWebContentsId)
+  const target = windows.windowForOwner(request.owner)
   if (!target || target.isDestroyed()) return false
   const changed = request.inspection.status === "changed"
   const detail = request.inspection.status === "changed"
@@ -170,9 +170,9 @@ async function shutdownApplication(applicationRuntime: ApplicationRuntime): Prom
     // Shutdown should still release active transports when a snapshot write fails.
   }
   await Promise.all(applicationRuntime.windows.ownerWebContentsIds().map(async (ownerWebContentsId) => {
-    await applicationRuntime.forwarding.releaseOwner(ownerWebContentsId)
-    await applicationRuntime.sessions.releaseOwner(ownerWebContentsId)
-    await applicationRuntime.connections.releaseOwner(ownerWebContentsId)
+    await applicationRuntime.forwarding.releaseWebContents(ownerWebContentsId)
+    await applicationRuntime.sessions.releaseWebContents(ownerWebContentsId)
+    await applicationRuntime.connections.releaseWebContents(ownerWebContentsId)
   }))
   try {
     await applicationRuntime.diagnostics.close()

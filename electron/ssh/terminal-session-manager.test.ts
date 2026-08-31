@@ -4,13 +4,17 @@ import { describe, expect, it, vi } from "vitest"
 import { ConnectionResolutionError, SshConnectionManager, type RetryScheduler } from "./connection-manager"
 import { TerminalSessionManager } from "./terminal-session-manager"
 import type { OwnedTerminalSessionEvent } from "./types"
+import type { RuntimeOwner } from "../runtime/owner"
+
+const owner7: RuntimeOwner = { webContentsId: 7, rendererGeneration: 1 }
+const owner8: RuntimeOwner = { webContentsId: 8, rendererGeneration: 1 }
 
 describe("TerminalSessionManager", () => {
   it("opens a PTY, forwards raw output packets, and closes an explicit session", async () => {
     const { sessions, channels, events } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
 
-    const info = await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    const info = await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
     channels.get(1)!.emitter.emit("data", Buffer.from([0xe4, 0xb8, 0xad]))
 
     expect(info).toMatchObject({ sessionId, hostId: "host-a", channelGeneration: 1, state: "connected" })
@@ -26,17 +30,33 @@ describe("TerminalSessionManager", () => {
   it("reports the owner only while a logical session remains open", async () => {
     const { sessions } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
 
-    expect(sessions.ownerForSession(sessionId)).toBe(7)
+    expect(sessions.ownerForSession(sessionId)).toEqual(owner7)
     await sessions.close(sessionId)
+    expect(sessions.ownerForSession(sessionId)).toBeUndefined()
+  })
+
+  it("releases only the matching runtime owner before broad webContents cleanup", async () => {
+    const { sessions, ownedEvents } = createSessionHarness()
+    const ownerV1: RuntimeOwner = { webContentsId: 7, rendererGeneration: 1 }
+    const ownerV2: RuntimeOwner = { webContentsId: 7, rendererGeneration: 2 }
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: ownerV2 })
+
+    expect(sessions.ownerForSession(sessionId)).toEqual(ownerV2)
+    expect(ownedEvents.at(-1)?.owner).toEqual(ownerV2)
+    await sessions.releaseOwner(ownerV1)
+    expect(sessions.ownerForSession(sessionId)).toEqual(ownerV2)
+    await sessions.releaseWebContents(7)
     expect(sessions.ownerForSession(sessionId)).toBeUndefined()
   })
 
   it("opens a fresh PTY generation for every recovered logical session", async () => {
     const { sessions, transport, retryScheduler, events } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
     transport.dropUnexpectedly()
     await retryScheduler.runNext()
 
@@ -47,7 +67,7 @@ describe("TerminalSessionManager", () => {
   it("retries the shared transport immediately after desktop resume", async () => {
     const { sessions, transport, retryScheduler, channels } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
     transport.dropUnexpectedly()
 
     sessions.retryAfterResume()
@@ -59,7 +79,7 @@ describe("TerminalSessionManager", () => {
   it("does not invalidate a ready shell when desktop resume fires during runtime recovery", async () => {
     const { sessions, transport, retryScheduler, shellFactory, channels, events } = createSessionHarness({ deferShellCallbacks: true })
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    const initial = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    const initial = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
     await waitFor(() => shellFactory.started.length === 1)
     shellFactory.settleNext()
     await initial
@@ -85,7 +105,7 @@ describe("TerminalSessionManager", () => {
       hostId: "host-a",
       cols: 120,
       rows: 40,
-      ownerWebContentsId: 7,
+      owner: owner7,
       restorePriority: "active"
     })
 
@@ -109,7 +129,7 @@ describe("TerminalSessionManager", () => {
       hostId: "host-a",
       cols: 120,
       rows: 40,
-      ownerWebContentsId: 7,
+      owner: owner7,
       restorePriority: "active"
     })).rejects.toThrow("Authentication rejected")
     expect(events.at(-1)).toMatchObject({ kind: "state", state: "error", reason: "authentication" })
@@ -125,7 +145,7 @@ describe("TerminalSessionManager", () => {
   it("releases a lease acquired after its logical session was closed", async () => {
     const { sessions, transport } = createSessionHarness({ deferConnectionResolution: true })
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
     await transport.waitForConnectionResolution()
 
     await sessions.close(sessionId)
@@ -138,7 +158,7 @@ describe("TerminalSessionManager", () => {
   it("ignores a stale shell close after an unexpected transport loss", async () => {
     const { sessions, transport, retryScheduler, channels, events } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
 
     transport.dropUnexpectedly()
     channels.get(1)!.emitClose()
@@ -150,7 +170,7 @@ describe("TerminalSessionManager", () => {
   it("waits for recovery when the initial shell callback loses its transport", async () => {
     const { sessions, transport, shellFactory, channels, retryScheduler, events } = createSessionHarness({ deferShellCallbacks: true })
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
     await waitFor(() => shellFactory.started.length === 1)
 
     transport.dropUnexpectedly()
@@ -167,7 +187,7 @@ describe("TerminalSessionManager", () => {
   it("rejects input, resize, and acknowledgement from a prior channel generation", async () => {
     const { sessions, channels } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
 
     sessions.write(sessionId, 0, "stale")
     sessions.resize(sessionId, 0, { cols: 80, rows: 24 })
@@ -181,7 +201,7 @@ describe("TerminalSessionManager", () => {
   it("releases its terminal lease after a normal shell-channel close", async () => {
     const { sessions, channels, events, retryScheduler, transport } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
     channels.get(1)!.emitClose()
 
     expect(events.at(-1)).toMatchObject({ kind: "state", state: "disconnected", reason: "channel-ended" })
@@ -197,8 +217,8 @@ describe("TerminalSessionManager", () => {
     const { sessions, transport, retryScheduler, channels } = createSessionHarness()
     const first = "11111111-1111-4111-8111-111111111111"
     const second = "22222222-2222-4222-8222-222222222222"
-    await sessions.open({ sessionId: first, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
-    await sessions.open({ sessionId: second, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await sessions.open({ sessionId: first, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
+    await sessions.open({ sessionId: second, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
 
     transport.dropUnexpectedly()
     sessions.cancelReconnect(first)
@@ -211,7 +231,7 @@ describe("TerminalSessionManager", () => {
   it("does not tear down a healthy channel when a stale cancel-reconnect action arrives", async () => {
     const { sessions, channels } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
 
     sessions.cancelReconnect(sessionId)
     sessions.write(sessionId, 1, "still-connected")
@@ -223,7 +243,7 @@ describe("TerminalSessionManager", () => {
   it("does not reconnect a session whose PTY is already connected", async () => {
     const { sessions, channels } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
 
     await expect(sessions.reconnect(sessionId)).rejects.toThrow("not reconnectable")
 
@@ -234,7 +254,7 @@ describe("TerminalSessionManager", () => {
   it("retains a cancelled connecting session for a later manual reconnect", async () => {
     const { sessions, transport, channels } = createSessionHarness({ deferConnectionResolution: true })
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
     await transport.waitForConnectionResolution()
 
     sessions.cancelReconnect(sessionId)
@@ -248,7 +268,7 @@ describe("TerminalSessionManager", () => {
   it("reports an error when an automatically recovered PTY cannot open", async () => {
     const { sessions, transport, retryScheduler, shellFactory, events } = createSessionHarness({ deferShellCallbacks: true })
     const sessionId = "11111111-1111-4111-8111-111111111111"
-    const initial = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
+    const initial = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
     await waitFor(() => shellFactory.started.length === 1)
     shellFactory.settleNext()
     await initial
@@ -266,10 +286,10 @@ describe("TerminalSessionManager", () => {
     const { sessions, channels } = createSessionHarness()
     const owned = "11111111-1111-4111-8111-111111111111"
     const other = "22222222-2222-4222-8222-222222222222"
-    await sessions.open({ sessionId: owned, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7 })
-    await sessions.open({ sessionId: other, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 8 })
+    await sessions.open({ sessionId: owned, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
+    await sessions.open({ sessionId: other, hostId: "host-a", cols: 120, rows: 40, owner: owner8 })
 
-    await sessions.releaseOwner(7)
+    await sessions.releaseOwner(owner7)
     expect(channels.get(1)!.end).toHaveBeenCalledOnce()
     expect(channels.get(2)!.end).not.toHaveBeenCalled()
   })
@@ -278,8 +298,8 @@ describe("TerminalSessionManager", () => {
     const { sessions, shellFactory } = createSessionHarness({ deferShellCallbacks: true })
     const background = "11111111-1111-4111-8111-111111111111"
     const active = "22222222-2222-4222-8222-222222222222"
-    const backgroundOpen = sessions.open({ sessionId: background, hostId: "host-a", cols: 120, rows: 40, ownerWebContentsId: 7, restorePriority: "background" })
-    const activeOpen = sessions.open({ sessionId: active, hostId: "host-a", cols: 121, rows: 40, ownerWebContentsId: 7, restorePriority: "active" })
+    const backgroundOpen = sessions.open({ sessionId: background, hostId: "host-a", cols: 120, rows: 40, owner: owner7, restorePriority: "background" })
+    const activeOpen = sessions.open({ sessionId: active, hostId: "host-a", cols: 121, rows: 40, owner: owner7, restorePriority: "active" })
 
     await waitFor(() => shellFactory.started.length === 1)
     expect(shellFactory.started.map((entry) => entry.cols)).toEqual([121])
@@ -297,8 +317,8 @@ describe("TerminalSessionManager", () => {
     })
     const background = "11111111-1111-4111-8111-111111111111"
     const active = "22222222-2222-4222-8222-222222222222"
-    const backgroundOpen = sessions.open({ sessionId: background, hostId: "background-host", cols: 120, rows: 40, ownerWebContentsId: 7, restorePriority: "background" })
-    const activeOpen = sessions.open({ sessionId: active, hostId: "active-host", cols: 121, rows: 40, ownerWebContentsId: 7, restorePriority: "active" })
+    const backgroundOpen = sessions.open({ sessionId: background, hostId: "background-host", cols: 120, rows: 40, owner: owner7, restorePriority: "background" })
+    const activeOpen = sessions.open({ sessionId: active, hostId: "active-host", cols: 121, rows: 40, owner: owner7, restorePriority: "active" })
 
     await waitFor(() => transport.connectionRequests.length === 1)
     expect(transport.connectionRequests).toEqual(["active-host"])
@@ -323,14 +343,14 @@ describe("TerminalSessionManager", () => {
     })
     const background = "11111111-1111-4111-8111-111111111111"
     const active = "22222222-2222-4222-8222-222222222222"
-    sessions.beginRestore(7, active)
+    sessions.beginRestore(owner7, active)
 
     const backgroundOpen = sessions.open({
       sessionId: background,
       hostId: "background-host",
       cols: 120,
       rows: 40,
-      ownerWebContentsId: 7,
+      owner: owner7,
       restorePriority: "background"
     })
     await flush()
@@ -341,7 +361,7 @@ describe("TerminalSessionManager", () => {
       hostId: "active-host",
       cols: 121,
       rows: 40,
-      ownerWebContentsId: 7,
+      owner: owner7,
       restorePriority: "active"
     })
     await waitFor(() => transport.connectionRequests.length === 1)
@@ -365,19 +385,19 @@ describe("TerminalSessionManager", () => {
     })
     const missingActive = "22222222-2222-4222-8222-222222222222"
     const background = "11111111-1111-4111-8111-111111111111"
-    sessions.beginRestore(7, missingActive)
+    sessions.beginRestore(owner7, missingActive)
     const backgroundOpen = sessions.open({
       sessionId: background,
       hostId: "background-host",
       cols: 120,
       rows: 40,
-      ownerWebContentsId: 7,
+      owner: owner7,
       restorePriority: "background"
     })
     await flush()
     expect(transport.connectionRequests).toEqual([])
 
-    sessions.completeRestore(7)
+    sessions.completeRestore(owner7)
     await waitFor(() => transport.connectionRequests.length === 1)
     transport.resolveNextConnection()
     await waitFor(() => shellFactory.started.length === 1)
@@ -406,6 +426,7 @@ interface HarnessOptions {
 
 function createSessionHarness(options: HarnessOptions = {}) {
   const events: OwnedTerminalSessionEvent["event"][] = []
+  const ownedEvents: OwnedTerminalSessionEvent[] = []
   const channels = new Map<number, FakeChannel>()
   const shellFactory = createShellFactory(channels, options.deferShellCallbacks ?? false)
   const retryScheduler = createRetryScheduler()
@@ -416,9 +437,12 @@ function createSessionHarness(options: HarnessOptions = {}) {
     options.deferEachConnectionResolution ?? false,
     [...(options.resolveFailures ?? [])]
   )
-  const sessions = new TerminalSessionManager({ connections: transport.connections })
+  const sessions = new TerminalSessionManager({
+    connections: transport.connections,
+    onEvent: (event) => ownedEvents.push(event)
+  })
   sessions.onEvent(({ event }) => events.push(event))
-  return { sessions, transport, retryScheduler, events, channels, shellFactory }
+  return { sessions, transport, retryScheduler, events, ownedEvents, channels, shellFactory }
 }
 
 function createShellFactory(channels: Map<number, FakeChannel>, deferred: boolean) {

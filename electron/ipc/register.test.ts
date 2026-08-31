@@ -31,9 +31,12 @@ vi.mock("electron", () => electron)
 
 import { ipcChannels } from "./bridge-contract"
 import { registerIpcHandlers, type IpcDependencies } from "./register"
+import type { RuntimeOwner } from "../runtime/owner"
 
 const sessionId = "11111111-1111-4111-8111-111111111111"
 const connectionId = "22222222-2222-4222-8222-222222222222"
+const owner21: RuntimeOwner = { webContentsId: 21, rendererGeneration: 1 }
+const owner22: RuntimeOwner = { webContentsId: 22, rendererGeneration: 1 }
 
 describe("registerIpcHandlers", () => {
   afterEach(() => {
@@ -46,7 +49,7 @@ describe("registerIpcHandlers", () => {
     registerIpcHandlers(harness.dependencies)
 
     harness.emitSession({
-      ownerWebContentsId: 21,
+      owner: owner21,
       event: {
         kind: "output",
         packet: { sessionId, channelGeneration: 1, sequence: 1, bytes: Uint8Array.of(0x61) }
@@ -59,7 +62,7 @@ describe("registerIpcHandlers", () => {
 
   it("rejects a renderer request for a session owned by another window", async () => {
     const harness = createHarness()
-    harness.sessions.ownerForSession.mockReturnValue(21)
+    harness.sessions.ownerForSession.mockReturnValue(owner21)
     registerIpcHandlers(harness.dependencies)
 
     await expect(invokeFrom(22, ipcChannels.sessionClose, sessionId)).rejects.toThrow("Session is owned by another window")
@@ -68,7 +71,7 @@ describe("registerIpcHandlers", () => {
 
   it("rejects a port scan for a connection owned by another window", async () => {
     const harness = createHarness()
-    harness.connections.ownerForConnection.mockReturnValue(21)
+    harness.connections.ownerForConnection.mockReturnValue(owner21)
     registerIpcHandlers(harness.dependencies)
 
     await expect(invokeFrom(22, ipcChannels.portsScan, connectionId)).rejects.toThrow("SSH connection is owned by another window")
@@ -177,6 +180,7 @@ function createHarness() {
     diagnosticsAppVersion: "0.3.1",
     snapshots: { load: vi.fn(), saveWindow: vi.fn(), removeWindow: vi.fn(), flush: vi.fn() },
     windows: {
+      currentOwnerForWebContents: vi.fn((id: number) => id === owner21.webContentsId ? owner21 : id === owner22.webContentsId ? owner22 : undefined),
       windowForWebContents: vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined),
       workspaceForWebContents: vi.fn(),
       saveWorkspace: vi.fn(),

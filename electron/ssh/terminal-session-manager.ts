@@ -1,4 +1,5 @@
 import type { Client } from "ssh2"
+import { isRuntimeOwner, runtimeOwnerKey, sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import {
   ConnectionResolutionError,
   SshConnectionManager,
@@ -31,7 +32,7 @@ export interface TerminalOpenRequest {
   hostId: string
   cols: number
   rows: number
-  ownerWebContentsId: number
+  owner: RuntimeOwner
   forceNewConnection?: boolean
   restorePriority?: "active" | "background"
 }
@@ -66,6 +67,7 @@ interface RecoveryWaiter {
 }
 
 interface RestoreAdmission {
+  owner: RuntimeOwner
   activeSessionId: string
 }
 
@@ -82,7 +84,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
   private readonly sessions = new Map<string, SessionRecord>()
   private readonly listeners = new Set<(event: OwnedTerminalSessionEvent) => void>()
   private readonly shellQueue: ShellTask[] = []
-  private readonly restoreAdmissions = new Map<number, RestoreAdmission>()
+  private readonly restoreAdmissions = new Map<string, RestoreAdmission>()
   private readonly unsubscribeConnectionEvents: () => void
   private nextQueueOrder = 0
   private drainingQueue = false
@@ -97,24 +99,25 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     return () => this.listeners.delete(listener)
   }
 
-  public ownerForSession(sessionId: string): number | undefined {
-    return this.sessions.get(sessionId)?.request.ownerWebContentsId
+  public ownerForSession(sessionId: string): RuntimeOwner | undefined {
+    return this.sessions.get(sessionId)?.request.owner
   }
 
-  public beginRestore(ownerWebContentsId: number, activeSessionId: string): void {
-    if (!isValidOwnerWebContentsId(ownerWebContentsId) || !isValidSessionId(activeSessionId)) {
+  public beginRestore(owner: RuntimeOwner, activeSessionId: string): void {
+    if (!isRuntimeOwner(owner) || !isValidSessionId(activeSessionId)) {
       throw new Error("Invalid restore admission")
     }
-    this.restoreAdmissions.set(ownerWebContentsId, { activeSessionId })
+    this.restoreAdmissions.set(runtimeOwnerKey(owner), { owner, activeSessionId })
   }
 
-  public completeRestore(ownerWebContentsId: number): void {
-    if (this.restoreAdmissions.delete(ownerWebContentsId)) this.scheduleQueueDrain()
+  public completeRestore(owner: RuntimeOwner): void {
+    if (this.restoreAdmissions.delete(runtimeOwnerKey(owner))) this.scheduleQueueDrain()
   }
 
   public async open(request: TerminalOpenRequest): Promise<TerminalSessionInfo> {
     if (!isValidSessionId(request.sessionId)) throw new Error("Invalid session identifier")
     if (!isValidDimensions(request.cols, request.rows)) throw new Error("Invalid terminal dimensions")
+    if (!isRuntimeOwner(request.owner)) throw new Error("Invalid runtime owner")
     if (this.sessions.has(request.sessionId)) throw new Error("Terminal session is already open")
 
     const isWorkspaceRestore = request.restorePriority !== undefined
@@ -223,12 +226,25 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     await this.removeRecord(sessionId, false)
   }
 
-  public async releaseOwner(ownerWebContentsId: number): Promise<void> {
+  public async releaseOwner(owner: RuntimeOwner): Promise<void> {
     const ids = [...this.sessions.entries()]
-      .filter(([, record]) => record.request.ownerWebContentsId === ownerWebContentsId)
+      .filter(([, record]) => sameRuntimeOwner(record.request.owner, owner))
       .map(([sessionId]) => sessionId)
     await Promise.all(ids.map((sessionId) => this.close(sessionId)))
-    this.restoreAdmissions.delete(ownerWebContentsId)
+    if (this.restoreAdmissions.delete(runtimeOwnerKey(owner))) this.scheduleQueueDrain()
+  }
+
+  public async releaseWebContents(webContentsId: number): Promise<void> {
+    const ids = [...this.sessions.entries()]
+      .filter(([, record]) => record.request.owner.webContentsId === webContentsId)
+      .map(([sessionId]) => sessionId)
+    await Promise.all(ids.map((sessionId) => this.close(sessionId)))
+    let removedAdmission = false
+    for (const [key, admission] of this.restoreAdmissions) {
+      if (admission.owner.webContentsId !== webContentsId) continue
+      removedAdmission = this.restoreAdmissions.delete(key) || removedAdmission
+    }
+    if (removedAdmission) this.scheduleQueueDrain()
   }
 
   public retryAfterResume(): void {
@@ -284,7 +300,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     if (!record.lease) {
       const lease = await this.options.connections.acquire({
         hostId: record.request.hostId,
-        ownerWebContentsId: record.request.ownerWebContentsId,
+        owner: record.request.owner,
         kind: "terminal",
         forceNewConnection: record.request.forceNewConnection
       })
@@ -352,7 +368,9 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
   }
 
   private handleConnectionEvent(event: ConnectionEvent): void {
-    const affected = [...this.sessions.values()].filter((record) => record.connectionId === event.connectionId)
+    const affected = [...this.sessions.values()].filter((record) =>
+      record.connectionId === event.connectionId && sameRuntimeOwner(record.request.owner, event.owner)
+    )
     if (event.kind === "lost") {
       for (const record of affected) {
         if (!record.recoveryDesired) continue
@@ -498,14 +516,14 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
 
   private isRestoreTaskReady(record: SessionRecord): boolean {
     if (record.request.restorePriority !== "background") return true
-    const admission = this.restoreAdmissions.get(record.request.ownerWebContentsId)
+    const admission = this.restoreAdmissions.get(runtimeOwnerKey(record.request.owner))
     return !admission || admission.activeSessionId === record.request.sessionId
   }
 
   private releaseRestoreAdmission(record: SessionRecord): void {
-    const admission = this.restoreAdmissions.get(record.request.ownerWebContentsId)
+    const admission = this.restoreAdmissions.get(runtimeOwnerKey(record.request.owner))
     if (admission?.activeSessionId !== record.request.sessionId) return
-    this.restoreAdmissions.delete(record.request.ownerWebContentsId)
+    this.restoreAdmissions.delete(runtimeOwnerKey(record.request.owner))
     this.scheduleQueueDrain()
   }
 
@@ -544,7 +562,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
   }
 
   private emit(record: SessionRecord, event: TerminalSessionEvent): void {
-    const owned = { ownerWebContentsId: record.request.ownerWebContentsId, event }
+    const owned = { owner: record.request.owner, event }
     this.options.onEvent?.(owned)
     for (const listener of this.listeners) listener(owned)
   }
@@ -552,10 +570,6 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
 
 function isValidSessionId(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-}
-
-function isValidOwnerWebContentsId(value: number): boolean {
-  return Number.isInteger(value) && value > 0
 }
 
 function isValidDimensions(cols: number, rows: number): boolean {

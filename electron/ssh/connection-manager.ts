@@ -2,13 +2,14 @@ import { createHash, randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { Client, type ConnectConfig, type HostFingerprintVerifier } from "ssh2"
 import type { AuthMethod } from "../storage/types"
+import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import type { TerminalFailureReason } from "./types"
 import { inspectHostKey as inspectStoredHostKey, normalizeFingerprint, type HostKeyInspection, type HostKeyStore } from "./host-keys"
 import { retryDelayMs } from "./reconnect-policy"
 
 export interface ConnectionAcquireRequest {
   hostId: string
-  ownerWebContentsId: number
+  owner: RuntimeOwner
   kind: "terminal" | "forward"
   forceNewConnection?: boolean
 }
@@ -43,20 +44,21 @@ export interface RetryScheduler {
 export interface ConnectionLease {
   id: string
   connectionId: string
-  ownerWebContentsId: number
+  owner: RuntimeOwner
   kind: "terminal" | "forward"
 }
 
 export type ConnectionEvent =
-  | { kind: "ready"; connectionId: string; ownerWebContentsId: number; transportGeneration: number }
-  | { kind: "lost"; connectionId: string; ownerWebContentsId: number; reason: TerminalFailureReason }
-  | { kind: "retrying"; connectionId: string; ownerWebContentsId: number; attempt: number; nextRetryAt: string }
-  | { kind: "failed"; connectionId: string; ownerWebContentsId: number; reason: TerminalFailureReason }
+  | { kind: "ready"; connectionId: string; owner: RuntimeOwner; transportGeneration: number }
+  | { kind: "lost"; connectionId: string; owner: RuntimeOwner; reason: TerminalFailureReason }
+  | { kind: "retrying"; connectionId: string; owner: RuntimeOwner; attempt: number; nextRetryAt: string }
+  | { kind: "failed"; connectionId: string; owner: RuntimeOwner; reason: TerminalFailureReason }
 
 export interface ConnectionLeaseController {
-  retain(connectionId: string, ownerWebContentsId: number, kind: ConnectionLease["kind"]): ConnectionLease
+  retain(connectionId: string, owner: RuntimeOwner, kind: "forward"): ConnectionLease
   release(leaseId: string): Promise<void>
-  releaseOwner(ownerWebContentsId: number): Promise<void>
+  releaseOwner(owner: RuntimeOwner): Promise<void>
+  releaseWebContents(webContentsId: number): Promise<void>
 }
 
 export interface ConnectionCommandExecutor {
@@ -65,7 +67,7 @@ export interface ConnectionCommandExecutor {
 }
 
 export interface HostKeyPromptRequest {
-  ownerWebContentsId: number
+  owner: RuntimeOwner
   host: string
   port: number
   inspection: HostKeyInspection
@@ -89,7 +91,7 @@ type ConnectionState = "connecting" | "ready" | "retrying" | "closed"
 
 interface ConnectionRecord {
   connectionId: string
-  ownerWebContentsId: number
+  owner: RuntimeOwner
   hostId: string
   identityKey: string
   host: string
@@ -148,8 +150,8 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     return () => this.listeners.delete(listener)
   }
 
-  public ownerForConnection(connectionId: string): number | undefined {
-    return this.connections.get(connectionId)?.ownerWebContentsId
+  public ownerForConnection(connectionId: string): RuntimeOwner | undefined {
+    return this.connections.get(connectionId)?.owner
   }
 
   public async acquire(request: ConnectionAcquireRequest): Promise<ConnectionLease> {
@@ -161,7 +163,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       this.emit({
         kind: "failed",
         connectionId: randomUUID(),
-        ownerWebContentsId: request.ownerWebContentsId,
+        owner: request.owner,
         reason: resolutionFailureReason(error)
       })
       throw error
@@ -169,7 +171,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     const identityKey = connectionIdentity(request.hostId, resolved)
     if (!request.forceNewConnection) {
       const reusable = [...this.connections.values()].find((record) =>
-        record.ownerWebContentsId === request.ownerWebContentsId &&
+        sameRuntimeOwner(record.owner, request.owner) &&
         record.identityKey === identityKey &&
         matchesKnownHostKey(record, resolved) &&
         ((record.verifiedFingerprint !== undefined && record.state === "ready") ||
@@ -177,7 +179,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
           (record.verifiedFingerprint !== undefined && record.state === "retrying"))
       )
       if (reusable) {
-        const lease = this.addLease(reusable, request.ownerWebContentsId, "terminal")
+        const lease = this.addLease(reusable, request.owner, "terminal")
         if (reusable.state === "retrying") this.retryNow(reusable.connectionId)
         try {
           await this.waitForReady(reusable)
@@ -194,7 +196,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     this.connections.set(record.connectionId, record)
     try {
       await this.connect(record, resolved)
-      return this.addLease(record, request.ownerWebContentsId, "terminal")
+      return this.addLease(record, request.owner, "terminal")
     } catch (error) {
       const reason = failureReason(error, record.connectFailureReason)
       this.discard(record, reason)
@@ -202,13 +204,13 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     }
   }
 
-  public retain(connectionId: string, ownerWebContentsId: number, kind: ConnectionLease["kind"]): ConnectionLease {
+  public retain(connectionId: string, owner: RuntimeOwner, kind: "forward"): ConnectionLease {
     if (kind !== "forward") throw new Error("Only forwarding leases may be retained")
     const record = this.getConnection(connectionId)
-    if (record.ownerWebContentsId !== ownerWebContentsId || record.state !== "ready") {
+    if (!sameRuntimeOwner(record.owner, owner) || record.state !== "ready") {
       throw new Error("SSH connection is not owned by this window")
     }
-    return this.addLease(record, ownerWebContentsId, kind)
+    return this.addLease(record, owner, kind)
   }
 
   public async release(leaseId: string): Promise<void> {
@@ -221,9 +223,19 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     if (record.leases.size === 0) this.close(record)
   }
 
-  public async releaseOwner(ownerWebContentsId: number): Promise<void> {
+  public async releaseOwner(owner: RuntimeOwner): Promise<void> {
     const leaseIds = [...this.leaseIndex.entries()]
-      .filter(([, connectionId]) => this.connections.get(connectionId)?.ownerWebContentsId === ownerWebContentsId)
+      .filter(([, connectionId]) => {
+        const connection = this.connections.get(connectionId)
+        return connection !== undefined && sameRuntimeOwner(connection.owner, owner)
+      })
+      .map(([leaseId]) => leaseId)
+    await Promise.all(leaseIds.map((leaseId) => this.release(leaseId)))
+  }
+
+  public async releaseWebContents(webContentsId: number): Promise<void> {
+    const leaseIds = [...this.leaseIndex.entries()]
+      .filter(([, connectionId]) => this.connections.get(connectionId)?.owner.webContentsId === webContentsId)
       .map(([leaseId]) => leaseId)
     await Promise.all(leaseIds.map((leaseId) => this.release(leaseId)))
   }
@@ -280,7 +292,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
   private createRecord(request: ConnectionAcquireRequest, resolved: ResolvedConnectionRequest, identityKey: string): ConnectionRecord {
     return {
       connectionId: randomUUID(),
-      ownerWebContentsId: request.ownerWebContentsId,
+      owner: request.owner,
       hostId: request.hostId,
       identityKey,
       host: resolved.host,
@@ -322,7 +334,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
         this.emit({
           kind: "ready",
           connectionId: record.connectionId,
-          ownerWebContentsId: record.ownerWebContentsId,
+          owner: record.owner,
           transportGeneration: record.transportGeneration
         })
         resolve()
@@ -399,7 +411,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
         return true
       }
       const approved = await this.options.promptForHostKey({
-        ownerWebContentsId: record.ownerWebContentsId,
+        owner: record.owner,
         host: resolved.host,
         port: resolved.port,
         inspection
@@ -448,7 +460,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       this.discard(record, reason)
       return
     }
-    this.emit({ kind: "lost", connectionId: record.connectionId, ownerWebContentsId: record.ownerWebContentsId, reason })
+    this.emit({ kind: "lost", connectionId: record.connectionId, owner: record.owner, reason })
     this.scheduleRetry(record, reason)
   }
 
@@ -472,7 +484,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     this.emit({
       kind: "retrying",
       connectionId: record.connectionId,
-      ownerWebContentsId: record.ownerWebContentsId,
+      owner: record.owner,
       attempt,
       nextRetryAt: new Date(Date.now() + delayMs).toISOString()
     })
@@ -482,7 +494,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     if (!this.connections.has(record.connectionId) || record.leases.size === 0) return
     let resolved: ResolvedConnectionRequest
     try {
-      resolved = await this.options.resolve({ hostId: record.hostId, ownerWebContentsId: record.ownerWebContentsId, kind: "terminal" })
+      resolved = await this.options.resolve({ hostId: record.hostId, owner: record.owner, kind: "terminal" })
     } catch (error) {
       this.discard(record, resolutionFailureReason(error))
       return
@@ -500,8 +512,8 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     }
   }
 
-  private addLease(record: ConnectionRecord, ownerWebContentsId: number, kind: ConnectionLease["kind"]): ConnectionLease {
-    const lease: ConnectionLease = { id: randomUUID(), connectionId: record.connectionId, ownerWebContentsId, kind }
+  private addLease(record: ConnectionRecord, owner: RuntimeOwner, kind: ConnectionLease["kind"]): ConnectionLease {
+    const lease: ConnectionLease = { id: randomUUID(), connectionId: record.connectionId, owner, kind }
     record.leases.set(lease.id, lease)
     this.leaseIndex.set(lease.id, record.connectionId)
     return lease
@@ -522,7 +534,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     this.close(record)
     for (const leaseId of record.leases.keys()) this.leaseIndex.delete(leaseId)
     record.leases.clear()
-    this.emit({ kind: "failed", connectionId: record.connectionId, ownerWebContentsId: record.ownerWebContentsId, reason })
+    this.emit({ kind: "failed", connectionId: record.connectionId, owner: record.owner, reason })
   }
 
   private getConnection(connectionId: string): ConnectionRecord {

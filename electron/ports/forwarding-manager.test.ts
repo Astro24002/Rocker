@@ -16,9 +16,11 @@ import {
   type LocalListenerFactory
 } from "./forwarding-manager"
 import type { ForwardingSpec } from "./types"
+import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 
 const connectionId = "connection-a"
-const ownerWebContentsId = 7
+const owner: RuntimeOwner = { webContentsId: 7, rendererGeneration: 1 }
+const otherOwner: RuntimeOwner = { webContentsId: 8, rendererGeneration: 1 }
 const loopbackSpec: ForwardingSpec = {
   localAddress: "127.0.0.1",
   localPort: 43123,
@@ -32,14 +34,14 @@ describe("ForwardingManager", () => {
     const listeners = createListenerFactory()
     const forwards = new ForwardingManager(connections, { createListener: listeners.create })
 
-    const forward = await forwards.start(connectionId, { ...loopbackSpec, localAddress }, ownerWebContentsId)
-    connections.emit({ kind: "lost", connectionId, ownerWebContentsId, reason: "network" })
+    const forward = await forwards.start(connectionId, { ...loopbackSpec, localAddress }, owner)
+    connections.emit({ kind: "lost", connectionId, owner, reason: "network" })
 
     expect(forwards.get(forward.id)).toMatchObject({ status: "suspended" })
     expect(forward).not.toHaveProperty("sessionId")
     expect(connections.activeLeaseCount()).toBe(1)
 
-    connections.emit({ kind: "ready", connectionId, ownerWebContentsId, transportGeneration: 2 })
+    connections.emit({ kind: "ready", connectionId, owner, transportGeneration: 2 })
     await waitFor(() => forwards.get(forward.id)?.status === "forwarding")
 
     expect(listeners.created).toHaveLength(2)
@@ -52,9 +54,9 @@ describe("ForwardingManager", () => {
     const listeners = createListenerFactory()
     const forwards = new ForwardingManager(connections, { createListener: listeners.create })
 
-    const forward = await forwards.start(connectionId, { ...loopbackSpec, localAddress: "0.0.0.0" }, ownerWebContentsId)
-    connections.emit({ kind: "lost", connectionId, ownerWebContentsId, reason: "network" })
-    connections.emit({ kind: "ready", connectionId, ownerWebContentsId, transportGeneration: 2 })
+    const forward = await forwards.start(connectionId, { ...loopbackSpec, localAddress: "0.0.0.0" }, owner)
+    connections.emit({ kind: "lost", connectionId, owner, reason: "network" })
+    connections.emit({ kind: "ready", connectionId, owner, transportGeneration: 2 })
     await flush()
 
     expect(forwards.get(forward.id)).toMatchObject({ status: "suspended" })
@@ -69,10 +71,24 @@ describe("ForwardingManager", () => {
   it("reports the owner only while a forwarding record remains active", async () => {
     const connections = new FakeConnections()
     const forwards = new ForwardingManager(connections, { createListener: createListenerFactory().create })
-    const forward = await forwards.start(connectionId, loopbackSpec, ownerWebContentsId)
+    const forward = await forwards.start(connectionId, loopbackSpec, owner)
 
-    expect(forwards.ownerForForwarding(forward.id)).toBe(ownerWebContentsId)
+    expect(forwards.ownerForForwarding(forward.id)).toEqual(owner)
     await forwards.stop(forward.id)
+    expect(forwards.ownerForForwarding(forward.id)).toBeUndefined()
+  })
+
+  it("releases only the matching runtime owner before broad webContents cleanup", async () => {
+    const connections = new FakeConnections()
+    const forwards = new ForwardingManager(connections, { createListener: createListenerFactory().create })
+    const ownerV1: RuntimeOwner = { webContentsId: 7, rendererGeneration: 1 }
+    const ownerV2: RuntimeOwner = { webContentsId: 7, rendererGeneration: 2 }
+    const forward = await forwards.start(connectionId, loopbackSpec, ownerV2)
+
+    expect(forwards.ownerForForwarding(forward.id)).toEqual(ownerV2)
+    await forwards.releaseOwner(ownerV1)
+    expect(forwards.ownerForForwarding(forward.id)).toEqual(ownerV2)
+    await forwards.releaseWebContents(7)
     expect(forwards.ownerForForwarding(forward.id)).toBeUndefined()
   })
 
@@ -80,23 +96,23 @@ describe("ForwardingManager", () => {
     const connections = new FakeConnections()
     const events: ForwardingEvent[] = []
     const forwards = new ForwardingManager(connections, { createListener: createListenerFactory().create, onEvent: (event) => events.push(event) })
-    const forward = await forwards.start(connectionId, loopbackSpec, ownerWebContentsId)
+    const forward = await forwards.start(connectionId, loopbackSpec, owner)
 
-    connections.emit({ kind: "lost", connectionId, ownerWebContentsId, reason: "network" })
-    connections.emit({ kind: "ready", connectionId, ownerWebContentsId, transportGeneration: 2 })
+    connections.emit({ kind: "lost", connectionId, owner, reason: "network" })
+    connections.emit({ kind: "ready", connectionId, owner, transportGeneration: 2 })
     await waitFor(() => events.some((event) => event.kind === "resumed"))
     await forwards.stop(forward.id)
 
     expect(events.map((event) => event.kind)).toEqual(["started", "suspended", "resumed", "stopped"])
-    expect(events.every((event) => event.connectionId === connectionId && event.ownerWebContentsId === ownerWebContentsId)).toBe(true)
+    expect(events.every((event) => event.connectionId === connectionId && event.owner === owner)).toBe(true)
   })
 
   it("deduplicates concurrent manual resumes for one suspended forward", async () => {
     const connections = new FakeConnections()
     const listeners = createListenerFactory()
     const forwards = new ForwardingManager(connections, { createListener: listeners.create })
-    const forward = await forwards.start(connectionId, { ...loopbackSpec, localAddress: "0.0.0.0" }, ownerWebContentsId)
-    connections.emit({ kind: "lost", connectionId, ownerWebContentsId, reason: "network" })
+    const forward = await forwards.start(connectionId, { ...loopbackSpec, localAddress: "0.0.0.0" }, owner)
+    connections.emit({ kind: "lost", connectionId, owner, reason: "network" })
 
     const resumed = await Promise.all([forwards.resume(forward.id), forwards.resume(forward.id)])
 
@@ -112,11 +128,11 @@ describe("ForwardingManager", () => {
     const connections = new FakeConnections()
     const listeners = createListenerFactory()
     const forwards = new ForwardingManager(connections, { createListener: listeners.create })
-    const forward = await forwards.start(connectionId, loopbackSpec, ownerWebContentsId)
-    connections.emit({ kind: "lost", connectionId, ownerWebContentsId, reason: "network" })
+    const forward = await forwards.start(connectionId, loopbackSpec, owner)
+    connections.emit({ kind: "lost", connectionId, owner, reason: "network" })
 
-    connections.emit({ kind: "ready", connectionId, ownerWebContentsId, transportGeneration: 2 })
-    connections.emit({ kind: "ready", connectionId, ownerWebContentsId, transportGeneration: 2 })
+    connections.emit({ kind: "ready", connectionId, owner, transportGeneration: 2 })
+    connections.emit({ kind: "ready", connectionId, owner, transportGeneration: 2 })
     await flush()
 
     expect(forwards.get(forward.id)).toMatchObject({ status: "forwarding" })
@@ -128,11 +144,11 @@ describe("ForwardingManager", () => {
     const connections = new FakeConnections()
     const listeners = createListenerFactory({ deferListen: true })
     const forwards = new ForwardingManager(connections, { createListener: listeners.create })
-    const starting = forwards.start(connectionId, loopbackSpec, ownerWebContentsId)
+    const starting = forwards.start(connectionId, loopbackSpec, owner)
 
     await waitFor(() => listeners.created.length === 1)
-    connections.emit({ kind: "lost", connectionId, ownerWebContentsId, reason: "network" })
-    connections.emit({ kind: "ready", connectionId, ownerWebContentsId, transportGeneration: 2 })
+    connections.emit({ kind: "lost", connectionId, owner, reason: "network" })
+    connections.emit({ kind: "ready", connectionId, owner, transportGeneration: 2 })
     listeners.created[0].finishListen()
 
     await waitFor(() => listeners.created.length === 2)
@@ -149,9 +165,9 @@ describe("ForwardingManager", () => {
     const connections = new FakeConnections()
     const listeners = createListenerFactory()
     const forwards = new ForwardingManager(connections, { createListener: listeners.create })
-    const forward = await forwards.start(connectionId, loopbackSpec, ownerWebContentsId)
+    const forward = await forwards.start(connectionId, loopbackSpec, owner)
 
-    connections.emit({ kind: "failed", connectionId, ownerWebContentsId, reason: "network" })
+    connections.emit({ kind: "failed", connectionId, owner, reason: "network" })
     await flush()
 
     expect(forwards.get(forward.id)).toMatchObject({ status: "error", error: "network" })
@@ -165,7 +181,7 @@ describe("ForwardingManager", () => {
     const listeners = createListenerFactory({ listenError: Object.assign(new Error("in use"), { code: "EADDRINUSE" }) })
     const forwards = new ForwardingManager(connections, { createListener: listeners.create })
 
-    await expect(forwards.start(connectionId, loopbackSpec, ownerWebContentsId)).rejects.toThrow("LOCAL_PORT_IN_USE")
+    await expect(forwards.start(connectionId, loopbackSpec, owner)).rejects.toThrow("LOCAL_PORT_IN_USE")
 
     expect(forwards.list()).toMatchObject([{ status: "error", error: "LOCAL_PORT_IN_USE" }])
     expect(connections.activeLeaseCount()).toBe(0)
@@ -177,10 +193,10 @@ describe("ForwardingManager", () => {
     const connections = new FakeConnections()
     const listeners = createListenerFactory()
     const forwards = new ForwardingManager(connections, { createListener: listeners.create })
-    const owned = await forwards.start(connectionId, loopbackSpec, ownerWebContentsId)
-    const other = await forwards.start("connection-b", { ...loopbackSpec, localPort: 43124 }, 8)
+    const owned = await forwards.start(connectionId, loopbackSpec, owner)
+    const other = await forwards.start("connection-b", { ...loopbackSpec, localPort: 43124 }, otherOwner)
 
-    await forwards.releaseOwner(ownerWebContentsId)
+    await forwards.releaseOwner(owner)
 
     expect(forwards.get(owned.id)).toMatchObject({ status: "stopped" })
     expect(forwards.get(other.id)).toMatchObject({ status: "forwarding" })
@@ -191,9 +207,9 @@ describe("ForwardingManager", () => {
   it("keeps the shared SSH transport alive after its terminal lease closes", async () => {
     const { clientEnd, connections } = createSharedConnectionHarness()
     const listeners = createListenerFactory()
-    const terminal = await connections.acquire({ hostId: "host-a", ownerWebContentsId, kind: "terminal" })
+    const terminal = await connections.acquire({ hostId: "host-a", owner, kind: "terminal" })
     const forwards = new ForwardingManager(connections, { createListener: listeners.create })
-    const forward = await forwards.start(terminal.connectionId, loopbackSpec, ownerWebContentsId)
+    const forward = await forwards.start(terminal.connectionId, loopbackSpec, owner)
 
     await connections.release(terminal.id)
 
@@ -209,18 +225,18 @@ describe("ForwardingManager", () => {
 class FakeConnections implements ForwardingConnectionAccess {
   private readonly listeners = new Set<(event: ConnectionEvent) => void>()
   private readonly leases = new Map<string, ConnectionLease>()
-  private readonly connectionOwners = new Map<string, number>()
+  private readonly connectionOwners = new Map<string, RuntimeOwner>()
   private nextLease = 1
   private releases = 0
 
-  public retain(connectionId: string, ownerId: number, kind: ConnectionLease["kind"]): ConnectionLease {
+  public retain(connectionId: string, owner: RuntimeOwner, kind: "forward"): ConnectionLease {
     const existingOwner = this.connectionOwners.get(connectionId)
-    if (existingOwner !== undefined && existingOwner !== ownerId) throw new Error("SSH connection is not owned by this window")
-    this.connectionOwners.set(connectionId, ownerId)
+    if (existingOwner !== undefined && !sameRuntimeOwner(existingOwner, owner)) throw new Error("SSH connection is not owned by this window")
+    this.connectionOwners.set(connectionId, owner)
     const lease: ConnectionLease = {
       id: `lease-${this.nextLease++}`,
       connectionId,
-      ownerWebContentsId: ownerId,
+      owner,
       kind
     }
     this.leases.set(lease.id, lease)
@@ -231,9 +247,15 @@ class FakeConnections implements ForwardingConnectionAccess {
     if (this.leases.delete(leaseId)) this.releases += 1
   }
 
-  public async releaseOwner(ownerId: number): Promise<void> {
+  public async releaseOwner(owner: RuntimeOwner): Promise<void> {
     for (const lease of [...this.leases.values()]) {
-      if (lease.ownerWebContentsId === ownerId) this.leases.delete(lease.id)
+      if (sameRuntimeOwner(lease.owner, owner)) this.leases.delete(lease.id)
+    }
+  }
+
+  public async releaseWebContents(webContentsId: number): Promise<void> {
+    for (const lease of [...this.leases.values()]) {
+      if (lease.owner.webContentsId === webContentsId) this.leases.delete(lease.id)
     }
   }
 

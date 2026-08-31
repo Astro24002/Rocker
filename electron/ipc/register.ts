@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises"
 import { BrowserWindow, dialog, ipcMain, shell } from "electron"
 import type { OpenDialogOptions } from "electron"
 import type { DiagnosticLogger } from "../diagnostics/diagnostic-logger"
+import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import { diagnosticFileName, writeDiagnosticExport } from "../diagnostics/diagnostic-export"
 import type { ForwardingManager } from "../ports/forwarding-manager"
 import type { PortService } from "../ports/port-service"
@@ -77,10 +78,11 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
 
   ipcMain.handle(ipcChannels.sessionOpen, async (event, value: unknown) => {
     const request = normalizeSessionOpenRequest(value)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
     const host = (await dependencies.hosts.list()).find((candidate) => candidate.id === request.hostId)
     if (!host) throw new Error("Host profile not found")
     try {
-      const session = await dependencies.sessions.open({ ...request, ownerWebContentsId: event.sender.id })
+      const session = await dependencies.sessions.open({ ...request, owner })
       await dependencies.history.add({ id: randomUUID(), hostId: host.id, connectedAt: new Date().toISOString(), durationMs: 0, outcome: "connected" })
       return session
     } catch (error) {
@@ -89,37 +91,43 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     }
   })
   ipcMain.handle(ipcChannels.sessionWrite, (event, sessionId: unknown, channelGeneration: unknown, data: unknown) => {
-    assertOwnedSession(dependencies, event.sender.id, sessionId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedSession(dependencies, owner, sessionId)
     if (!isValidGeneration(channelGeneration) || !validateTerminalData(data)) throw new Error("Invalid terminal input")
     dependencies.sessions.write(sessionId, channelGeneration, data)
   })
   ipcMain.handle(ipcChannels.sessionResize, (event, sessionId: unknown, channelGeneration: unknown, cols: unknown, rows: unknown) => {
-    assertOwnedSession(dependencies, event.sender.id, sessionId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedSession(dependencies, owner, sessionId)
     if (!isValidGeneration(channelGeneration)) throw new Error("Invalid resize request")
     dependencies.sessions.resize(sessionId, channelGeneration, normalizeDimensions(cols, rows))
   })
   ipcMain.handle(ipcChannels.sessionAckOutput, (event, sessionId: unknown, channelGeneration: unknown, sequence: unknown) => {
-    assertOwnedSession(dependencies, event.sender.id, sessionId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedSession(dependencies, owner, sessionId)
     if (!isValidGeneration(channelGeneration) || !isValidSequence(sequence)) throw new Error("Invalid terminal output acknowledgement")
     dependencies.sessions.ackOutput(sessionId, channelGeneration, sequence)
   })
   ipcMain.handle(ipcChannels.sessionReconnect, async (event, sessionId: unknown) => {
-    assertOwnedSession(dependencies, event.sender.id, sessionId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedSession(dependencies, owner, sessionId)
     await dependencies.sessions.reconnect(sessionId)
   })
   ipcMain.handle(ipcChannels.sessionCancelReconnect, (event, sessionId: unknown) => {
-    assertOwnedSession(dependencies, event.sender.id, sessionId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedSession(dependencies, owner, sessionId)
     dependencies.sessions.cancelReconnect(sessionId)
   })
   ipcMain.handle(ipcChannels.sessionClose, async (event, sessionId: unknown) => {
-    assertOwnedSession(dependencies, event.sender.id, sessionId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedSession(dependencies, owner, sessionId)
     await dependencies.sessions.close(sessionId)
   })
   ipcMain.handle(ipcChannels.sessionBeginRestore, (event, activeSessionId: unknown) => {
     if (!isValidSessionId(activeSessionId)) throw new Error("Invalid session identifier")
-    dependencies.sessions.beginRestore(event.sender.id, activeSessionId)
+    dependencies.sessions.beginRestore(currentOwnerForWebContents(dependencies, event.sender.id), activeSessionId)
   })
-  ipcMain.handle(ipcChannels.sessionCompleteRestore, (event) => dependencies.sessions.completeRestore(event.sender.id))
+  ipcMain.handle(ipcChannels.sessionCompleteRestore, (event) => dependencies.sessions.completeRestore(currentOwnerForWebContents(dependencies, event.sender.id)))
   ipcMain.handle(ipcChannels.sessionDuplicateWindow, (_event, hostId: unknown) => {
     assertId(hostId, "host")
     if (!dependencies.createDuplicateWindow) throw new Error("Window duplication is unavailable")
@@ -127,39 +135,51 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   })
 
   ipcMain.handle(ipcChannels.portsScan, (event, connectionId: unknown) => {
-    assertOwnedConnection(dependencies, event.sender.id, connectionId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedConnection(dependencies, owner, connectionId)
     return dependencies.ports.scan(connectionId)
   })
   ipcMain.handle(ipcChannels.portsStart, (event, connectionId: unknown, spec: unknown) => {
-    assertOwnedConnection(dependencies, event.sender.id, connectionId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedConnection(dependencies, owner, connectionId)
     if (!isValidForwardingSpec(spec)) throw new Error("Invalid forwarding request")
-    return dependencies.forwarding.start(connectionId, spec, event.sender.id)
+    return dependencies.forwarding.start(connectionId, spec, owner)
   })
   ipcMain.handle(ipcChannels.portsResume, async (event, forwardingId: unknown) => {
-    assertOwnedForwarding(dependencies, event.sender.id, forwardingId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedForwarding(dependencies, owner, forwardingId)
     return dependencies.forwarding.resume(forwardingId)
   })
   ipcMain.handle(ipcChannels.portsStop, async (event, forwardingId: unknown) => {
-    assertOwnedForwarding(dependencies, event.sender.id, forwardingId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedForwarding(dependencies, owner, forwardingId)
     await dependencies.forwarding.stop(forwardingId)
   })
-  ipcMain.handle(ipcChannels.portsList, (event) => dependencies.forwarding
-    .list()
-    .filter((forwarding) => dependencies.forwarding.ownerForForwarding(forwarding.id) === event.sender.id))
+  ipcMain.handle(ipcChannels.portsList, (event) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    return dependencies.forwarding
+      .list()
+      .filter((forwarding) => {
+        const forwardingOwner = dependencies.forwarding.ownerForForwarding(forwarding.id)
+        return forwardingOwner !== undefined && sameRuntimeOwner(forwardingOwner, owner)
+      })
+  })
   ipcMain.handle(ipcChannels.portsOpenAddress, async (event, forwardingId: unknown) => {
-    assertOwnedForwarding(dependencies, event.sender.id, forwardingId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedForwarding(dependencies, owner, forwardingId)
     const forwarding = dependencies.forwarding.get(forwardingId)
     if (!forwarding || forwarding.status !== "forwarding") throw new Error("Forwarding is not active")
     const host = forwarding.localAddress.includes(":") ? `[${forwarding.localAddress}]` : forwarding.localAddress
     await shell.openExternal(`http://${host}:${forwarding.localPort}`)
   })
 
-  ipcMain.handle(ipcChannels.workspaceLoad, (event) => dependencies.windows.loadWorkspace(event.sender.id))
+  ipcMain.handle(ipcChannels.workspaceLoad, (event) => dependencies.windows.loadWorkspace(currentOwnerForWebContents(dependencies, event.sender.id)))
   ipcMain.handle(ipcChannels.workspaceSave, (event, value: unknown) => {
-    dependencies.windows.saveWorkspace(event.sender.id, normalizeWorkspaceSaveRequest(value))
+    dependencies.windows.saveWorkspace(currentOwnerForWebContents(dependencies, event.sender.id), normalizeWorkspaceSaveRequest(value))
   })
   ipcMain.handle(ipcChannels.monitorSample, (event, sessionId: unknown) => {
-    assertOwnedSession(dependencies, event.sender.id, sessionId)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertOwnedSession(dependencies, owner, sessionId)
     return dependencies.monitoring.sample(sessionId)
   })
   ipcMain.handle(ipcChannels.historyList, () => dependencies.history.list())
@@ -202,8 +222,8 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   })
   ipcMain.handle(ipcChannels.windowClose, (event) => BrowserWindow.fromWebContents(event.sender)?.close())
 
-  const unsubscribe = dependencies.sessions.onEvent(({ ownerWebContentsId, event }) => {
-    const target = dependencies.windows.windowForWebContents(ownerWebContentsId)
+  const unsubscribe = dependencies.sessions.onEvent(({ owner, event }) => {
+    const target = dependencies.windows.windowForWebContents(owner.webContentsId)
     if (target && !target.isDestroyed()) target.webContents.send(ipcChannels.sessionEvent, event)
     if (event.kind === "state" && event.state === "closing") dependencies.monitoring.clear(event.sessionId)
   })
@@ -298,23 +318,29 @@ function normalizeSettingsUpdate(value: unknown): Partial<AppSettings> {
   return update
 }
 
-function assertOwnedSession(dependencies: IpcDependencies, ownerWebContentsId: number, sessionId: unknown): asserts sessionId is string {
+function currentOwnerForWebContents(dependencies: IpcDependencies, webContentsId: number): RuntimeOwner {
+  const owner = dependencies.windows.currentOwnerForWebContents(webContentsId)
+  if (!owner) throw new Error("Renderer owner was not found")
+  return owner
+}
+
+function assertOwnedSession(dependencies: IpcDependencies, owner: RuntimeOwner, sessionId: unknown): asserts sessionId is string {
   if (!isValidSessionId(sessionId)) throw new Error("Invalid session identifier")
-  const owner = dependencies.sessions.ownerForSession(sessionId)
-  if (owner === undefined) throw new Error("Terminal session was not found")
-  if (owner !== ownerWebContentsId) throw new Error("Session is owned by another window")
+  const sessionOwner = dependencies.sessions.ownerForSession(sessionId)
+  if (sessionOwner === undefined) throw new Error("Terminal session was not found")
+  if (!sameRuntimeOwner(sessionOwner, owner)) throw new Error("Session is owned by another window")
 }
 
-function assertOwnedConnection(dependencies: IpcDependencies, ownerWebContentsId: number, connectionId: unknown): asserts connectionId is string {
+function assertOwnedConnection(dependencies: IpcDependencies, owner: RuntimeOwner, connectionId: unknown): asserts connectionId is string {
   if (!isValidSessionId(connectionId)) throw new Error("Invalid SSH connection identifier")
-  const owner = dependencies.connections.ownerForConnection(connectionId)
-  if (owner === undefined || owner !== ownerWebContentsId) throw new Error("SSH connection is owned by another window")
+  const connectionOwner = dependencies.connections.ownerForConnection(connectionId)
+  if (connectionOwner === undefined || !sameRuntimeOwner(connectionOwner, owner)) throw new Error("SSH connection is owned by another window")
 }
 
-function assertOwnedForwarding(dependencies: IpcDependencies, ownerWebContentsId: number, forwardingId: unknown): asserts forwardingId is string {
+function assertOwnedForwarding(dependencies: IpcDependencies, owner: RuntimeOwner, forwardingId: unknown): asserts forwardingId is string {
   if (!isValidSessionId(forwardingId)) throw new Error("Invalid forwarding identifier")
-  const owner = dependencies.forwarding.ownerForForwarding(forwardingId)
-  if (owner === undefined || owner !== ownerWebContentsId) throw new Error("Port forwarding is owned by another window")
+  const forwardingOwner = dependencies.forwarding.ownerForForwarding(forwardingId)
+  if (forwardingOwner === undefined || !sameRuntimeOwner(forwardingOwner, owner)) throw new Error("Port forwarding is owned by another window")
 }
 
 function assertHostProfile(profile: HostProfile | undefined): asserts profile is HostProfile {

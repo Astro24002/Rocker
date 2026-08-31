@@ -35,8 +35,6 @@ export interface WorkspaceWindowManagerOptions {
   createWindow(options?: WorkspaceWindowOptions): WorkspaceWindow
   onWindowClosed?(ownerWebContentsId: number): Promise<void> | void
   onRendererReleased?(owner: RuntimeOwner): Promise<void> | void
-  /** @deprecated Task 3 migrates the main process to onRendererReleased. */
-  onRendererReload?(ownerWebContentsId: number): Promise<void> | void
   onLifecycle?(event: WindowLifecycleEvent): void
   preserveLastWindowWorkspace?: boolean
 }
@@ -223,9 +221,7 @@ export class WorkspaceWindowManager {
 
   private releaseRenderer(owner: RuntimeOwner): void {
     try {
-      const cleanup = this.options.onRendererReleased
-        ? this.options.onRendererReleased(owner)
-        : this.options.onRendererReload?.(owner.webContentsId)
+      const cleanup = this.options.onRendererReleased?.(owner)
       void Promise.resolve(cleanup).catch(() => undefined)
     } catch {
       // Renderer cleanup must not escape the native window event callback.

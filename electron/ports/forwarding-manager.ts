@@ -6,6 +6,7 @@ import type {
   ConnectionLease,
   ConnectionLeaseController
 } from "../ssh/connection-manager"
+import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import type { TerminalFailureReason } from "../ssh/types"
 import type { ForwardingInfo, ForwardingSpec } from "./types"
 
@@ -30,13 +31,13 @@ export interface ForwardingManagerOptions {
 export type ForwardingEvent = {
   kind: "started" | "resumed" | "suspended" | "stopped" | "error"
   connectionId: string
-  ownerWebContentsId: number
+  owner: RuntimeOwner
   reason?: TerminalFailureReason
 }
 
 interface ForwardingRecord {
   info: ForwardingInfo
-  ownerWebContentsId: number
+  owner: RuntimeOwner
   lease?: ConnectionLease
   listener?: LocalListener
   listenerClose?: Promise<void>
@@ -59,19 +60,19 @@ export class ForwardingManager {
     this.connections.onEvent((event) => this.handleConnectionEvent(event))
   }
 
-  public async start(connectionId: string, spec: ForwardingSpec, ownerWebContentsId: number): Promise<ForwardingInfo> {
+  public async start(connectionId: string, spec: ForwardingSpec, owner: RuntimeOwner): Promise<ForwardingInfo> {
     const info: ForwardingInfo = {
       ...spec,
       id: randomUUID(),
       connectionId,
       status: "starting"
     }
-    const lease = this.connections.retain(connectionId, ownerWebContentsId, "forward")
-    const record: ForwardingRecord = { info, ownerWebContentsId, lease, activationGeneration: 0 }
+    const lease = this.connections.retain(connectionId, owner, "forward")
+    const record: ForwardingRecord = { info, owner, lease, activationGeneration: 0 }
     this.records.set(info.id, record)
     try {
       await this.scheduleActivation(record)
-      this.emit({ kind: "started", connectionId, ownerWebContentsId })
+      this.emit({ kind: "started", connectionId, owner })
       return this.copyInfo(record)
     } catch (error) {
       await this.releaseLease(record)
@@ -84,7 +85,7 @@ export class ForwardingManager {
     if (!record) throw new Error("Port forwarding was not found")
     if (record.info.status !== "suspended" || !record.lease) throw new Error("Port forwarding is not suspended")
     await this.scheduleActivation(record)
-    this.emit({ kind: "resumed", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId })
+    this.emit({ kind: "resumed", connectionId: record.info.connectionId, owner: record.owner })
     return this.copyInfo(record)
   }
 
@@ -93,9 +94,9 @@ export class ForwardingManager {
     return record ? { ...record.info } : undefined
   }
 
-  public ownerForForwarding(id: string): number | undefined {
+  public ownerForForwarding(id: string): RuntimeOwner | undefined {
     const record = this.records.get(id)
-    return record && record.info.status !== "stopped" ? record.ownerWebContentsId : undefined
+    return record && record.info.status !== "stopped" ? record.owner : undefined
   }
 
   public list(): ForwardingInfo[] {
@@ -110,9 +111,16 @@ export class ForwardingManager {
     return record.stopPromise
   }
 
-  public async releaseOwner(ownerWebContentsId: number): Promise<void> {
+  public async releaseOwner(owner: RuntimeOwner): Promise<void> {
     const ids = [...this.records.values()]
-      .filter((record) => record.ownerWebContentsId === ownerWebContentsId)
+      .filter((record) => sameRuntimeOwner(record.owner, owner))
+      .map((record) => record.info.id)
+    await Promise.all(ids.map((id) => this.stop(id)))
+  }
+
+  public async releaseWebContents(webContentsId: number): Promise<void> {
+    const ids = [...this.records.values()]
+      .filter((record) => record.owner.webContentsId === webContentsId)
       .map((record) => record.info.id)
     await Promise.all(ids.map((id) => this.stop(id)))
   }
@@ -127,7 +135,7 @@ export class ForwardingManager {
     await this.closeCurrentListener(record)
     record.info.status = "stopped"
     delete record.info.error
-    this.emit({ kind: "stopped", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId })
+    this.emit({ kind: "stopped", connectionId: record.info.connectionId, owner: record.owner })
     await this.releaseLease(record)
   }
 
@@ -174,7 +182,7 @@ export class ForwardingManager {
         await closeListener(listener)
       }
       this.setListenerFailure(record, error)
-      this.emit({ kind: "error", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId, reason: forwardingFailureReason(error) })
+      this.emit({ kind: "error", connectionId: record.info.connectionId, owner: record.owner, reason: forwardingFailureReason(error) })
       await this.releaseLease(record)
       throw new Error(record.info.error)
     }
@@ -209,7 +217,7 @@ export class ForwardingManager {
 
   private handleConnectionEvent(event: ConnectionEvent): void {
     const affected = [...this.records.values()].filter((record) =>
-      record.info.connectionId === event.connectionId && record.ownerWebContentsId === event.ownerWebContentsId
+      record.info.connectionId === event.connectionId && sameRuntimeOwner(record.owner, event.owner)
     )
     if (event.kind === "lost") {
       for (const record of affected) this.suspend(record, event.reason)
@@ -220,7 +228,7 @@ export class ForwardingManager {
         if (record.info.status === "suspended" && isLoopback(record.info.localAddress)) {
           void this.scheduleActivation(record).then(() => {
             if (record.info.status === "forwarding") {
-              this.emit({ kind: "resumed", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId })
+              this.emit({ kind: "resumed", connectionId: record.info.connectionId, owner: record.owner })
             }
           }).catch(() => undefined)
         }
@@ -237,7 +245,7 @@ export class ForwardingManager {
     this.invalidateActivation(record)
     record.info.status = "suspended"
     delete record.info.error
-    this.emit({ kind: "suspended", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId, reason })
+    this.emit({ kind: "suspended", connectionId: record.info.connectionId, owner: record.owner, reason })
     void this.closeCurrentListener(record)
   }
 
@@ -246,7 +254,7 @@ export class ForwardingManager {
     this.invalidateActivation(record)
     record.info.status = "error"
     record.info.error = reason
-    this.emit({ kind: "error", connectionId: record.info.connectionId, ownerWebContentsId: record.ownerWebContentsId, reason: forwardingFailureReason(reason) })
+    this.emit({ kind: "error", connectionId: record.info.connectionId, owner: record.owner, reason: forwardingFailureReason(reason) })
     void this.closeCurrentListener(record)
     void this.releaseLease(record).catch(() => undefined)
   }
