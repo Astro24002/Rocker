@@ -31,7 +31,7 @@ vi.mock("electron", () => electron)
 
 import { ipcChannels } from "./bridge-contract"
 import { registerIpcHandlers, type IpcDependencies } from "./register"
-import type { RuntimeOwner } from "../runtime/owner"
+import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import type { HostProfile } from "../storage/types"
 
 const sessionId = "11111111-1111-4111-8111-111111111111"
@@ -62,12 +62,44 @@ describe("registerIpcHandlers", () => {
     expect(harness.other.webContents.send).not.toHaveBeenCalled()
   })
 
+  it("does not deliver a session event from an old renderer generation", () => {
+    const harness = createHarness()
+    harness.windows.currentOwnerForWebContents.mockReturnValue(owner21Generation2)
+    registerIpcHandlers(harness.dependencies)
+
+    harness.emitSession({
+      owner: owner21,
+      event: {
+        kind: "output",
+        packet: { sessionId, channelGeneration: 1, sequence: 1, bytes: Uint8Array.of(0x61) }
+      }
+    })
+
+    expect(harness.windows.sendToOwner).toHaveBeenCalledWith(
+      owner21,
+      ipcChannels.sessionEvent,
+      expect.objectContaining({ kind: "output" })
+    )
+    expect(harness.owner.webContents.send).not.toHaveBeenCalled()
+  })
+
   it("rejects a renderer request for a session owned by another window", async () => {
     const harness = createHarness()
     harness.sessions.ownerForSession.mockReturnValue(owner21)
     registerIpcHandlers(harness.dependencies)
 
     await expect(invokeFrom(22, ipcChannels.sessionClose, sessionId)).rejects.toThrow("Session is owned by another window")
+    expect(harness.sessions.close).not.toHaveBeenCalled()
+  })
+
+  it("rejects a renderer request for a session owned by another generation", async () => {
+    const harness = createHarness()
+    harness.windows.currentOwnerForWebContents.mockReturnValue(owner21Generation2)
+    harness.sessions.ownerForSession.mockReturnValue(owner21)
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.sessionClose, sessionId))
+      .rejects.toThrow("Session is owned by another renderer generation")
     expect(harness.sessions.close).not.toHaveBeenCalled()
   })
 
@@ -204,9 +236,20 @@ function createHarness() {
   const settings = { get: vi.fn(), update: vi.fn() }
   const diagnostics = { snapshot: vi.fn(() => [{ at: "2026-08-28T12:00:00.000Z", category: "session", action: "connected" }]) }
   const hosts = { list: vi.fn(), save: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn() }
+  const currentOwnerForWebContents = vi.fn((id: number) => id === owner21.webContentsId ? owner21 : id === owner22.webContentsId ? owner22 : undefined)
+  const windowForWebContents = vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined)
+  const sendToOwner = vi.fn((targetOwner: RuntimeOwner, channel: string, ...args: unknown[]): boolean => {
+    const currentOwner = currentOwnerForWebContents(targetOwner.webContentsId)
+    if (!currentOwner || !sameRuntimeOwner(currentOwner, targetOwner)) return false
+    const target = windowForWebContents(targetOwner.webContentsId)
+    if (!target || target.isDestroyed()) return false
+    target.webContents.send(channel, ...args)
+    return true
+  })
   const windows = {
-    currentOwnerForWebContents: vi.fn((id: number) => id === owner21.webContentsId ? owner21 : id === owner22.webContentsId ? owner22 : undefined),
-    windowForWebContents: vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined),
+    currentOwnerForWebContents,
+    windowForWebContents,
+    sendToOwner,
     workspaceForWebContents: vi.fn(),
     saveWorkspace: vi.fn(),
     loadWorkspace: vi.fn()

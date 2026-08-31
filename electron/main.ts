@@ -121,7 +121,8 @@ async function startApplication(): Promise<void> {
   dependencies.createDuplicateWindow = async (hostId) => {
     const target = windows.createNew()
     target.webContents.once("did-finish-load", () => {
-      if (!target.isDestroyed()) target.webContents.send(ipcChannels.sessionLaunch, { hostId })
+      const owner = windows.currentOwnerForWebContents(target.webContents.id)
+      if (owner) windows.sendToOwner(owner, ipcChannels.sessionLaunch, { hostId })
     })
   }
   registerIpcHandlers(dependencies)

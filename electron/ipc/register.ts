@@ -131,7 +131,8 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     dependencies.sessions.beginRestore(currentOwnerForWebContents(dependencies, event.sender.id), activeSessionId)
   })
   ipcMain.handle(ipcChannels.sessionCompleteRestore, (event) => dependencies.sessions.completeRestore(currentOwnerForWebContents(dependencies, event.sender.id)))
-  ipcMain.handle(ipcChannels.sessionDuplicateWindow, (_event, hostId: unknown) => {
+  ipcMain.handle(ipcChannels.sessionDuplicateWindow, (event, hostId: unknown) => {
+    currentOwnerForWebContents(dependencies, event.sender.id)
     assertId(hostId, "host")
     if (!dependencies.createDuplicateWindow) throw new Error("Window duplication is unavailable")
     return dependencies.createDuplicateWindow(hostId)
@@ -226,8 +227,7 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   ipcMain.handle(ipcChannels.windowClose, (event) => BrowserWindow.fromWebContents(event.sender)?.close())
 
   const unsubscribe = dependencies.sessions.onEvent(({ owner, event }) => {
-    const target = dependencies.windows.windowForWebContents(owner.webContentsId)
-    if (target && !target.isDestroyed()) target.webContents.send(ipcChannels.sessionEvent, event)
+    dependencies.windows.sendToOwner(owner, ipcChannels.sessionEvent, event)
     if (event.kind === "state" && event.state === "closing") dependencies.monitoring.clear(event.sessionId)
   })
   return () => {
@@ -323,7 +323,7 @@ function normalizeSettingsUpdate(value: unknown): Partial<AppSettings> {
 
 function currentOwnerForWebContents(dependencies: IpcDependencies, webContentsId: number): RuntimeOwner {
   const owner = dependencies.windows.currentOwnerForWebContents(webContentsId)
-  if (!owner) throw new Error("Renderer owner was not found")
+  if (!owner) throw new Error("Renderer generation is not active")
   return owner
 }
 
@@ -331,19 +331,33 @@ function assertOwnedSession(dependencies: IpcDependencies, owner: RuntimeOwner, 
   if (!isValidSessionId(sessionId)) throw new Error("Invalid session identifier")
   const sessionOwner = dependencies.sessions.ownerForSession(sessionId)
   if (sessionOwner === undefined) throw new Error("Terminal session was not found")
-  if (!sameRuntimeOwner(sessionOwner, owner)) throw new Error("Session is owned by another window")
+  if (!sameRuntimeOwner(sessionOwner, owner)) {
+    throw new Error(sessionOwner.webContentsId === owner.webContentsId
+      ? "Session is owned by another renderer generation"
+      : "Session is owned by another window")
+  }
 }
 
 function assertOwnedConnection(dependencies: IpcDependencies, owner: RuntimeOwner, connectionId: unknown): asserts connectionId is string {
   if (!isValidSessionId(connectionId)) throw new Error("Invalid SSH connection identifier")
   const connectionOwner = dependencies.connections.ownerForConnection(connectionId)
-  if (connectionOwner === undefined || !sameRuntimeOwner(connectionOwner, owner)) throw new Error("SSH connection is owned by another window")
+  if (connectionOwner === undefined) throw new Error("SSH connection is owned by another window")
+  if (!sameRuntimeOwner(connectionOwner, owner)) {
+    throw new Error(connectionOwner.webContentsId === owner.webContentsId
+      ? "SSH connection is owned by another renderer generation"
+      : "SSH connection is owned by another window")
+  }
 }
 
 function assertOwnedForwarding(dependencies: IpcDependencies, owner: RuntimeOwner, forwardingId: unknown): asserts forwardingId is string {
   if (!isValidSessionId(forwardingId)) throw new Error("Invalid forwarding identifier")
   const forwardingOwner = dependencies.forwarding.ownerForForwarding(forwardingId)
-  if (forwardingOwner === undefined || !sameRuntimeOwner(forwardingOwner, owner)) throw new Error("Port forwarding is owned by another window")
+  if (forwardingOwner === undefined) throw new Error("Port forwarding is owned by another window")
+  if (!sameRuntimeOwner(forwardingOwner, owner)) {
+    throw new Error(forwardingOwner.webContentsId === owner.webContentsId
+      ? "Port forwarding is owned by another renderer generation"
+      : "Port forwarding is owned by another window")
+  }
 }
 
 function assertHostProfile(profile: HostProfile | undefined): asserts profile is HostProfile {
