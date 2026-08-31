@@ -4,6 +4,7 @@ import {
   type WorkspaceWindow,
   type WorkspaceWindowOptions
 } from "./workspace-window-manager"
+import type { RuntimeOwner } from "../runtime/owner"
 import type { StoredWorkspaceDocument, StoredWorkspaceWindow } from "../storage/types"
 
 const firstWorkspace = "11111111-1111-4111-8111-111111111111"
@@ -62,8 +63,11 @@ describe("WorkspaceWindowManager", () => {
     const windows = createWindowFactory()
     const manager = new WorkspaceWindowManager({ snapshots: store, createWindow: windows.create })
     const window = manager.createNew(createWorkspace(firstWorkspace)) as FakeWindow
+    window.webContents.emit("did-finish-load")
+    const owner = manager.currentOwnerForWebContents(window.webContents.id)
+    expect(owner).toBeDefined()
 
-    manager.saveWorkspace(window.webContents.id, { sessions: [] })
+    manager.saveWorkspace(owner!, { sessions: [] })
 
     expect(store.saveWindow).toHaveBeenCalledWith({
       workspaceId: firstWorkspace,
@@ -91,6 +95,66 @@ describe("WorkspaceWindowManager", () => {
     expect(onRendererReload).toHaveBeenCalledWith(window.webContents.id)
     expect(manager.workspaceForWebContents(window.webContents.id)).toBe(firstWorkspace)
     expect(store.removeWindow).not.toHaveBeenCalled()
+  })
+
+  it("tracks renderer generations and rejects stale owner sends", async () => {
+    const store = createStore()
+    const windows = createWindowFactory()
+    const released: RuntimeOwner[] = []
+    const manager = new WorkspaceWindowManager({
+      snapshots: store,
+      createWindow: windows.create,
+      onRendererReleased: async (owner) => { released.push(owner) }
+    })
+    const window = manager.createNew(createWorkspace(firstWorkspace)) as FakeWindow
+
+    window.webContents.emit("did-finish-load")
+    const ownerGeneration1 = {
+      webContentsId: window.webContents.id,
+      rendererGeneration: 1
+    }
+    expect(manager.currentOwnerForWebContents(window.webContents.id)).toEqual(ownerGeneration1)
+
+    window.webContents.emit("did-start-loading")
+    window.webContents.emit("did-finish-load")
+    const ownerGeneration2 = {
+      webContentsId: window.webContents.id,
+      rendererGeneration: 2
+    }
+    expect(released).toEqual([ownerGeneration1])
+    expect(manager.currentOwnerForWebContents(window.webContents.id)).toEqual(ownerGeneration2)
+
+    expect(manager.sendToOwner(ownerGeneration1, "stale-event", { stale: true })).toBe(false)
+    expect(manager.sendToOwner(ownerGeneration2, "current-event", { current: true })).toBe(true)
+    expect(window.webContents.send).toHaveBeenCalledOnce()
+    expect(window.webContents.send).toHaveBeenCalledWith("current-event", { current: true })
+
+    await flush()
+  })
+
+  it("ignores late renderer events from a replaced native window", () => {
+    const store = createStore()
+    const firstWindow = createWindow(21)
+    const replacementWindow = createWindow(21)
+    const windows = {
+      create: vi.fn()
+        .mockReturnValueOnce(firstWindow)
+        .mockReturnValueOnce(replacementWindow)
+    }
+    const manager = new WorkspaceWindowManager({ snapshots: store, createWindow: windows.create })
+
+    manager.createNew(createWorkspace(firstWorkspace))
+    firstWindow.webContents.emit("did-finish-load")
+    manager.removeWorkspaceForWindow(firstWindow.webContents.id)
+    manager.createNew(createWorkspace(secondWorkspace))
+    replacementWindow.webContents.emit("did-finish-load")
+
+    firstWindow.webContents.emit("did-start-loading")
+
+    expect(manager.currentOwnerForWebContents(replacementWindow.webContents.id)).toEqual({
+      webContentsId: replacementWindow.webContents.id,
+      rendererGeneration: 2
+    })
   })
 
   it("captures native bounds when a window moves without waiting for renderer state", async () => {
