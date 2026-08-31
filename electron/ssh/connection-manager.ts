@@ -239,7 +239,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
           throw new Error("SSH connection is not ready")
         } catch (error) {
           await this.release(lease.id)
-          throw withFailureReason(error, failureReason(error, reusable.connectFailureReason))
+          throw withFailureReason(error, failureReason(error, reusable.connectFailureReason, reusable.authMethod))
         }
       }
     }
@@ -250,8 +250,9 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     const ready = this.waitForReady(record, lease, request.signal)
     if (this.isCurrent(record) && record.leases.has(lease.id)) {
       void this.connect(record, resolved).catch((error: unknown) => {
-        const reason = failureReason(error, record.connectFailureReason)
-        this.discard(record, reason, error)
+        const normalized = normalizeConnectionFailure(error, record.authMethod)
+        const reason = failureReason(normalized, record.connectFailureReason, record.authMethod)
+        this.discard(record, reason, normalized)
       })
     }
     try {
@@ -260,7 +261,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       throw new Error("SSH connection is not ready")
     } catch (error) {
       await this.release(lease.id)
-      throw withFailureReason(error, failureReason(error, record.connectFailureReason))
+      throw withFailureReason(error, failureReason(error, record.connectFailureReason, record.authMethod))
     }
   }
 
@@ -405,8 +406,9 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       client.once("ready", ready)
       client.on("error", (error: Error) => {
         if (!isCurrentTransport()) return
-        if (!settled) fail(error)
-        else this.handleLostTransport(record, failureReason(error))
+        const normalized = normalizeConnectionFailure(error, record.authMethod)
+        if (!settled) fail(normalized)
+        else this.handleLostTransport(record, failureReason(normalized, undefined, record.authMethod))
       })
       client.on("close", () => {
         if (!isCurrentTransport()) return
@@ -421,7 +423,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
           return
         }
         client.connect(config)
-      }).catch((error: Error) => fail(error))
+      }).catch((error: unknown) => fail(normalizeConnectionFailure(error, record.authMethod)))
     })
     record.connectPromise = promise
     try {
@@ -579,7 +581,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       }
       await this.connect(record, resolved)
     } catch (error) {
-      const reason = failureReason(error, record.connectFailureReason)
+      const reason = failureReason(error, record.connectFailureReason, record.authMethod)
       if (isRetryable(reason)) this.scheduleRetry(record, reason)
       else this.discard(record, reason, error)
     }
@@ -708,7 +710,7 @@ function matchesKnownHostKey(record: ConnectionRecord, resolved: ResolvedConnect
     record.verifiedFingerprint === normalizeFingerprint(resolved.knownHostKeyFingerprint)
 }
 
-function failureReason(error: unknown, fallback?: ConnectionFailureReason): ConnectionFailureReason {
+function failureReason(error: unknown, fallback?: ConnectionFailureReason, authMethod?: AuthMethod): ConnectionFailureReason {
   if (error instanceof ConnectionFailureError) return error.reason
   if (fallback !== undefined) return fallback
   if (error instanceof HostKeyError) return error.reason
@@ -716,12 +718,46 @@ function failureReason(error: unknown, fallback?: ConnectionFailureReason): Conn
   const code = error && typeof error === "object" && "code" in error
     ? String((error as { code?: unknown }).code).toLowerCase()
     : ""
+  if (authMethod === "agent" && isAgentEndpointFailure(error, message, code)) return "configuration"
+  if (authMethod === "privateKey" && isPrivateKeyConfigurationFailure(message)) return "configuration"
   if (message.includes("authentication") || message.includes("auth failed")) return "authentication"
-  if (message.includes("private key") || message.includes("security context") || message.includes("credential") || message.includes("configuration")) return "configuration"
+  if (message.includes("private key") || message.includes("privatekey") || message.includes("security context") || message.includes("credential") || message.includes("configuration")) return "configuration"
   if (message.includes("cancelled") || message.includes("canceled")) return "cancelled"
   if (message.includes("timeout") || message.includes("timed out") || message.includes("etimedout") || code === "etimedout") return "timeout"
   if (message.includes("dns") || message.includes("enotfound") || code === "enotfound" || code === "eai_again" || code === "eai_fail") return "dns"
   return "network"
+}
+
+function normalizeConnectionFailure(error: unknown, authMethod: AuthMethod): Error {
+  if (error instanceof ConnectionFailureError) return error
+  const message = error instanceof Error ? error.message.toLowerCase() : ""
+  const code = error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code).toLowerCase()
+    : ""
+  if (authMethod === "privateKey" && isPrivateKeyConfigurationFailure(message)) {
+    return new ConnectionFailureError("SSH private key is invalid or unsupported", "configuration")
+  }
+  if (authMethod === "agent" && isAgentEndpointFailure(error, message, code)) {
+    return new ConnectionFailureError("SSH agent endpoint is unavailable", "configuration")
+  }
+  return error instanceof Error ? error : new Error("SSH connection failed")
+}
+
+function isPrivateKeyConfigurationFailure(message: string): boolean {
+  return message.includes("private key") || message.includes("privatekey")
+}
+
+function isAgentEndpointFailure(error: unknown, message: string, code: string): boolean {
+  const level = error && typeof error === "object" && "level" in error
+    ? String((error as { level?: unknown }).level).toLowerCase()
+    : ""
+  return level === "agent" ||
+    code === "enoent" ||
+    code === "eacces" ||
+    message.includes("failed to connect to agent") ||
+    message.includes("agent endpoint") ||
+    message.includes("agent socket") ||
+    message.includes("no socket")
 }
 
 function withFailureReason(error: unknown, reason: ConnectionFailureReason): Error {

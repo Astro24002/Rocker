@@ -336,6 +336,51 @@ describe("SshConnectionManager", () => {
     expect(scheduler.pendingTimers()).toHaveLength(0)
   })
 
+  it("classifies malformed private-key material as configuration without leaking local details", async () => {
+    const identityFile = "/private/key/host-a"
+    const secretMarker = "malformed-key-secret-marker"
+    const { events, manager, request, scheduler } = createConnectionHarness({
+      authMethod: "privateKey",
+      identityFile,
+      readPrivateKey: (async () => Buffer.from(secretMarker)) as unknown as SshConnectionManagerOptions["readPrivateKey"],
+      connectThrow: new Error(`Cannot parse privateKey: invalid material at ${identityFile} (${secretMarker})`)
+    })
+
+    const rejection = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+      .then(() => undefined, (error: unknown) => error)
+
+    expect(rejection).toMatchObject({ reason: "configuration" })
+    expect(rejection).toBeInstanceOf(Error)
+    expect((rejection as Error).message).not.toContain(identityFile)
+    expect((rejection as Error).message).not.toContain(secretMarker)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ kind: "failed", reason: "configuration", owner: owner11 })
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+  })
+
+  it.each([
+    ["ENOENT", Object.assign(new Error("connect ENOENT /private/agent/host-a.sock"), { code: "ENOENT", level: "agent" })],
+    ["EACCES", Object.assign(new Error("connect EACCES /private/agent/host-a.sock"), { code: "EACCES", level: "agent" })],
+    ["no socket", Object.assign(new Error("Failed to connect to agent"), { level: "agent" })]
+  ] as const)("classifies configured SSH-agent %s as configuration without retry", async (_caseName, connectFailure) => {
+    const agentEndpoint = "/private/agent/host-a.sock"
+    const { events, manager, request, scheduler } = createConnectionHarness({
+      authMethod: "agent",
+      agent: agentEndpoint,
+      connectFailure
+    })
+
+    const rejection = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+      .then(() => undefined, (error: unknown) => error)
+
+    expect(rejection).toMatchObject({ reason: "configuration" })
+    expect(rejection).toBeInstanceOf(Error)
+    expect((rejection as Error).message).not.toContain(agentEndpoint)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ kind: "failed", reason: "configuration", owner: owner11 })
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+  })
+
   it.each(["ENOENT", "EACCES"] as const)("classifies private-key %s as configuration without retry", async (code) => {
     const identityFile = "/private/key/host-a"
     const { events, manager, request, scheduler } = createConnectionHarness({
@@ -420,12 +465,14 @@ interface HarnessOptions {
   trustHostKey?: (host: string, port: number, fingerprint: string) => Promise<void>
   replaceHostKey?: (host: string, port: number, expectedFingerprint: string, replacementFingerprint: string) => Promise<void>
   connectFailure?: Error
+  connectThrow?: Error
   resolveFailure?: Error
   deferRetryResolution?: boolean
   maxRetryAttempts?: number
   deferReady?: boolean
   authMethod?: ResolvedConnectionRequest["authMethod"]
   identityFile?: string
+  agent?: string
   readPrivateKey?: SshConnectionManagerOptions["readPrivateKey"]
 }
 
@@ -478,6 +525,7 @@ function createConnectionHarness(options: HarnessOptions) {
     const client = {
       connect: (config: ConnectConfig) => {
         configs.push(config)
+        if (options.connectThrow) throw options.connectThrow
         if (connectFailure) {
           queueMicrotask(() => emitter.emit("error", connectFailure))
           return
@@ -523,6 +571,7 @@ function createConnectionHarness(options: HarnessOptions) {
         username: "rock",
         authMethod: options.authMethod ?? "agent",
         ...(options.identityFile ? { identityFile: options.identityFile } : {}),
+        ...(options.agent ? { agent: options.agent } : {}),
         readyTimeoutMs: 15_000,
         securityContextKey,
         ...(knownHostKeyFingerprint ? { knownHostKeyFingerprint } : {})
