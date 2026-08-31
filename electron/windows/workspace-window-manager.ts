@@ -194,7 +194,11 @@ export class WorkspaceWindowManager {
     this.removeWorkspaceForWindow(ownerWebContentsId)
     this.emitLifecycle({ kind: "window-closed", webContentsId: ownerWebContentsId })
     if (removeWorkspace) this.options.snapshots.removeWindow(workspaceId)
-    await this.options.onWindowClosed?.(ownerWebContentsId)
+    try {
+      await this.options.onWindowClosed?.(ownerWebContentsId)
+    } catch {
+      // Window-close cleanup is best effort and must not escape the close handler.
+    }
   }
 
   private ownerFromInput(ownerOrWebContentsId: RuntimeOwner | number): RuntimeOwner | undefined {

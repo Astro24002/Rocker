@@ -187,6 +187,25 @@ describe("WorkspaceWindowManager", () => {
 
     expect(store.removeWindow).toHaveBeenCalledWith(firstWorkspace)
   })
+
+  it("contains a rejecting window cleanup callback after removing its workspace", async () => {
+    const store = createStore()
+    const windows = createWindowFactory()
+    const onWindowClosed = vi.fn(async () => {
+      throw new Error("cleanup failed")
+    })
+    const manager = new WorkspaceWindowManager({
+      snapshots: store,
+      createWindow: windows.create,
+      onWindowClosed
+    })
+    const window = manager.createNew(createWorkspace(firstWorkspace))
+
+    await expect(manager.handleClosed(window.webContents.id)).resolves.toBeUndefined()
+
+    expect(store.removeWindow).toHaveBeenCalledWith(firstWorkspace)
+    expect(onWindowClosed).toHaveBeenCalledWith(window.webContents.id)
+  })
 })
 
 function createStore(document: StoredWorkspaceDocument = { version: 1, windows: [] }) {
