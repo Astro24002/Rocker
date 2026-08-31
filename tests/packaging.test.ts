@@ -35,6 +35,7 @@ describe("desktop packaging metadata", () => {
 
   it("gates packaging on release-grade verification and uploads only installer assets", () => {
     const workflow = readFileSync(".github/workflows/build.yml", "utf8")
+    const releaseJob = workflow.slice(workflow.indexOf("\n  release:"))
 
     expect(workflow).toContain("npm test")
     expect(workflow).toContain("npm run typecheck")
@@ -44,6 +45,7 @@ describe("desktop packaging metadata", () => {
     expect(workflow).toContain("timeout 90s env npm_config_registry=https://registry.npmjs.org npm audit")
     expect(workflow).toContain("::error::")
     expect(workflow).toContain("mkdir -p release-publish")
+    expect(releaseJob).toMatch(/steps:\s+- uses: actions\/checkout@v4/)
     expect(workflow).toContain("cp \"$asset\" \"release-publish/$asset_name\"")
     expect(workflow).toContain("node scripts/verify-release-assets.mjs \"$release_version\" release-publish")
     expect(workflow).toContain("--jq '.assets | map(.name) | .[]' || true")
