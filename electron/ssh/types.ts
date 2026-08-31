@@ -1,5 +1,21 @@
 import type { RuntimeOwner } from "../runtime/owner"
 
+export type ConnectionFailureReason =
+  | "network" | "timeout" | "dns" | "authentication"
+  | "host-key-changed" | "host-key-rejected"
+  | "configuration" | "cancelled"
+
+export class ConnectionFailureError extends Error {
+  public constructor(
+    message: string,
+    public readonly reason: ConnectionFailureReason,
+    options?: ErrorOptions
+  ) {
+    super(message, options)
+    this.name = "ConnectionFailureError"
+  }
+}
+
 export type TerminalSessionState =
   | "idle"
   | "restoring"
@@ -11,9 +27,8 @@ export type TerminalSessionState =
   | "closing"
 
 export type TerminalFailureReason =
-  | "network" | "timeout" | "dns" | "authentication"
-  | "host-key-changed" | "host-key-rejected" | "configuration"
-  | "channel-ended" | "local-port-in-use" | "cancelled" | "unknown"
+  | ConnectionFailureReason
+  | "channel-ended" | "local-port-in-use" | "unknown"
 
 export interface TerminalDimensions { cols: number; rows: number }
 

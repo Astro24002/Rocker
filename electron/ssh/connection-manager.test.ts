@@ -2,9 +2,12 @@ import { EventEmitter } from "node:events"
 import type { Client, ConnectConfig, HostFingerprintVerifier } from "ssh2"
 import { describe, expect, it, vi } from "vitest"
 import {
+  ConnectionFailureError,
   SshConnectionManager,
   type ConnectionEvent,
-  type RetryScheduler
+  type ResolvedConnectionRequest,
+  type RetryScheduler,
+  type SshConnectionManagerOptions
 } from "./connection-manager"
 import type { RuntimeOwner } from "../runtime/owner"
 
@@ -53,6 +56,46 @@ describe("SshConnectionManager", () => {
 
     expect(clients).toHaveLength(1)
     expect(second.connectionId).toBe(first.connectionId)
+  })
+
+  it("cancels a pending acquisition and ends its only connecting client", async () => {
+    const { clients, manager, request, releaseReady, scheduler } = createConnectionHarness({ deferReady: true })
+    const controller = new AbortController()
+    const pending = manager.acquire({ ...request, owner: owner11, kind: "terminal", signal: controller.signal })
+
+    await waitFor(() => clients.length === 1)
+    controller.abort()
+    releaseReady()
+
+    await expect(pending).rejects.toMatchObject({ reason: "cancelled" })
+    expect(clients[0].end).toHaveBeenCalledOnce()
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+  })
+
+  it("keeps a shared acquisition ready when an equivalent waiter is cancelled", async () => {
+    const { clients, manager, request, releaseReady, resolveCallCount } = createConnectionHarness({ deferReady: true })
+    const cancelledController = new AbortController()
+    const cancelled = manager.acquire({ ...request, owner: owner11, kind: "terminal", signal: cancelledController.signal })
+    await waitFor(() => clients.length === 1)
+    const remaining = manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    await waitFor(() => resolveCallCount() === 2)
+
+    cancelledController.abort()
+    releaseReady()
+
+    const [cancelledResult, remainingResult] = await Promise.allSettled([cancelled, remaining])
+    expect(cancelledResult).toMatchObject({ status: "rejected", reason: { reason: "cancelled" } })
+    expect(remainingResult).toMatchObject({ status: "fulfilled", value: { connectionId: expect.any(String) } })
+    expect(clients).toHaveLength(1)
+    expect(clients[0].end).not.toHaveBeenCalled()
+  })
+
+  it("uses the production SSH keepalive policy by default", async () => {
+    const { configs, manager, request } = createConnectionHarness({})
+
+    await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+
+    expect(configs[0]).toMatchObject({ keepaliveInterval: 15_000, keepaliveCountMax: 3 })
   })
 
   it("does not reuse a connection after its credential context changes", async () => {
@@ -118,6 +161,18 @@ describe("SshConnectionManager", () => {
     await expect(manager.acquire({ ...request, owner: owner11, kind: "terminal" })).rejects.toThrow("ENOTFOUND")
 
     expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "dns" })
+  })
+
+  it("preserves a typed configuration failure without relying on its message", async () => {
+    const { events, manager, request, scheduler } = createConnectionHarness({
+      connectFailure: new ConnectionFailureError("local setup failed", "configuration")
+    })
+
+    await expect(manager.acquire({ ...request, owner: owner11, kind: "terminal" }))
+      .rejects.toMatchObject({ reason: "configuration" })
+
+    expect(events.at(-1)).toMatchObject({ kind: "failed", reason: "configuration" })
+    expect(scheduler.pendingTimers()).toHaveLength(0)
   })
 
   it("runs a shared retry immediately without leaving the delayed timer behind", async () => {
@@ -281,6 +336,27 @@ describe("SshConnectionManager", () => {
     expect(scheduler.pendingTimers()).toHaveLength(0)
   })
 
+  it.each(["ENOENT", "EACCES"] as const)("classifies private-key %s as configuration without retry", async (code) => {
+    const identityFile = "/private/key/host-a"
+    const { events, manager, request, scheduler } = createConnectionHarness({
+      authMethod: "privateKey",
+      identityFile,
+      readPrivateKey: async () => {
+        throw Object.assign(new Error(`private key read failed: ${code}`), { code })
+      }
+    })
+
+    const rejection = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+      .then(() => undefined, (error: unknown) => error)
+
+    expect(rejection).toMatchObject({ reason: "configuration" })
+    expect(rejection).toBeInstanceOf(Error)
+    expect((rejection as Error).message).not.toContain(identityFile)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ kind: "failed", reason: "configuration", owner: owner11 })
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+  })
+
   it("does not retry an unclassified profile resolution failure", async () => {
     const { clients, events, manager, request, scheduler, setResolveFailure } = createConnectionHarness({})
     await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
@@ -347,6 +423,10 @@ interface HarnessOptions {
   resolveFailure?: Error
   deferRetryResolution?: boolean
   maxRetryAttempts?: number
+  deferReady?: boolean
+  authMethod?: ResolvedConnectionRequest["authMethod"]
+  identityFile?: string
+  readPrivateKey?: SshConnectionManagerOptions["readPrivateKey"]
 }
 
 function createConnectionHarness(options: HarnessOptions) {
@@ -376,6 +456,9 @@ function createConnectionHarness(options: HarnessOptions) {
   }
   const events: ConnectionEvent[] = []
   const clients: Array<{ emitter: EventEmitter; end: ReturnType<typeof vi.fn> }> = []
+  const configs: ConnectConfig[] = []
+  const pendingReady: Array<() => void> = []
+  let readyReleased = !options.deferReady
   let securityContextKey = "profile-and-credential-hash"
   let knownHostKeyFingerprint: string | undefined
   let connectFailure = options.connectFailure
@@ -394,6 +477,7 @@ function createConnectionHarness(options: HarnessOptions) {
     const end = vi.fn()
     const client = {
       connect: (config: ConnectConfig) => {
+        configs.push(config)
         if (connectFailure) {
           queueMicrotask(() => emitter.emit("error", connectFailure))
           return
@@ -401,7 +485,12 @@ function createConnectionHarness(options: HarnessOptions) {
         const hostVerifier = config.hostVerifier as HostFingerprintVerifier | undefined
         if (hostVerifier) {
           const verify = (accepted: boolean) => {
-            if (accepted) emitter.emit("ready")
+            if (!accepted) return
+            if (readyReleased) {
+              emitter.emit("ready")
+            } else {
+              pendingReady.push(() => emitter.emit("ready"))
+            }
           }
           const result = hostVerifier(nextFingerprint ?? "fingerprint-a", verify)
           if (result !== undefined) verify(result)
@@ -416,7 +505,7 @@ function createConnectionHarness(options: HarnessOptions) {
     clients.push({ emitter, end })
     return client as unknown as Client
   }
-  const manager = new SshConnectionManager({
+  const managerOptions: SshConnectionManagerOptions = {
     createClient,
     scheduler,
     random: () => 0.5,
@@ -432,7 +521,8 @@ function createConnectionHarness(options: HarnessOptions) {
         host: "127.0.0.1",
         port: 22,
         username: "rock",
-        authMethod: "agent",
+        authMethod: options.authMethod ?? "agent",
+        ...(options.identityFile ? { identityFile: options.identityFile } : {}),
         readyTimeoutMs: 15_000,
         securityContextKey,
         ...(knownHostKeyFingerprint ? { knownHostKeyFingerprint } : {})
@@ -453,10 +543,13 @@ function createConnectionHarness(options: HarnessOptions) {
     promptForHostKey: options.promptForHostKey ?? (async () => false),
     trustHostKey: options.trustHostKey,
     replaceHostKey: options.replaceHostKey,
-    onEvent: (event) => events.push(event)
-  })
+    onEvent: (event) => events.push(event),
+    readPrivateKey: options.readPrivateKey
+  }
+  const manager = new SshConnectionManager(managerOptions)
   return {
     clients,
+    configs,
     events,
     manager,
     scheduler,
@@ -477,6 +570,11 @@ function createConnectionHarness(options: HarnessOptions) {
     setHostKeyInspectionFailure: (next: Error | undefined) => {
       hostKeyInspectionFailure = next
     },
+    releaseReady: () => {
+      readyReleased = true
+      for (const ready of pendingReady.splice(0)) ready()
+    },
+    resolveCallCount: () => resolveCalls,
     updateRetryPolicy: (update: { autoReconnect: boolean; reconnectMode: "limited" | "continuous" }) => manager.updateRetryPolicy(update),
     releaseRetryResolution: () => releaseRetryResolution?.(),
     waitForRetryResolution: async () => retryResolutionStarted

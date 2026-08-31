@@ -38,6 +38,9 @@ export function createConnectionResolver(
         throw new ConnectionResolutionError("Password credential is missing", "authentication")
       }
       const agent = profile.authMethod === "agent" ? resolveAgentPath(dependencies.agentPath) : undefined
+      if (profile.authMethod === "agent" && !agent) {
+        throw new ConnectionResolutionError("SSH agent endpoint is missing", "configuration")
+      }
       return {
         host: profile.host,
         port: profile.port,

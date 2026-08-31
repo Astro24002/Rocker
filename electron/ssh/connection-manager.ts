@@ -3,15 +3,21 @@ import { readFile } from "node:fs/promises"
 import { Client, type ConnectConfig, type HostFingerprintVerifier } from "ssh2"
 import type { AuthMethod } from "../storage/types"
 import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
-import type { TerminalFailureReason } from "./types"
+import {
+  ConnectionFailureError,
+  type ConnectionFailureReason
+} from "./types"
 import { inspectHostKey as inspectStoredHostKey, normalizeFingerprint, type HostKeyInspection, type HostKeyStore } from "./host-keys"
 import { retryDelayMs } from "./reconnect-policy"
+
+export { ConnectionFailureError, type ConnectionFailureReason } from "./types"
 
 export interface ConnectionAcquireRequest {
   hostId: string
   owner: RuntimeOwner
   kind: "terminal" | "forward"
   forceNewConnection?: boolean
+  signal?: AbortSignal
 }
 
 export interface ResolvedConnectionRequest {
@@ -28,11 +34,11 @@ export interface ResolvedConnectionRequest {
   knownHostKeyFingerprint?: string
 }
 
-export type ConnectionResolutionFailureReason = "authentication" | "configuration" | "cancelled"
+export type ConnectionResolutionFailureReason = Extract<ConnectionFailureReason, "authentication" | "configuration" | "cancelled">
 
-export class ConnectionResolutionError extends Error {
+export class ConnectionResolutionError extends ConnectionFailureError {
   public constructor(message: string, public readonly reason: ConnectionResolutionFailureReason = "configuration") {
-    super(message)
+    super(message, reason)
   }
 }
 
@@ -50,9 +56,9 @@ export interface ConnectionLease {
 
 export type ConnectionEvent =
   | { kind: "ready"; connectionId: string; owner: RuntimeOwner; transportGeneration: number }
-  | { kind: "lost"; connectionId: string; owner: RuntimeOwner; reason: TerminalFailureReason }
+  | { kind: "lost"; connectionId: string; owner: RuntimeOwner; reason: ConnectionFailureReason }
   | { kind: "retrying"; connectionId: string; owner: RuntimeOwner; attempt: number; nextRetryAt: string }
-  | { kind: "failed"; connectionId: string; owner: RuntimeOwner; reason: TerminalFailureReason }
+  | { kind: "failed"; connectionId: string; owner: RuntimeOwner; reason: ConnectionFailureReason }
 
 export interface ConnectionLeaseController {
   retain(connectionId: string, owner: RuntimeOwner, kind: "forward"): ConnectionLease
@@ -78,6 +84,8 @@ export interface SshConnectionManagerOptions {
   scheduler?: RetryScheduler
   random?: () => number
   maxRetryAttempts?: number
+  readPrivateKey?: typeof readFile
+  keepalivePolicy?: KeepalivePolicy
   resolve(request: ConnectionAcquireRequest): Promise<ResolvedConnectionRequest>
   inspectHostKey?: (request: ResolvedConnectionRequest, fingerprint: string) => Promise<HostKeyInspection>
   hostKeys?: HostKeyStore
@@ -85,6 +93,11 @@ export interface SshConnectionManagerOptions {
   trustHostKey?: (host: string, port: number, fingerprint: string) => Promise<void>
   replaceHostKey?: (host: string, port: number, expectedFingerprint: string, replacementFingerprint: string) => Promise<void>
   onEvent?: (event: ConnectionEvent) => void
+}
+
+export interface KeepalivePolicy {
+  intervalMs: number
+  countMax: number
 }
 
 type ConnectionState = "connecting" | "ready" | "retrying" | "closed"
@@ -107,15 +120,17 @@ interface ConnectionRecord {
   state: ConnectionState
   retryTimer?: number
   retryAttempt: number
-  connectFailureReason?: TerminalFailureReason
+  connectFailureReason?: ConnectionFailureReason
   connectPromise?: Promise<void>
   cancelConnect?: () => void
   readyWaiters: Set<ConnectionReadyWaiter>
 }
 
 interface ConnectionReadyWaiter {
+  leaseId: string
   resolve(): void
   reject(error: Error): void
+  disposeAbort(): void
 }
 
 class HostKeyError extends Error {
@@ -136,12 +151,14 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
   private readonly createClient: () => Client
   private readonly scheduler: RetryScheduler
   private readonly random: () => number
+  private readonly keepalivePolicy: KeepalivePolicy
   private maxRetryAttempts: number
 
   public constructor(private readonly options: SshConnectionManagerOptions) {
     this.createClient = options.createClient ?? (() => new Client())
     this.scheduler = options.scheduler ?? defaultScheduler
     this.random = options.random ?? Math.random
+    this.keepalivePolicy = options.keepalivePolicy ?? { intervalMs: 15_000, countMax: 3 }
     this.maxRetryAttempts = Math.max(0, Math.floor(options.maxRetryAttempts ?? 8))
   }
 
@@ -154,19 +171,53 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     return this.connections.get(connectionId)?.owner
   }
 
+  private resolveRequest(request: ConnectionAcquireRequest): Promise<ResolvedConnectionRequest> {
+    const signal = request.signal
+    if (!signal) return this.options.resolve(request)
+    if (signal.aborted) return Promise.reject(cancelledFailure())
+    return new Promise<ResolvedConnectionRequest>((resolve, reject) => {
+      let settled = false
+      const disposeAbort = (): void => signal.removeEventListener("abort", onAbort)
+      const settle = (action: () => void): void => {
+        if (settled) return
+        settled = true
+        disposeAbort()
+        action()
+      }
+      const onAbort = (): void => settle(() => reject(cancelledFailure()))
+      signal.addEventListener("abort", onAbort, { once: true })
+
+      let resolution: Promise<ResolvedConnectionRequest>
+      try {
+        resolution = this.options.resolve(request)
+      } catch (error) {
+        settle(() => reject(error))
+        return
+      }
+      void resolution.then(
+        (value) => settle(() => resolve(value)),
+        (error: unknown) => settle(() => reject(error))
+      )
+      if (signal.aborted) onAbort()
+    })
+  }
+
   public async acquire(request: ConnectionAcquireRequest): Promise<ConnectionLease> {
     if (request.kind !== "terminal") throw new Error("Connection acquisition is only available for terminal leases")
     let resolved: ResolvedConnectionRequest
     try {
-      resolved = await this.options.resolve(request)
+      resolved = await this.resolveRequest(request)
+      if (request.signal?.aborted) throw cancelledFailure()
     } catch (error) {
+      const normalized = request.signal?.aborted ? cancelledFailure() : error
+      const reason = resolutionFailureReason(normalized)
       this.emit({
         kind: "failed",
         connectionId: randomUUID(),
         owner: request.owner,
-        reason: resolutionFailureReason(error)
+        reason
       })
-      throw error
+      throw withFailureReason(normalized, reason)
     }
     const identityKey = connectionIdentity(request.hostId, resolved)
     if (!request.forceNewConnection) {
@@ -180,27 +231,36 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       )
       if (reusable) {
         const lease = this.addLease(reusable, request.owner, "terminal")
+        const ready = this.waitForReady(reusable, lease, request.signal)
         if (reusable.state === "retrying") this.retryNow(reusable.connectionId)
         try {
-          await this.waitForReady(reusable)
+          await ready
           if (reusable.state === "ready" && reusable.verifiedFingerprint !== undefined) return lease
           throw new Error("SSH connection is not ready")
         } catch (error) {
           await this.release(lease.id)
-          throw error
+          throw withFailureReason(error, failureReason(error, reusable.connectFailureReason))
         }
       }
     }
 
     const record = this.createRecord(request, resolved, identityKey)
     this.connections.set(record.connectionId, record)
+    const lease = this.addLease(record, request.owner, "terminal")
+    const ready = this.waitForReady(record, lease, request.signal)
+    if (this.isCurrent(record) && record.leases.has(lease.id)) {
+      void this.connect(record, resolved).catch((error: unknown) => {
+        const reason = failureReason(error, record.connectFailureReason)
+        this.discard(record, reason, error)
+      })
+    }
     try {
-      await this.connect(record, resolved)
-      return this.addLease(record, request.owner, "terminal")
+      await ready
+      if (record.state === "ready" && record.verifiedFingerprint !== undefined) return lease
+      throw new Error("SSH connection is not ready")
     } catch (error) {
-      const reason = failureReason(error, record.connectFailureReason)
-      this.discard(record, reason)
-      throw withFailureReason(error, reason)
+      await this.release(lease.id)
+      throw withFailureReason(error, failureReason(error, record.connectFailureReason))
     }
   }
 
@@ -220,6 +280,9 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     const record = this.connections.get(connectionId)
     if (!record) return
     record.leases.delete(leaseId)
+    for (const waiter of [...record.readyWaiters]) {
+      if (waiter.leaseId === leaseId) waiter.reject(cancelledFailure())
+    }
     if (record.leases.size === 0) this.close(record)
   }
 
@@ -322,7 +385,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
         settled = true
         reject(error)
       }
-      record.cancelConnect = () => fail(new Error("SSH connection was closed"))
+      record.cancelConnect = () => fail(cancelledFailure())
       const isCurrentTransport = (): boolean => record.client === client && this.isCurrent(record)
       const ready = (): void => {
         if (settled || !isCurrentTransport()) return
@@ -388,6 +451,8 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       port: resolved.port,
       username: resolved.username,
       readyTimeout: resolved.readyTimeoutMs,
+      keepaliveInterval: this.keepalivePolicy.intervalMs,
+      keepaliveCountMax: this.keepalivePolicy.countMax,
       hostHash: "sha256",
       hostVerifier
     }
@@ -395,10 +460,18 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       config.password = resolved.password
     } else if (resolved.authMethod === "privateKey") {
       if (!resolved.identityFile) throw new Error("Private key path is missing")
-      config.privateKey = await readFile(resolved.identityFile)
+      try {
+        config.privateKey = await (this.options.readPrivateKey ?? readFile)(resolved.identityFile)
+      } catch {
+        throw new ConnectionFailureError("SSH private key could not be loaded", "configuration")
+      }
       config.passphrase = resolved.passphrase
     } else {
-      config.agent = resolved.agent ?? process.env.SSH_AUTH_SOCK ?? (process.platform === "win32" ? "pageant" : undefined)
+      try {
+        config.agent = resolved.agent ?? process.env.SSH_AUTH_SOCK ?? (process.platform === "win32" ? "pageant" : undefined)
+      } catch {
+        throw new ConnectionFailureError("SSH agent could not be configured", "configuration")
+      }
     }
     return config
   }
@@ -454,7 +527,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     return inspectStoredHostKey(this.options.hostKeys, resolved.host, resolved.port, fingerprint)
   }
 
-  private handleLostTransport(record: ConnectionRecord, reason: TerminalFailureReason): void {
+  private handleLostTransport(record: ConnectionRecord, reason: ConnectionFailureReason): void {
     if (record.state !== "ready" || !this.connections.has(record.connectionId)) return
     if (!isRetryable(reason) || record.leases.size === 0) {
       this.discard(record, reason)
@@ -464,7 +537,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     this.scheduleRetry(record, reason)
   }
 
-  private scheduleRetry(record: ConnectionRecord, reason: TerminalFailureReason): void {
+  private scheduleRetry(record: ConnectionRecord, reason: ConnectionFailureReason): void {
     if (record.retryTimer !== undefined || !this.connections.has(record.connectionId)) return
     if (record.retryAttempt >= this.maxRetryAttempts) {
       this.discard(record, reason)
@@ -496,7 +569,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     try {
       resolved = await this.options.resolve({ hostId: record.hostId, owner: record.owner, kind: "terminal" })
     } catch (error) {
-      this.discard(record, resolutionFailureReason(error))
+      this.discard(record, resolutionFailureReason(error), error)
       return
     }
     if (!this.isCurrent(record) || record.leases.size === 0) return
@@ -508,7 +581,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     } catch (error) {
       const reason = failureReason(error, record.connectFailureReason)
       if (isRetryable(reason)) this.scheduleRetry(record, reason)
-      else this.discard(record, reason)
+      else this.discard(record, reason, error)
     }
   }
 
@@ -519,19 +592,26 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     return lease
   }
 
-  private close(record: ConnectionRecord): void {
+  private close(record: ConnectionRecord, error: Error = cancelledFailure()): void {
+    if (!this.isCurrent(record) || record.state === "closed") return
     record.state = "closed"
     if (record.retryTimer !== undefined) this.scheduler.cancel(record.retryTimer)
     record.retryTimer = undefined
-    record.cancelConnect?.()
-    record.client?.end()
+    const cancelConnect = record.cancelConnect
+    record.cancelConnect = undefined
+    cancelConnect?.()
     this.connections.delete(record.connectionId)
-    this.rejectReadyWaiters(record, new Error("SSH connection was closed"))
+    this.rejectReadyWaiters(record, error)
+    try {
+      record.client?.end()
+    } catch {
+      // Transport cleanup must not replace the connection failure.
+    }
   }
 
-  private discard(record: ConnectionRecord, reason: TerminalFailureReason): void {
-    if (!this.connections.has(record.connectionId)) return
-    this.close(record)
+  private discard(record: ConnectionRecord, reason: ConnectionFailureReason, error?: unknown): void {
+    if (!this.isCurrent(record)) return
+    this.close(record, withFailureReason(error ?? new Error("SSH connection failed"), reason))
     for (const leaseId of record.leases.keys()) this.leaseIndex.delete(leaseId)
     record.leases.clear()
     this.emit({ kind: "failed", connectionId: record.connectionId, owner: record.owner, reason })
@@ -547,10 +627,51 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     return this.connections.get(record.connectionId) === record
   }
 
-  private waitForReady(record: ConnectionRecord): Promise<void> {
+  private waitForReady(record: ConnectionRecord, lease: ConnectionLease, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      void this.release(lease.id)
+      return Promise.reject(cancelledFailure())
+    }
     if (record.state === "ready" && record.verifiedFingerprint !== undefined) return Promise.resolve()
-    if (!this.isCurrent(record)) return Promise.reject(new Error("SSH connection was closed"))
-    return new Promise<void>((resolve, reject) => record.readyWaiters.add({ resolve, reject }))
+    if (!this.isCurrent(record)) return Promise.reject(connectionClosedFailure())
+    return new Promise<void>((resolve, reject) => {
+      let settled = false
+      let abortListener: (() => void) | undefined
+      const disposeAbort = (): void => {
+        if (abortListener) signal?.removeEventListener("abort", abortListener)
+      }
+      const waiter: ConnectionReadyWaiter = {
+        leaseId: lease.id,
+        resolve: () => {
+          if (settled) return
+          settled = true
+          record.readyWaiters.delete(waiter)
+          disposeAbort()
+          resolve()
+        },
+        reject: (error: Error) => {
+          if (settled) return
+          settled = true
+          record.readyWaiters.delete(waiter)
+          disposeAbort()
+          reject(error)
+        },
+        disposeAbort
+      }
+      abortListener = (): void => {
+        if (settled) return
+        settled = true
+        record.readyWaiters.delete(waiter)
+        disposeAbort()
+        reject(cancelledFailure())
+        void this.release(lease.id)
+      }
+      record.readyWaiters.add(waiter)
+      if (signal) {
+        signal.addEventListener("abort", abortListener, { once: true })
+        if (signal.aborted) abortListener()
+      }
+    })
   }
 
   private resolveReadyWaiters(record: ConnectionRecord): void {
@@ -587,7 +708,8 @@ function matchesKnownHostKey(record: ConnectionRecord, resolved: ResolvedConnect
     record.verifiedFingerprint === normalizeFingerprint(resolved.knownHostKeyFingerprint)
 }
 
-function failureReason(error: unknown, fallback?: TerminalFailureReason): TerminalFailureReason {
+function failureReason(error: unknown, fallback?: ConnectionFailureReason): ConnectionFailureReason {
+  if (error instanceof ConnectionFailureError) return error.reason
   if (fallback !== undefined) return fallback
   if (error instanceof HostKeyError) return error.reason
   const message = error instanceof Error ? error.message.toLowerCase() : ""
@@ -602,7 +724,7 @@ function failureReason(error: unknown, fallback?: TerminalFailureReason): Termin
   return "network"
 }
 
-function withFailureReason(error: unknown, reason: TerminalFailureReason): Error {
+function withFailureReason(error: unknown, reason: ConnectionFailureReason): Error {
   const normalized = error instanceof Error ? error : new Error("SSH connection failed")
   if ("reason" in normalized) return normalized
   Object.defineProperty(normalized, "reason", { configurable: true, enumerable: false, value: reason })
@@ -610,9 +732,21 @@ function withFailureReason(error: unknown, reason: TerminalFailureReason): Error
 }
 
 function resolutionFailureReason(error: unknown): ConnectionResolutionFailureReason {
+  if (error instanceof ConnectionFailureError &&
+    (error.reason === "authentication" || error.reason === "configuration" || error.reason === "cancelled")) {
+    return error.reason
+  }
   return error instanceof ConnectionResolutionError ? error.reason : "configuration"
 }
 
-function isRetryable(reason: TerminalFailureReason): boolean {
+function isRetryable(reason: ConnectionFailureReason): boolean {
   return reason === "network" || reason === "timeout" || reason === "dns"
+}
+
+function cancelledFailure(): ConnectionFailureError {
+  return new ConnectionFailureError("SSH connection acquisition was cancelled", "cancelled")
+}
+
+function connectionClosedFailure(): ConnectionFailureError {
+  return new ConnectionFailureError("SSH connection was closed", "cancelled")
 }

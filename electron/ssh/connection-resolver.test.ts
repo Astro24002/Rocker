@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createConnectionResolver, type ConnectionResolverDependencies } from "./connection-resolver"
 import type { RuntimeOwner } from "../runtime/owner"
 
@@ -51,12 +51,28 @@ describe("createConnectionResolver", () => {
     await expect(resolve({ hostId: profile.id, owner, kind: "terminal" }))
       .rejects.toMatchObject({ reason: "configuration" })
   })
+
+  it("rejects an agent profile without an endpoint as configuration", async () => {
+    vi.stubEnv("SSH_AUTH_SOCK", "")
+    try {
+      const resolve = createConnectionResolver(createDependencies({
+        profile: { ...profile, authMethod: "agent" },
+        agentPath: () => undefined
+      }))
+
+      await expect(resolve({ hostId: profile.id, owner, kind: "terminal" }))
+        .rejects.toMatchObject({ reason: "configuration" })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
 })
 
 function createDependencies(overrides: {
-  profile?: typeof profile | { authMethod: "privateKey"; id: string; name: string; host: string; port: number; username: string; favorite: boolean; notes: string }
+  profile?: typeof profile | { authMethod: "privateKey" | "agent"; id: string; name: string; host: string; port: number; username: string; favorite: boolean; notes: string }
   credential?: () => string | undefined
   fingerprint?: () => string | undefined
+  agentPath?: () => string | undefined
 } = {}): ConnectionResolverDependencies {
   return {
     hosts: { list: async () => [overrides.profile ?? profile] },
@@ -76,6 +92,6 @@ function createDependencies(overrides: {
       })
     },
     hostKeys: { get: async () => overrides.fingerprint?.() ?? "SHA256:first-key" },
-    agentPath: () => "/tmp/ssh-agent"
+    agentPath: overrides.agentPath ?? (() => "/tmp/ssh-agent")
   }
 }
