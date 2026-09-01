@@ -273,6 +273,126 @@ describe("SshConnectionManager", () => {
     expect(scheduler.pendingTimers()).toHaveLength(1)
   })
 
+  it.each([
+    "credential.example",
+    "configuration.example",
+    "authentication.example",
+    "dns.example",
+    "timeout.example",
+    "privatekey.example",
+    "agent endpoint.example"
+  ])("keeps ordinary client-socket recovery errors mentioning %s retryable", async (hostname) => {
+    const { clients, events, manager, request, scheduler } = createConnectionHarness({})
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+
+    clients[0].emitter.emit(
+      "error",
+      Object.assign(new Error(`client socket closed while connecting to ${hostname}`), { level: "client-socket" })
+    )
+
+    expect(events.at(-2)).toMatchObject({ kind: "lost", connectionId: lease.connectionId, reason: "network" })
+    expect(events.at(-1)).toMatchObject({
+      kind: "retrying",
+      connectionId: lease.connectionId,
+      owner: owner11,
+      attempt: 1
+    })
+    expect(scheduler.pendingTimers()).toHaveLength(1)
+  })
+
+  it.each(["cancelled", "canceled"] as const)("does not classify message-only %s recovery text as cancellation", async (word) => {
+    const { clients, events, manager, request, scheduler } = createConnectionHarness({})
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+
+    clients[0].emitter.emit(
+      "error",
+      Object.assign(new Error(`client socket ${word} while connecting to host.example`), { level: "client-socket" })
+    )
+
+    expect(events.at(-2)).toMatchObject({ kind: "lost", connectionId: lease.connectionId, reason: "network" })
+    expect(events.at(-1)).toMatchObject({ kind: "retrying", connectionId: lease.connectionId, attempt: 1 })
+    expect(scheduler.pendingTimers()).toHaveLength(1)
+  })
+
+  it.each([
+    "client socket closed after cannot parse privatekey without parser context",
+    "client socket closed after privatekey value contains arbitrary text",
+    "client socket closed after privatekey value does not match the remote host",
+    "client socket closed after private key path is missing for the remote host",
+    "client socket closed while sending arbitrary private key text"
+  ])("keeps unanchored private-key text retryable during recovery", async (message) => {
+    const { clients, events, manager, request, scheduler } = createConnectionHarness({
+      authMethod: "privateKey",
+      identityFile: "/keys/host-a",
+      readPrivateKey: (async () => Buffer.from("valid-key")) as unknown as SshConnectionManagerOptions["readPrivateKey"]
+    })
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+
+    clients[0].emitter.emit("error", Object.assign(new Error(message), { level: "client-socket" }))
+
+    expect(events.at(-2)).toMatchObject({ kind: "lost", connectionId: lease.connectionId, reason: "network" })
+    expect(events.at(-1)).toMatchObject({ kind: "retrying", connectionId: lease.connectionId, attempt: 1 })
+    expect(scheduler.pendingTimers()).toHaveLength(1)
+  })
+
+  it.each(["ENOENT", "EACCES"] as const)("keeps ordinary client-socket %s failures for agent hostnames retryable", async (code) => {
+    const { clients, events, manager, request, scheduler } = createConnectionHarness({
+      authMethod: "agent",
+      agent: "/private/agent/host-a.sock"
+    })
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+
+    clients[0].emitter.emit(
+      "error",
+      Object.assign(new Error(`client socket ${code} while connecting to agent.example`), {
+        code,
+        level: "client-socket"
+      })
+    )
+
+    expect(events.at(-2)).toMatchObject({ kind: "lost", connectionId: lease.connectionId, reason: "network" })
+    expect(events.at(-1)).toMatchObject({ kind: "retrying", connectionId: lease.connectionId, attempt: 1 })
+    expect(scheduler.pendingTimers()).toHaveLength(1)
+  })
+
+  it("does not treat an arbitrary agent-level socket error as endpoint configuration", async () => {
+    const { clients, events, manager, request, scheduler } = createConnectionHarness({
+      authMethod: "agent",
+      agent: "/private/agent/host-a.sock"
+    })
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+
+    clients[0].emitter.emit(
+      "error",
+      Object.assign(new Error("agent socket closed while connecting to host.example"), { level: "agent" })
+    )
+
+    expect(events.at(-2)).toMatchObject({ kind: "lost", connectionId: lease.connectionId, reason: "network" })
+    expect(events.at(-1)).toMatchObject({ kind: "retrying", connectionId: lease.connectionId, attempt: 1 })
+    expect(scheduler.pendingTimers()).toHaveLength(1)
+  })
+
+  it.each([
+    ["ENOENT", "/private/ssh-agent/host-a.sock"],
+    ["EACCES", "/private/openssh-ssh-agent.sock"],
+    ["ENOENT", String.raw`C:\\Users\\rock\\AppData\\Local\\Temp\\openssh-ssh-agent.sock`],
+    ["EACCES", String.raw`C:\\Users\\rock\\AppData\\Local\\Temp\\ssh-agent.sock`]
+  ] as const)("classifies explicit agent socket paths for %s without retry", async (code, agentEndpoint) => {
+    const { clients, events, manager, request, scheduler } = createConnectionHarness({
+      authMethod: "agent",
+      agent: agentEndpoint
+    })
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+
+    clients[0].emitter.emit(
+      "error",
+      Object.assign(new Error(`connect ${code} ${agentEndpoint}`), { code, level: "client-socket" })
+    )
+
+    expect(events.at(-1)).toMatchObject({ kind: "failed", connectionId: lease.connectionId, reason: "configuration" })
+    expect(scheduler.pendingTimers()).toHaveLength(0)
+  })
+
   it("keeps arbitrary agent-level authentication failures classified as authentication", async () => {
     const { events, manager, request, scheduler } = createConnectionHarness({
       authMethod: "agent",

@@ -577,7 +577,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     if (!this.isCurrent(record) || record.leases.size === 0) return
     try {
       if (connectionIdentity(record.hostId, resolved) !== record.identityKey) {
-        throw new Error("Resolved connection security context changed during retry")
+        throw new ConnectionFailureError("SSH connection configuration changed during retry", "configuration")
       }
       await this.connect(record, resolved)
     } catch (error) {
@@ -712,28 +712,22 @@ function matchesKnownHostKey(record: ConnectionRecord, resolved: ResolvedConnect
 
 function failureReason(error: unknown, fallback?: ConnectionFailureReason, authMethod?: AuthMethod): ConnectionFailureReason {
   if (error instanceof ConnectionFailureError) return error.reason
-  if (fallback !== undefined) return fallback
   if (error instanceof HostKeyError) return error.reason
+  if (fallback !== undefined) return fallback
   const message = error instanceof Error ? error.message.toLowerCase() : ""
-  const code = error && typeof error === "object" && "code" in error
-    ? String((error as { code?: unknown }).code).toLowerCase()
-    : ""
+  const { code, level } = ssh2ErrorMetadata(error)
   if (authMethod === "agent" && isAgentEndpointFailure(message, code)) return "configuration"
   if (authMethod === "privateKey" && isPrivateKeyConfigurationFailure(message)) return "configuration"
-  if (message.includes("authentication") || message.includes("auth failed")) return "authentication"
-  if (message.includes("security context") || message.includes("credential") || message.includes("configuration")) return "configuration"
-  if (message.includes("cancelled") || message.includes("canceled")) return "cancelled"
-  if (message.includes("timeout") || message.includes("timed out") || message.includes("etimedout") || code === "etimedout") return "timeout"
-  if (message.includes("dns") || message.includes("enotfound") || code === "enotfound" || code === "eai_again" || code === "eai_fail") return "dns"
+  if (level === "client-authentication" || isKnownAuthenticationFailure(message)) return "authentication"
+  if (level === "client-timeout" || code === "etimedout") return "timeout"
+  if (level === "client-dns" || code === "enotfound" || code === "eai_again" || code === "eai_fail") return "dns"
   return "network"
 }
 
 function normalizeConnectionFailure(error: unknown, authMethod: AuthMethod): Error {
   if (error instanceof ConnectionFailureError) return error
   const message = error instanceof Error ? error.message.toLowerCase() : ""
-  const code = error && typeof error === "object" && "code" in error
-    ? String((error as { code?: unknown }).code).toLowerCase()
-    : ""
+  const { code } = ssh2ErrorMetadata(error)
   if (authMethod === "privateKey" && isPrivateKeyConfigurationFailure(message)) {
     return new ConnectionFailureError("SSH private key is invalid or unsupported", "configuration")
   }
@@ -744,20 +738,51 @@ function normalizeConnectionFailure(error: unknown, authMethod: AuthMethod): Err
 }
 
 function isPrivateKeyConfigurationFailure(message: string): boolean {
-  return message.includes("cannot parse privatekey") ||
-    message.includes("privatekey value") ||
-    message.includes("private key path is missing")
+  return message.startsWith("cannot parse privatekey:") ||
+    message.startsWith("privatekey value contains") ||
+    message.startsWith("privatekey value does not") ||
+    message === "private key path is missing"
 }
 
 function isAgentEndpointFailure(message: string, code: string): boolean {
-  if (message.includes("failed to connect to agent") ||
-    message.includes("agent endpoint") ||
-    message.includes("agent socket")) return true
+  if (knownAgentEndpointFailures.has(message)) return true
   if (code !== "enoent" && code !== "eacces") return false
-  return /(?:^|[\\/])(?:ssh-)?agent(?:[\\/_.:-]|$)/.test(message) ||
-    /\b(?:connect|connecting|connection)\b[^\n]*\b(?:ssh-)?agent\b/.test(message) ||
-    /\b(?:ssh-)?agent\b[^\n]*\b(?:connect|connecting|connection)\b/.test(message)
+  return agentSocketPathSegment.test(message)
 }
+
+function isKnownAuthenticationFailure(message: string): boolean {
+  return knownAuthenticationFailures.has(message)
+}
+
+function ssh2ErrorMetadata(error: unknown): { code: string; level: string } {
+  if (!error || typeof error !== "object") return { code: "", level: "" }
+  const metadata = error as { code?: unknown; level?: unknown }
+  return {
+    code: typeof metadata.code === "string" ? metadata.code.toLowerCase() : "",
+    level: typeof metadata.level === "string" ? metadata.level.toLowerCase() : ""
+  }
+}
+
+const knownAuthenticationFailures = new Set([
+  "authentication failed",
+  "auth failed",
+  "all configured authentication methods failed"
+])
+
+const knownAgentEndpointFailures = new Set([
+  "failed to connect to agent",
+  "invalid pagent.exe arguments",
+  "pageant is not running",
+  "pagent.exe could not create an mmap",
+  "pagent.exe could not set mode for stdin",
+  "pagent.exe could not set mode for stdout",
+  "pagent.exe did not get expected input payload",
+  "invalid cygwin unix socket path",
+  "malformed cygwin unix socket file",
+  "problem negotiating cygwin unix socket security"
+])
+
+const agentSocketPathSegment = /(?:^|[\\/])(?:agent|ssh-agent|openssh-ssh-agent)(?:[\\/]|$|\.(?:sock|socket|pipe|[0-9]+)(?=$|[^\w.-]))/
 
 function withFailureReason(error: unknown, reason: ConnectionFailureReason): Error {
   const normalized = error instanceof Error ? error : new Error("SSH connection failed")
