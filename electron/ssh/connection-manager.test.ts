@@ -186,6 +186,51 @@ describe("SshConnectionManager", () => {
     expect(scheduler.pendingTimers()).toHaveLength(1)
   })
 
+  it("keeps ordinary socket failures mentioning private key retryable for private-key profiles", async () => {
+    const { clients, events, manager, request, scheduler } = createConnectionHarness({
+      authMethod: "privateKey",
+      identityFile: "/keys/host-a",
+      readPrivateKey: (async () => Buffer.from("valid-key")) as unknown as SshConnectionManagerOptions["readPrivateKey"]
+    })
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+
+    clients[0].emitter.emit(
+      "error",
+      Object.assign(new Error("socket ECONNRESET while sending private key data"), { code: "ECONNRESET" })
+    )
+
+    expect(events.at(-2)).toMatchObject({ kind: "lost", connectionId: lease.connectionId, reason: "network" })
+    expect(events.at(-1)).toMatchObject({
+      kind: "retrying",
+      connectionId: lease.connectionId,
+      owner: owner11,
+      attempt: 1
+    })
+    expect(scheduler.pendingTimers()).toHaveLength(1)
+  })
+
+  it.each(["ENOENT", "EACCES"] as const)("keeps ordinary client-socket %s failures retryable for agent profiles", async (code) => {
+    const { clients, events, manager, request, scheduler } = createConnectionHarness({
+      authMethod: "agent",
+      agent: "/private/agent/host-a.sock"
+    })
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+
+    clients[0].emitter.emit(
+      "error",
+      Object.assign(new Error(`client socket ${code} while connecting to 127.0.0.1:22`), { code })
+    )
+
+    expect(events.at(-2)).toMatchObject({ kind: "lost", connectionId: lease.connectionId, reason: "network" })
+    expect(events.at(-1)).toMatchObject({
+      kind: "retrying",
+      connectionId: lease.connectionId,
+      owner: owner11,
+      attempt: 1
+    })
+    expect(scheduler.pendingTimers()).toHaveLength(1)
+  })
+
   it("preserves a typed configuration failure without relying on its message", async () => {
     const { events, manager, request, scheduler } = createConnectionHarness({
       connectFailure: new ConnectionFailureError("local setup failed", "configuration")

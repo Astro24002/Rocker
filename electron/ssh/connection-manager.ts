@@ -718,10 +718,10 @@ function failureReason(error: unknown, fallback?: ConnectionFailureReason, authM
   const code = error && typeof error === "object" && "code" in error
     ? String((error as { code?: unknown }).code).toLowerCase()
     : ""
-  if (authMethod === "agent" && isAgentEndpointFailure(error, message, code)) return "configuration"
-  if (authMethod === "privateKey" && isPrivateKeyConfigurationFailure(message)) return "configuration"
+  if (authMethod === "agent" && isAgentEndpointFailure(error, message)) return "configuration"
+  if (authMethod === "privateKey" && isPrivateKeyConfigurationFailure(message, code)) return "configuration"
   if (message.includes("authentication") || message.includes("auth failed")) return "authentication"
-  if (message.includes("private key") || message.includes("security context") || message.includes("credential") || message.includes("configuration")) return "configuration"
+  if (message.includes("security context") || message.includes("credential") || message.includes("configuration")) return "configuration"
   if (message.includes("cancelled") || message.includes("canceled")) return "cancelled"
   if (message.includes("timeout") || message.includes("timed out") || message.includes("etimedout") || code === "etimedout") return "timeout"
   if (message.includes("dns") || message.includes("enotfound") || code === "enotfound" || code === "eai_again" || code === "eai_fail") return "dns"
@@ -734,26 +734,27 @@ function normalizeConnectionFailure(error: unknown, authMethod: AuthMethod): Err
   const code = error && typeof error === "object" && "code" in error
     ? String((error as { code?: unknown }).code).toLowerCase()
     : ""
-  if (authMethod === "privateKey" && isPrivateKeyConfigurationFailure(message)) {
+  if (authMethod === "privateKey" && isPrivateKeyConfigurationFailure(message, code)) {
     return new ConnectionFailureError("SSH private key is invalid or unsupported", "configuration")
   }
-  if (authMethod === "agent" && isAgentEndpointFailure(error, message, code)) {
+  if (authMethod === "agent" && isAgentEndpointFailure(error, message)) {
     return new ConnectionFailureError("SSH agent endpoint is unavailable", "configuration")
   }
   return error instanceof Error ? error : new Error("SSH connection failed")
 }
 
-function isPrivateKeyConfigurationFailure(message: string): boolean {
-  return message.includes("private key") || message.includes("cannot parse privatekey") || message.includes("privatekey value")
+function isPrivateKeyConfigurationFailure(message: string, code: string): boolean {
+  return message.includes("cannot parse privatekey") ||
+    message.includes("privatekey value") ||
+    message.includes("private key path is missing") ||
+    ((code === "enoent" || code === "eacces") && message.includes("private key"))
 }
 
-function isAgentEndpointFailure(error: unknown, message: string, code: string): boolean {
+function isAgentEndpointFailure(error: unknown, message: string): boolean {
   const level = error && typeof error === "object" && "level" in error
     ? String((error as { level?: unknown }).level).toLowerCase()
     : ""
   return level === "agent" ||
-    code === "enoent" ||
-    code === "eacces" ||
     message.includes("failed to connect to agent") ||
     message.includes("agent endpoint") ||
     message.includes("agent socket") ||
