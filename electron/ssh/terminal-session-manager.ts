@@ -55,6 +55,7 @@ interface SessionRecord {
   channel?: TerminalChannel
   output?: TerminalOutputPump
   pendingStart?: PendingStart
+  pendingStarts: Set<PendingStart>
   recoveryWaiters: Set<RecoveryWaiter>
 }
 
@@ -140,6 +141,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
       attempt: createTerminalAttempt(1, 1),
       nextAttemptId: 2,
       recoveryDesired: true,
+      pendingStarts: new Set(),
       recoveryWaiters: new Set()
     }
     this.sessions.set(request.sessionId, record)
@@ -307,9 +309,12 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
       })
       this.scheduleQueueDrain()
     })
-    record.pendingStart = { attemptId: attempt.id, promise: task, reject: rejectTask }
+    const pendingStart = { attemptId: attempt.id, promise: task, reject: rejectTask }
+    record.pendingStart = pendingStart
+    record.pendingStarts.add(pendingStart)
     void task.finally(() => {
       if (record.pendingStart?.promise === task) record.pendingStart = undefined
+      record.pendingStarts.delete(pendingStart)
     }).catch(() => undefined)
     return task
   }
@@ -584,7 +589,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
   }
 
   private rejectPendingStart(record: SessionRecord, error: Error): void {
-    record.pendingStart?.reject(error)
+    for (const pendingStart of record.pendingStarts) pendingStart.reject(error)
   }
 
   private emitState(

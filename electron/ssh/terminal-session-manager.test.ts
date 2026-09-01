@@ -317,6 +317,31 @@ describe("TerminalSessionManager", () => {
     }
   })
 
+  it("cancels the original open while an older shell callback is still pending", async () => {
+    const { sessions, transport, retryScheduler, shellFactory, events } = createSessionHarness({ deferShellCallbacks: true })
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
+    let openingSettled = false
+    void opening.then(() => { openingSettled = true }, () => { openingSettled = true })
+
+    await waitFor(() => shellFactory.started.length === 1)
+    transport.dropUnexpectedly()
+    await retryScheduler.runNext()
+    await flush()
+
+    expect(shellFactory.started).toHaveLength(1)
+    sessions.cancelReconnect(sessionId)
+    await flush()
+
+    expect(openingSettled).toBe(true)
+    await expect(opening).rejects.toMatchObject({
+      name: "ConnectionFailureError",
+      message: "Terminal connection was cancelled",
+      reason: "cancelled"
+    })
+    expect(events.filter((event) => event.kind === "state" && event.state === "disconnected" && event.reason === "cancelled")).toHaveLength(1)
+  })
+
   it("does not tear down a healthy channel when a stale cancel-reconnect action arrives", async () => {
     const { sessions, channels } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
