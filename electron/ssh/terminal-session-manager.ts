@@ -87,6 +87,7 @@ interface ShellTask {
 interface TerminalAttempt {
   id: number
   controller: AbortController
+  abortReason?: "cancelled" | "invalidated"
   expectedTransportGeneration?: number
   expectedChannelGeneration: number
 }
@@ -202,6 +203,10 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
       }
       await this.queueStart(record, "reconnected", attempt)
     } catch (error) {
+      if (error instanceof TerminalStartInvalidatedError && this.isCurrent(record) && record.recoveryDesired) {
+        await this.waitForRecovery(record)
+        return
+      }
       if (isTerminalCancellation(error) || !this.isCurrent(record)) throw error
       await this.handleStartFailure(record, attempt, error)
       throw error
@@ -212,7 +217,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     const record = this.sessions.get(sessionId)
     if (!record || !record.recoveryDesired || (record.state !== "connecting" && record.state !== "reconnecting" && record.state !== "restoring")) return
     record.recoveryDesired = false
-    record.attempt.controller.abort()
+    this.abortAttempt(record.attempt, "cancelled")
     const cancellation = terminalCancellationError()
     this.rejectPendingStart(record, cancellation)
     this.rejectRecoveryWaiters(record, cancellation)
@@ -234,7 +239,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     const record = this.sessions.get(sessionId)
     if (!record) return
     record.recoveryDesired = false
-    record.attempt.controller.abort()
+    this.abortAttempt(record.attempt, "cancelled")
     const closed = new Error("Terminal session is closed")
     this.rejectPendingStart(record, closed)
     this.rejectRecoveryWaiters(record, closed)
@@ -352,18 +357,73 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     if (!record.connectionId) throw new Error("SSH connection is not ready")
     const connectionId = record.connectionId
     const client = this.options.connections.getClientForConnection(connectionId)
+    const transportGeneration = this.options.connections.transportGenerationForConnection(connectionId)
+    attempt.expectedTransportGeneration = transportGeneration
     const generation = attempt.expectedChannelGeneration
     const channel = await new Promise<TerminalChannel>((resolve, reject) => {
-      client.shell({ term: "xterm-256color", cols: record.request.cols, rows: record.request.rows }, (error, openedChannel) => {
-        if (error || !openedChannel) {
-          reject(error ?? new Error("SSH shell channel was not opened"))
-          return
+      let settled = false
+      const signal = attempt.controller.signal
+      let abortListener: (() => void) | undefined
+      const disposeAbort = (): void => {
+        if (abortListener) signal.removeEventListener("abort", abortListener)
+      }
+      const settleResolve = (openedChannel: TerminalChannel): void => {
+        if (settled) return
+        settled = true
+        disposeAbort()
+        resolve(openedChannel)
+      }
+      const settleReject = (error: Error): void => {
+        if (settled) return
+        settled = true
+        disposeAbort()
+        reject(error)
+      }
+      const isCurrentShell = (): boolean => {
+        if (!this.isCurrentAttempt(record, attempt) || record.connectionId !== connectionId) return false
+        try {
+          return this.options.connections.transportGenerationForConnection(connectionId) === transportGeneration
+        } catch {
+          return false
         }
-        resolve(openedChannel as unknown as TerminalChannel)
-      })
+      }
+      abortListener = (): void => {
+        settleReject(attempt.abortReason === "cancelled" ? terminalCancellationError() : this.currentAttemptError(record))
+      }
+      signal.addEventListener("abort", abortListener, { once: true })
+      if (signal.aborted) {
+        abortListener()
+        return
+      }
+      try {
+        client.shell({ term: "xterm-256color", cols: record.request.cols, rows: record.request.rows }, (error, openedChannel) => {
+          if (!isCurrentShell()) {
+            if (openedChannel) {
+              try {
+                openedChannel.end()
+              } catch {
+                // A stale channel is already unusable; settlement must still continue.
+              }
+            }
+            settleReject(this.currentAttemptError(record))
+            return
+          }
+          if (error || !openedChannel) {
+            settleReject(error ?? new Error("SSH shell channel was not opened"))
+            return
+          }
+          settleResolve(openedChannel as unknown as TerminalChannel)
+        })
+      } catch (error) {
+        settleReject(error instanceof Error ? error : new Error(String(error)))
+      }
     })
-    if (!this.isCurrentAttempt(record, attempt) || record.connectionId !== connectionId) {
-      channel.end()
+    if (!this.isCurrentAttempt(record, attempt) || record.connectionId !== connectionId || this.options.connections.transportGenerationForConnection(connectionId) !== transportGeneration) {
+      try {
+        channel.end()
+      } catch {
+        // A stale channel is already unusable; settlement must still continue.
+      }
       throw this.currentAttemptError(record)
     }
 
@@ -436,7 +496,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     if (event.kind === "failed") {
       for (const record of affected) {
         record.recoveryDesired = false
-        record.attempt.controller.abort()
+        this.abortAttempt(record.attempt, "invalidated")
         record.lease = undefined
         record.connectionId = undefined
         record.output?.close()
@@ -457,7 +517,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
   private async handleStartFailure(record: SessionRecord, attempt: TerminalAttempt, error: unknown): Promise<void> {
     if (!this.isCurrent(record) || record.attempt !== attempt || error instanceof TerminalStartInvalidatedError || isTerminalCancellation(error)) return
     record.recoveryDesired = false
-    attempt.controller.abort()
+    this.abortAttempt(attempt, "invalidated")
     record.output?.close()
     record.output = undefined
     record.channel?.end()
@@ -478,11 +538,16 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
   }
 
   private beginAttempt(record: SessionRecord): TerminalAttempt {
-    record.attempt.controller.abort()
+    this.abortAttempt(record.attempt, "invalidated")
     const attempt = createTerminalAttempt(record.nextAttemptId, record.channelGeneration + 1)
     record.nextAttemptId += 1
     record.attempt = attempt
     return attempt
+  }
+
+  private abortAttempt(attempt: TerminalAttempt, reason: "cancelled" | "invalidated"): void {
+    attempt.abortReason = reason
+    attempt.controller.abort()
   }
 
   private isCurrentAttempt(record: SessionRecord, attempt: TerminalAttempt): boolean {

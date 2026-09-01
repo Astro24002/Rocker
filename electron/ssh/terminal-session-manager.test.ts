@@ -184,6 +184,43 @@ describe("TerminalSessionManager", () => {
     expect(events.at(-1)).toMatchObject({ kind: "state", state: "connected", channelGeneration: 1 })
   })
 
+  it("waits for recovery when a stale shell callback reports an error", async () => {
+    const { sessions, transport, shellFactory, retryScheduler, events } = createSessionHarness({ deferShellCallbacks: true })
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
+    await waitFor(() => shellFactory.started.length === 1)
+
+    transport.dropUnexpectedly()
+    await retryScheduler.runNext()
+    shellFactory.failNext(new Error("SSH shell channel was not opened"))
+    await waitFor(() => shellFactory.started.length === 2)
+    shellFactory.settleNext()
+
+    await expect(opening).resolves.toMatchObject({ sessionId, channelGeneration: 1, state: "connected" })
+    expect(events.filter((event) => event.kind === "state" && event.state === "connected")).toHaveLength(1)
+  })
+
+  it("ends a late stale shell channel without installing its output pump", async () => {
+    const { sessions, transport, shellFactory, retryScheduler, channels, events } = createSessionHarness({ deferShellCallbacks: true })
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
+    await waitFor(() => shellFactory.started.length === 1)
+
+    transport.dropUnexpectedly()
+    await retryScheduler.runNext()
+    shellFactory.settleNext()
+    await waitFor(() => shellFactory.started.length === 2)
+
+    expect(channels.get(1)!.end).toHaveBeenCalledOnce()
+    channels.get(1)!.emitter.emit("data", Buffer.from("stale output"))
+    expect(events.some((event) => event.kind === "output" && new TextDecoder().decode(event.packet.bytes).includes("stale output"))).toBe(false)
+
+    shellFactory.settleNext()
+    await expect(opening).resolves.toMatchObject({ sessionId, channelGeneration: 1, state: "connected" })
+    channels.get(2)!.emitter.emit("data", Buffer.from("recovered output"))
+    expect(events.some((event) => event.kind === "output" && new TextDecoder().decode(event.packet.bytes).includes("recovered output"))).toBe(true)
+  })
+
   it("rejects input, resize, and acknowledgement from a prior channel generation", async () => {
     const { sessions, channels } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
@@ -318,7 +355,7 @@ describe("TerminalSessionManager", () => {
   })
 
   it("cancels the original open while an older shell callback is still pending", async () => {
-    const { sessions, transport, retryScheduler, shellFactory, events } = createSessionHarness({ deferShellCallbacks: true })
+    const { sessions, transport, shellFactory, channels, events } = createSessionHarness({ deferShellCallbacks: true })
     const sessionId = "11111111-1111-4111-8111-111111111111"
     const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
     let openingSettled = false
@@ -326,12 +363,10 @@ describe("TerminalSessionManager", () => {
 
     await waitFor(() => shellFactory.started.length === 1)
     transport.dropUnexpectedly()
-    await retryScheduler.runNext()
+    sessions.cancelReconnect(sessionId)
     await flush()
 
     expect(shellFactory.started).toHaveLength(1)
-    sessions.cancelReconnect(sessionId)
-    await flush()
 
     expect(openingSettled).toBe(true)
     await expect(opening).rejects.toMatchObject({
@@ -340,6 +375,11 @@ describe("TerminalSessionManager", () => {
       reason: "cancelled"
     })
     expect(events.filter((event) => event.kind === "state" && event.state === "disconnected" && event.reason === "cancelled")).toHaveLength(1)
+
+    shellFactory.settleNext()
+    await flush()
+    expect(channels.get(1)!.end).toHaveBeenCalledOnce()
+    expect(events.filter((event) => event.kind === "state" && event.reason === "cancelled")).toHaveLength(1)
   })
 
   it("does not tear down a healthy channel when a stale cancel-reconnect action arrives", async () => {

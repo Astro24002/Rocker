@@ -353,6 +353,10 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     return record.client
   }
 
+  public transportGenerationForConnection(connectionId: string): number {
+    return this.getConnection(connectionId).transportGeneration
+  }
+
   private createRecord(request: ConnectionAcquireRequest, resolved: ResolvedConnectionRequest, identityKey: string): ConnectionRecord {
     return {
       connectionId: randomUUID(),
