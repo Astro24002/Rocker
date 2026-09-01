@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises"
 import { BrowserWindow, dialog, ipcMain, shell } from "electron"
 import type { OpenDialogOptions } from "electron"
 import type { DiagnosticLogger } from "../diagnostics/diagnostic-logger"
+import type { DiagnosticRuntimeMetadata } from "../diagnostics/diagnostic-types"
 import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import { diagnosticFileName, writeDiagnosticExport } from "../diagnostics/diagnostic-export"
 import type { ForwardingManager } from "../ports/forwarding-manager"
@@ -42,6 +43,8 @@ export interface IpcDependencies {
   settings: SettingsStore
   diagnostics: DiagnosticLogger
   diagnosticsAppVersion?: string
+  diagnosticsBuildChannel?: DiagnosticRuntimeMetadata["buildChannel"]
+  diagnosticsRuntimeMode?: DiagnosticRuntimeMetadata["runtimeMode"]
   windows: WorkspaceWindowManager
   createDuplicateWindow?(hostId: string): Promise<void>
 }
@@ -211,7 +214,9 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
         settings: await dependencies.settings.get(),
         appVersion: dependencies.diagnosticsAppVersion,
         platform: process.platform,
-        arch: process.arch
+        arch: process.arch,
+        buildChannel: dependencies.diagnosticsBuildChannel,
+        runtimeMode: dependencies.diagnosticsRuntimeMode
       })
       return { canceled: false, path: result.filePath }
     } catch {

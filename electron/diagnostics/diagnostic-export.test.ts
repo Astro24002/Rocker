@@ -45,6 +45,25 @@ describe("diagnostic export", () => {
     })
   })
 
+  it("preserves only finite build and runtime metadata", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-diagnostic-export-"))
+    directories.push(directory)
+    const path = join(directory, "diagnostics.json")
+
+    await writeDiagnosticExport(path, {
+      logger: { snapshot: () => [] },
+      settings,
+      buildChannel: "release",
+      runtimeMode: "packaged",
+      now: () => new Date("2026-08-28T12:01:00.000Z")
+    })
+
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
+      buildChannel: "release",
+      runtimeMode: "packaged"
+    })
+  })
+
   it("uses a stable local filename format", () => {
     expect(diagnosticFileName(new Date("2026-08-28T12:01:02.000Z"))).toBe("rocker-diagnostics-20260828-120102.json")
   })

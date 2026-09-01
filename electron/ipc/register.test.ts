@@ -191,9 +191,11 @@ describe("registerIpcHandlers", () => {
       registerIpcHandlers(harness.dependencies)
 
       await expect(invokeFrom(21, ipcChannels.diagnosticsExport)).resolves.toEqual({ canceled: false, path: target })
-      const payload = JSON.parse(await readFile(target, "utf8")) as { schemaVersion: number; events: unknown[] }
+      const payload = JSON.parse(await readFile(target, "utf8")) as { schemaVersion: number; events: unknown[]; buildChannel: string; runtimeMode: string }
       expect(payload.schemaVersion).toBe(1)
       expect(payload.events).toHaveLength(1)
+      expect(payload.buildChannel).toBe("release")
+      expect(payload.runtimeMode).toBe("packaged")
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -266,6 +268,8 @@ function createHarness() {
     settings,
     diagnostics,
     diagnosticsAppVersion: "0.3.1",
+    diagnosticsBuildChannel: "release",
+    diagnosticsRuntimeMode: "packaged",
     snapshots: { load: vi.fn(), saveWindow: vi.fn(), removeWindow: vi.fn(), flush: vi.fn() },
     windows,
     createDuplicateWindow: vi.fn()

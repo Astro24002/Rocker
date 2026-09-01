@@ -4,7 +4,7 @@ import { DiagnosticLogger } from "./diagnostics/diagnostic-logger"
 import { bootstrapPrimaryInstance } from "./application/single-instance"
 import { registerIpcHandlers, type IpcDependencies } from "./ipc/register"
 import { ipcChannels } from "./ipc/bridge-contract"
-import { LinuxMetricsSampler } from "./monitoring/linux-metrics"
+import { LinuxMetricsSampler, type MonitoringEvent } from "./monitoring/linux-metrics"
 import { ForwardingManager, type ForwardingEvent } from "./ports/forwarding-manager"
 import { PortService } from "./ports/port-service"
 import { CredentialVault } from "./storage/credentials"
@@ -22,6 +22,7 @@ import { TerminalSessionManager } from "./ssh/terminal-session-manager"
 import type { OwnedTerminalSessionEvent } from "./ssh/types"
 import {
   WorkspaceWindowManager,
+  type WindowLifecycleEvent,
   type WorkspaceWindowOptions
 } from "./windows/workspace-window-manager"
 
@@ -104,7 +105,8 @@ async function startApplication(): Promise<void> {
       await forwarding.releaseOwner(owner)
       await sessions.releaseOwner(owner)
       await connections.releaseOwner(owner)
-    }
+    },
+    onLifecycle: (event) => recordWindowDiagnostic(diagnostics, event)
   })
   const dependencies: IpcDependencies = {
     hosts,
@@ -113,11 +115,15 @@ async function startApplication(): Promise<void> {
     connections,
     ports: new PortService(connections),
     forwarding,
-    monitoring: new LinuxMetricsSampler(sessions),
+    monitoring: new LinuxMetricsSampler(sessions, {
+      onEvent: (event) => recordMonitoringDiagnostic(diagnostics, event)
+    }),
     history: new HistoryStore(join(userDataPath, "history.json")),
     settings,
     diagnostics,
     diagnosticsAppVersion: app.getVersion(),
+    diagnosticsBuildChannel: app.isPackaged ? "release" : "development",
+    diagnosticsRuntimeMode: app.isPackaged ? "packaged" : "development",
     windows
   }
   dependencies.createDuplicateWindow = async (hostId) => {
@@ -229,6 +235,25 @@ function recordForwardingDiagnostic(logger: DiagnosticLogger, event: ForwardingE
     connectionId: event.connectionId,
     reason: event.reason
   })
+}
+
+function recordWindowDiagnostic(logger: DiagnosticLogger, event: WindowLifecycleEvent): void {
+  if (event.kind === "window-closed") {
+    logger.record({ category: "window", action: event.kind, details: { webContentsId: event.webContentsId } })
+    return
+  }
+  logger.record({
+    category: "window",
+    action: event.kind,
+    details: {
+      webContentsId: event.owner.webContentsId,
+      rendererGeneration: event.owner.rendererGeneration
+    }
+  })
+}
+
+function recordMonitoringDiagnostic(logger: DiagnosticLogger, event: MonitoringEvent): void {
+  logger.record({ category: "monitoring", action: event.kind, sessionId: event.sessionId, reason: event.reason })
 }
 
 bootstrapPrimaryInstance(app, {

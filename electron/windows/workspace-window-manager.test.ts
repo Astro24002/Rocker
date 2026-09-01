@@ -107,6 +107,42 @@ describe("WorkspaceWindowManager", () => {
     expect(store.removeWindow).not.toHaveBeenCalled()
   })
 
+  it("reports renderer and window lifecycle events through the fail-open observer", async () => {
+    const store = createStore()
+    const windows = createWindowFactory()
+    const lifecycle: unknown[] = []
+    const manager = new WorkspaceWindowManager({
+      snapshots: store,
+      createWindow: windows.create,
+      onLifecycle: (event) => lifecycle.push(event)
+    })
+    const window = manager.createNew(createWorkspace(firstWorkspace)) as FakeWindow
+
+    window.webContents.emit("did-finish-load")
+    window.webContents.emit("did-start-loading")
+    await manager.handleClosed(window.webContents.id)
+
+    expect(lifecycle).toEqual([
+      { kind: "renderer-ready", owner: { webContentsId: 21, rendererGeneration: 1 } },
+      { kind: "renderer-reload", owner: { webContentsId: 21, rendererGeneration: 1 } },
+      { kind: "window-closed", webContentsId: 21 }
+    ])
+  })
+
+  it("contains lifecycle observer failures without changing window cleanup", async () => {
+    const store = createStore()
+    const windows = createWindowFactory()
+    const manager = new WorkspaceWindowManager({
+      snapshots: store,
+      createWindow: windows.create,
+      onLifecycle: () => { throw new Error("diagnostic sink failed") }
+    })
+    const window = manager.createNew(createWorkspace(firstWorkspace))
+
+    await expect(manager.handleClosed(window.webContents.id)).resolves.toBeUndefined()
+    expect(store.removeWindow).toHaveBeenCalledWith(firstWorkspace)
+  })
+
   it("tracks renderer generations and rejects stale owner sends", async () => {
     const store = createStore()
     const windows = createWindowFactory()

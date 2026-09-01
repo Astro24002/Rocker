@@ -74,6 +74,17 @@ describe("Linux host metrics", () => {
 
     expect(recovered.cpuPercent).toBeCloseTo(80, 3)
   })
+
+  it("records a bounded failure event while preserving the monitoring rejection", async () => {
+    const events: unknown[] = []
+    const sampler = new LinuxMetricsSampler(
+      { exec: async () => { throw new RemoteOperationError("sample timed out", "timeout") } },
+      { onEvent: (event) => events.push(event) }
+    )
+
+    await expect(sampler.sample("session-1")).rejects.toMatchObject({ reason: "timeout" })
+    expect(events).toEqual([{ kind: "sample-failed", sessionId: "session-1", reason: "timeout" }])
+  })
 })
 
 function monitoringResponses(): Record<string, string> {

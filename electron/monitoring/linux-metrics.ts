@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks"
-import type { RemoteExecOptions, SessionCommandExecutor } from "../ssh/types"
+import { RemoteOperationError, type RemoteExecOptions, type RemoteOperationFailureReason, type SessionCommandExecutor } from "../ssh/types"
 
 export interface NetworkTotals {
   receivedBytes: number
@@ -24,22 +24,45 @@ interface PreviousSample {
   sampledAt: number
 }
 
+export interface MonitoringEvent {
+  kind: "sample-failed"
+  sessionId: string
+  reason: RemoteOperationFailureReason
+}
+
+export interface LinuxMetricsSamplerOptions {
+  onEvent?: (event: MonitoringEvent) => void
+}
+
 const monitoringExecOptions: RemoteExecOptions = { timeoutMs: 8_000, maxOutputBytes: 262_144 }
 
 export class LinuxMetricsSampler {
   private readonly previous = new Map<string, PreviousSample>()
 
-  public constructor(private readonly sessions: SessionCommandExecutor) {}
+  public constructor(
+    private readonly sessions: SessionCommandExecutor,
+    private readonly options: LinuxMetricsSamplerOptions = {}
+  ) {}
 
   public async sample(sessionId: string): Promise<HostMetrics> {
     const startedAt = performance.now()
-    const [cpu, memory, disk, network, load] = await Promise.all([
-      this.sessions.exec(sessionId, "cat /proc/stat", monitoringExecOptions),
-      this.sessions.exec(sessionId, "cat /proc/meminfo", monitoringExecOptions),
-      this.sessions.exec(sessionId, "df -P /", monitoringExecOptions),
-      this.sessions.exec(sessionId, "cat /proc/net/dev", monitoringExecOptions),
-      this.sessions.exec(sessionId, "cat /proc/loadavg", monitoringExecOptions)
-    ])
+    let cpu: string
+    let memory: string
+    let disk: string
+    let network: string
+    let load: string
+    try {
+      [cpu, memory, disk, network, load] = await Promise.all([
+        this.sessions.exec(sessionId, "cat /proc/stat", monitoringExecOptions),
+        this.sessions.exec(sessionId, "cat /proc/meminfo", monitoringExecOptions),
+        this.sessions.exec(sessionId, "df -P /", monitoringExecOptions),
+        this.sessions.exec(sessionId, "cat /proc/net/dev", monitoringExecOptions),
+        this.sessions.exec(sessionId, "cat /proc/loadavg", monitoringExecOptions)
+      ])
+    } catch (error) {
+      this.emitFailure(sessionId, error)
+      throw error
+    }
     const now = Date.now()
     const currentNetwork = parseNetworkTotals(network)
     const previous = this.previous.get(sessionId)
@@ -60,6 +83,15 @@ export class LinuxMetricsSampler {
 
   public clear(sessionId: string): void {
     this.previous.delete(sessionId)
+  }
+
+  private emitFailure(sessionId: string, error: unknown): void {
+    const reason: RemoteOperationFailureReason = error instanceof RemoteOperationError ? error.reason : "channel-error"
+    try {
+      this.options.onEvent?.({ kind: "sample-failed", sessionId, reason })
+    } catch {
+      // Monitoring diagnostics are best effort and must not replace the sample failure.
+    }
   }
 }
 

@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises"
 import type { AppSettings } from "../storage/types"
 import type { DiagnosticLogger } from "./diagnostic-logger"
+import type { DiagnosticRuntimeMetadata } from "./diagnostic-types"
 import { sanitizeDiagnosticExport } from "./sanitize"
 
 export interface DiagnosticExportContext {
@@ -9,6 +10,8 @@ export interface DiagnosticExportContext {
   appVersion?: string
   platform?: string
   arch?: string
+  buildChannel?: DiagnosticRuntimeMetadata["buildChannel"]
+  runtimeMode?: DiagnosticRuntimeMetadata["runtimeMode"]
   now?: () => Date
 }
 
@@ -19,6 +22,8 @@ export async function writeDiagnosticExport(filePath: string, context: Diagnosti
     appVersion: context.appVersion ?? "unknown",
     platform: context.platform ?? "unknown",
     arch: context.arch ?? "unknown",
+    buildChannel: context.buildChannel,
+    runtimeMode: context.runtimeMode,
     events: context.logger.snapshot(),
     settings: context.settings
   })
