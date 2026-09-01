@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks"
-import type { SessionCommandExecutor } from "../ssh/types"
+import type { RemoteExecOptions, SessionCommandExecutor } from "../ssh/types"
 
 export interface NetworkTotals {
   receivedBytes: number
@@ -24,6 +24,8 @@ interface PreviousSample {
   sampledAt: number
 }
 
+const monitoringExecOptions: RemoteExecOptions = { timeoutMs: 8_000, maxOutputBytes: 262_144 }
+
 export class LinuxMetricsSampler {
   private readonly previous = new Map<string, PreviousSample>()
 
@@ -32,11 +34,11 @@ export class LinuxMetricsSampler {
   public async sample(sessionId: string): Promise<HostMetrics> {
     const startedAt = performance.now()
     const [cpu, memory, disk, network, load] = await Promise.all([
-      this.sessions.exec(sessionId, "cat /proc/stat"),
-      this.sessions.exec(sessionId, "cat /proc/meminfo"),
-      this.sessions.exec(sessionId, "df -P /"),
-      this.sessions.exec(sessionId, "cat /proc/net/dev"),
-      this.sessions.exec(sessionId, "cat /proc/loadavg")
+      this.sessions.exec(sessionId, "cat /proc/stat", monitoringExecOptions),
+      this.sessions.exec(sessionId, "cat /proc/meminfo", monitoringExecOptions),
+      this.sessions.exec(sessionId, "df -P /", monitoringExecOptions),
+      this.sessions.exec(sessionId, "cat /proc/net/dev", monitoringExecOptions),
+      this.sessions.exec(sessionId, "cat /proc/loadavg", monitoringExecOptions)
     ])
     const now = Date.now()
     const currentNetwork = parseNetworkTotals(network)

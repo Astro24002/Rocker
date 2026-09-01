@@ -9,6 +9,7 @@ import {
   type RetryScheduler,
   type SshConnectionManagerOptions
 } from "./connection-manager"
+import { RemoteOperationError } from "./types"
 import type { RuntimeOwner } from "../runtime/owner"
 
 const owner11: RuntimeOwner = { webContentsId: 11, rendererGeneration: 1 }
@@ -56,6 +57,98 @@ describe("SshConnectionManager", () => {
 
     expect(clients).toHaveLength(1)
     expect(second.connectionId).toBe(first.connectionId)
+  })
+
+  it("normalizes an exec callback error without affecting the connection", async () => {
+    const { manager, request, failNextExec } = createConnectionHarness({})
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    const operation = manager.execOnConnection(lease.connectionId, "cat /proc/stat")
+
+    failNextExec(new Error("remote exec rejected"))
+
+    await expect(operation).rejects.toMatchObject({
+      name: "RemoteOperationError",
+      reason: "channel-error",
+      message: "remote exec rejected"
+    })
+    expect(manager.ownerForConnection(lease.connectionId)).toEqual(owner11)
+    await manager.release(lease.id)
+  })
+
+  it("closes a channel after a remote channel error and removes its listeners", async () => {
+    const { manager, request, resolveNextExec } = createConnectionHarness({})
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    const operation = manager.execOnConnection(lease.connectionId, "cat /proc/stat")
+    const channel = resolveNextExec()
+
+    channel.emitter.emit("error", new Error("remote channel failed"))
+
+    await expect(operation).rejects.toMatchObject({ reason: "channel-error" })
+    expect(channel.close).toHaveBeenCalledOnce()
+    expect(channel.emitter.listenerCount("data")).toBe(0)
+    expect(channel.emitter.listenerCount("error")).toBe(0)
+    expect(channel.emitter.listenerCount("close")).toBe(0)
+    channel.emitter.emit("close")
+    await manager.release(lease.id)
+  })
+
+  it("times out an exec operation and closes a late channel exactly once", async () => {
+    const { manager, request, resolveNextExec } = createConnectionHarness({})
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    const operation = manager.execOnConnection(lease.connectionId, "cat /proc/stat", { timeoutMs: 10, maxOutputBytes: 128 })
+
+    await expect(operation).rejects.toMatchObject({ reason: "timeout" })
+    const channel = resolveNextExec()
+    expect(channel.close).toHaveBeenCalledOnce()
+    channel.emitter.emit("close")
+    await manager.release(lease.id)
+  })
+
+  it("cancels an exec operation and removes all operation listeners", async () => {
+    const { manager, request, resolveNextExec } = createConnectionHarness({})
+    const controller = new AbortController()
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    const operation = manager.execOnConnection(lease.connectionId, "cat /proc/stat", { timeoutMs: 1_000, maxOutputBytes: 128, signal: controller.signal })
+    const channel = resolveNextExec()
+
+    controller.abort()
+
+    await expect(operation).rejects.toMatchObject({ reason: "cancelled" })
+    expect(channel.close).toHaveBeenCalledOnce()
+    expect(channel.emitter.listenerCount("data")).toBe(0)
+    expect(channel.stderr.listenerCount("data")).toBe(0)
+    await manager.release(lease.id)
+  })
+
+  it("counts stdout and stderr together for the output limit", async () => {
+    const { manager, request, resolveNextExec } = createConnectionHarness({})
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    const operation = manager.execOnConnection(lease.connectionId, "cat /proc/stat", { timeoutMs: 1_000, maxOutputBytes: 8 })
+    const channel = resolveNextExec()
+
+    channel.emitter.emit("data", Buffer.from("1234"))
+    channel.stderr.emit("data", Buffer.from("56789"))
+
+    await expect(operation).rejects.toMatchObject({ reason: "output-limit" })
+    expect(channel.close).toHaveBeenCalledOnce()
+    channel.emitter.emit("close")
+    await manager.release(lease.id)
+  })
+
+  it("keeps a timed-out operation settled when its channel closes later", async () => {
+    const { manager, request, resolveNextExec } = createConnectionHarness({})
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    const operation = manager.execOnConnection(lease.connectionId, "cat /proc/stat", { timeoutMs: 10, maxOutputBytes: 128 })
+    const channel = resolveNextExec()
+    let settlements = 0
+    void operation.then(() => { settlements += 1 }, () => { settlements += 1 })
+
+    await expect(operation).rejects.toMatchObject({ reason: "timeout" })
+    channel.emitter.emit("close")
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(settlements).toBe(1)
+    expect(channel.close).toHaveBeenCalledOnce()
+    await manager.release(lease.id)
   })
 
   it("cancels a pending acquisition and ends its only connecting client", async () => {
@@ -701,6 +794,15 @@ describe("SshConnectionManager", () => {
   })
 })
 
+interface FakeExecChannel {
+  emitter: EventEmitter
+  stderr: EventEmitter
+  close: ReturnType<typeof vi.fn>
+  end: ReturnType<typeof vi.fn>
+  on: EventEmitter["on"]
+  removeListener: EventEmitter["removeListener"]
+}
+
 interface HarnessOptions {
   storedFingerprint?: string
   nextFingerprint?: string
@@ -748,6 +850,7 @@ function createConnectionHarness(options: HarnessOptions) {
   const events: ConnectionEvent[] = []
   const clients: Array<{ emitter: EventEmitter; end: ReturnType<typeof vi.fn> }> = []
   const configs: ConnectConfig[] = []
+  const pendingExec: Array<(error: Error | undefined, channel?: FakeExecChannel) => void> = []
   const pendingReady: Array<() => void> = []
   let readyReleased = !options.deferReady
   let securityContextKey = "profile-and-credential-hash"
@@ -789,6 +892,10 @@ function createConnectionHarness(options: HarnessOptions) {
         } else {
           queueMicrotask(() => emitter.emit("ready"))
         }
+      },
+      exec: (command: string, callback: (error: Error | undefined, channel?: FakeExecChannel) => void) => {
+        void command
+        pendingExec.push(callback)
       },
       end,
       on: emitter.on.bind(emitter),
@@ -868,9 +975,34 @@ function createConnectionHarness(options: HarnessOptions) {
       for (const ready of pendingReady.splice(0)) ready()
     },
     resolveCallCount: () => resolveCalls,
+    resolveNextExec: () => {
+      const callback = pendingExec.shift()
+      if (!callback) throw new Error("No pending exec operation")
+      const channel = createFakeExecChannel()
+      callback(undefined, channel)
+      return channel
+    },
+    failNextExec: (error: Error) => {
+      const callback = pendingExec.shift()
+      if (!callback) throw new Error("No pending exec operation")
+      callback(error)
+    },
     updateRetryPolicy: (update: { autoReconnect: boolean; reconnectMode: "limited" | "continuous" }) => manager.updateRetryPolicy(update),
     releaseRetryResolution: () => releaseRetryResolution?.(),
     waitForRetryResolution: async () => retryResolutionStarted
+  }
+}
+
+function createFakeExecChannel(): FakeExecChannel {
+  const emitter = new EventEmitter()
+  const stderr = new EventEmitter()
+  return {
+    emitter,
+    stderr,
+    close: vi.fn(),
+    end: vi.fn(),
+    on: emitter.on.bind(emitter),
+    removeListener: emitter.removeListener.bind(emitter)
   }
 }
 

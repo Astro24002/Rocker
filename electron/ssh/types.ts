@@ -32,6 +32,21 @@ export type TerminalFailureReason =
 
 export interface TerminalDimensions { cols: number; rows: number }
 
+export interface RemoteExecOptions {
+  timeoutMs: number
+  maxOutputBytes: number
+  signal?: AbortSignal
+}
+
+export type RemoteOperationFailureReason = "timeout" | "cancelled" | "output-limit" | "channel-error"
+
+export class RemoteOperationError extends Error {
+  public constructor(message: string, public readonly reason: RemoteOperationFailureReason) {
+    super(message)
+    this.name = "RemoteOperationError"
+  }
+}
+
 export interface TerminalOutputPacket {
   sessionId: string
   channelGeneration: number
@@ -68,9 +83,9 @@ export interface TerminalSessionInfo {
 }
 
 export interface SessionCommandExecutor {
-  exec(sessionId: string, command: string): Promise<string>
+  exec(sessionId: string, command: string, options?: RemoteExecOptions): Promise<string>
 }
 
 export interface ConnectionCommandExecutor {
-  execOnConnection(connectionId: string, command: string): Promise<string>
+  execOnConnection(connectionId: string, command: string, options?: RemoteExecOptions): Promise<string>
 }

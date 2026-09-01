@@ -14,6 +14,7 @@ import type {
   SessionCommandExecutor,
   TerminalDimensions,
   TerminalFailureReason,
+  RemoteExecOptions,
   TerminalSessionEvent,
   TerminalSessionInfo,
   TerminalSessionState
@@ -277,14 +278,14 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     this.options.connections.retryNow()
   }
 
-  public async exec(sessionId: string, command: string): Promise<string> {
+  public async exec(sessionId: string, command: string, options?: RemoteExecOptions): Promise<string> {
     const record = this.requireSession(sessionId)
     if (!record.connectionId) throw new Error("SSH connection is not ready")
-    return this.options.connections.execOnConnection(record.connectionId, command)
+    return this.options.connections.execOnConnection(record.connectionId, command, options)
   }
 
-  public async execOnConnection(connectionId: string, command: string): Promise<string> {
-    return this.options.connections.execOnConnection(connectionId, command)
+  public async execOnConnection(connectionId: string, command: string, options?: RemoteExecOptions): Promise<string> {
+    return this.options.connections.execOnConnection(connectionId, command, options)
   }
 
   private queueStart(

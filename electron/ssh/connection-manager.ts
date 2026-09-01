@@ -1,16 +1,18 @@
 import { createHash, randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
-import { Client, type ConnectConfig, type HostFingerprintVerifier } from "ssh2"
+import { Client, type ClientChannel, type ConnectConfig, type HostFingerprintVerifier } from "ssh2"
 import type { AuthMethod } from "../storage/types"
 import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import {
   ConnectionFailureError,
+  RemoteOperationError,
+  type RemoteExecOptions,
   type ConnectionFailureReason
 } from "./types"
 import { inspectHostKey as inspectStoredHostKey, normalizeFingerprint, type HostKeyInspection, type HostKeyStore } from "./host-keys"
 import { retryDelayMs } from "./reconnect-policy"
 
-export { ConnectionFailureError, type ConnectionFailureReason } from "./types"
+export { ConnectionFailureError, RemoteOperationError, type ConnectionFailureReason, type RemoteExecOptions } from "./types"
 
 export interface ConnectionAcquireRequest {
   hostId: string
@@ -19,6 +21,9 @@ export interface ConnectionAcquireRequest {
   forceNewConnection?: boolean
   signal?: AbortSignal
 }
+
+const DEFAULT_REMOTE_EXEC_TIMEOUT_MS = 10_000
+const DEFAULT_REMOTE_EXEC_MAX_OUTPUT_BYTES = 1_048_576
 
 export interface ResolvedConnectionRequest {
   host: string
@@ -68,7 +73,7 @@ export interface ConnectionLeaseController {
 }
 
 export interface ConnectionCommandExecutor {
-  execOnConnection(connectionId: string, command: string): Promise<string>
+  execOnConnection(connectionId: string, command: string, options?: RemoteExecOptions): Promise<string>
   getClientForConnection(connectionId: string): Client
 }
 
@@ -330,20 +335,93 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
     }
   }
 
-  public async execOnConnection(connectionId: string, command: string): Promise<string> {
+  public async execOnConnection(connectionId: string, command: string, options?: RemoteExecOptions): Promise<string> {
     if (!command || command.includes("\u0000") || command.length > 4_096) throw new Error("Invalid remote command")
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_REMOTE_EXEC_TIMEOUT_MS
+    const maxOutputBytes = options?.maxOutputBytes ?? DEFAULT_REMOTE_EXEC_MAX_OUTPUT_BYTES
+    validateRemoteExecBounds(timeoutMs, maxOutputBytes)
+    if (options?.signal?.aborted) throw cancelledRemoteOperation()
+
     const client = this.getClientForConnection(connectionId)
     return new Promise<string>((resolve, reject) => {
-      client.exec(command, (error, channel) => {
-        if (error) {
-          reject(error)
+      let settled = false
+      let channel: ClientChannel | undefined
+      let outputBytes = 0
+      const chunks: Buffer[] = []
+      let timeoutId: ReturnType<typeof setTimeout> | undefined
+      let abortListener: (() => void) | undefined
+
+      const cleanup = (): void => {
+        if (timeoutId !== undefined) clearTimeout(timeoutId)
+        timeoutId = undefined
+        if (options?.signal && abortListener) options.signal.removeEventListener("abort", abortListener)
+        abortListener = undefined
+        if (!channel) return
+        removeEmitterListener(channel, "data", onStdout)
+        removeEmitterListener(channel, "error", onChannelError)
+        removeEmitterListener(channel, "close", onClose)
+        removeEmitterListener(channel.stderr, "data", onStderr)
+      }
+      const settleSuccess = (): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve(Buffer.concat(chunks).toString("utf8"))
+      }
+      const settleFailure = (error: Error): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        closeRemoteChannel(channel)
+        reject(error)
+      }
+      const append = (data: unknown): void => {
+        if (settled) return
+        const chunk = remoteDataBuffer(data)
+        outputBytes += chunk.byteLength
+        if (outputBytes > maxOutputBytes) {
+          settleFailure(new RemoteOperationError("Remote command output exceeded the configured limit", "output-limit"))
           return
         }
-        const chunks: Buffer[] = []
-        channel.on("data", (data: Buffer) => chunks.push(data))
-        channel.stderr.on("data", (data: Buffer) => chunks.push(data))
-        channel.on("close", () => resolve(Buffer.concat(chunks).toString("utf8")))
-      })
+        chunks.push(chunk)
+      }
+      const onStdout = (data: Buffer): void => append(data)
+      const onStderr = (data: Buffer): void => append(data)
+      const onChannelError = (error: Error): void => {
+        settleFailure(new RemoteOperationError(error.message || "Remote command channel failed", "channel-error"))
+      }
+      const onClose = (): void => settleSuccess()
+      abortListener = (): void => settleFailure(cancelledRemoteOperation())
+      if (options?.signal) options.signal.addEventListener("abort", abortListener, { once: true })
+      timeoutId = setTimeout(() => {
+        settleFailure(new RemoteOperationError("Remote command timed out", "timeout"))
+      }, timeoutMs)
+
+      try {
+        client.exec(command, (error, openedChannel) => {
+          if (settled) {
+            closeRemoteChannel(openedChannel)
+            return
+          }
+          if (error) {
+            closeRemoteChannel(openedChannel)
+            settleFailure(new RemoteOperationError(error.message || "Remote command channel failed", "channel-error"))
+            return
+          }
+          if (!openedChannel) {
+            settleFailure(new RemoteOperationError("Remote command channel was not opened", "channel-error"))
+            return
+          }
+          channel = openedChannel
+          channel.on("data", onStdout)
+          channel.stderr.on("data", onStderr)
+          channel.on("error", onChannelError)
+          channel.on("close", onClose)
+          if (options?.signal?.aborted) settleFailure(cancelledRemoteOperation())
+        })
+      } catch (error) {
+        settleFailure(new RemoteOperationError(error instanceof Error ? error.message : "Remote command channel failed", "channel-error"))
+      }
     })
   }
 
@@ -693,6 +771,49 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
   private emit(event: ConnectionEvent): void {
     this.options.onEvent?.(event)
     for (const listener of this.listeners) listener(event)
+  }
+}
+
+function validateRemoteExecBounds(timeoutMs: number, maxOutputBytes: number): void {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0) {
+    throw new Error("Invalid remote execution bounds")
+  }
+}
+
+function cancelledRemoteOperation(): RemoteOperationError {
+  return new RemoteOperationError("Remote command was cancelled", "cancelled")
+}
+
+function remoteDataBuffer(data: unknown): Buffer {
+  if (Buffer.isBuffer(data)) return data
+  if (data instanceof Uint8Array) return Buffer.from(data)
+  return Buffer.from(typeof data === "string" ? data : String(data))
+}
+
+function removeEmitterListener(target: unknown, event: string, listener: (...args: any[]) => void): void {
+  const emitter = target as { removeListener?: (event: string, listener: (...args: any[]) => void) => unknown; off?: (event: string, listener: (...args: any[]) => void) => unknown }
+  if (typeof emitter.removeListener === "function") {
+    emitter.removeListener(event, listener)
+  } else {
+    emitter.off?.(event, listener)
+  }
+}
+
+function closeRemoteChannel(channel: ClientChannel | undefined): void {
+  if (!channel) return
+  const closable = channel as unknown as { close?: () => void; end?: () => void }
+  if (typeof closable.close === "function") {
+    try {
+      closable.close()
+      return
+    } catch {
+      // Fall back to ending the local stream when close is unavailable at runtime.
+    }
+  }
+  try {
+    closable.end?.()
+  } catch {
+    // Cleanup must not replace the operation failure.
   }
 }
 
