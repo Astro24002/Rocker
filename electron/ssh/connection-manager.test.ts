@@ -16,6 +16,30 @@ const owner11: RuntimeOwner = { webContentsId: 11, rendererGeneration: 1 }
 const owner12: RuntimeOwner = { webContentsId: 12, rendererGeneration: 1 }
 
 describe("SshConnectionManager", () => {
+  it("returns count-only resources and returns to baseline after lease release", async () => {
+    const { manager, request } = createConnectionHarness({})
+
+    expect(manager.resourceSnapshot()).toEqual({
+      connections: 0,
+      leases: 0,
+      readyWaiters: 0,
+      retryTimers: 0,
+      connectingTransports: 0
+    })
+
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    expect(manager.resourceSnapshot()).toMatchObject({ connections: 1, leases: 1 })
+
+    await manager.release(lease.id)
+    expect(manager.resourceSnapshot()).toEqual({
+      connections: 0,
+      leases: 0,
+      readyWaiters: 0,
+      retryTimers: 0,
+      connectingTransports: 0
+    })
+  })
+
   it("shares one verified connection only inside the owner window", async () => {
     const { manager, request } = createConnectionHarness({})
     const first = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })

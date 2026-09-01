@@ -10,6 +10,33 @@ const owner7: RuntimeOwner = { webContentsId: 7, rendererGeneration: 1 }
 const owner8: RuntimeOwner = { webContentsId: 8, rendererGeneration: 1 }
 
 describe("TerminalSessionManager", () => {
+  it("returns count-only resources and returns to baseline after closing a session", async () => {
+    const { sessions } = createSessionHarness()
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+
+    expect(sessions.resourceSnapshot()).toEqual({
+      sessions: 0,
+      channels: 0,
+      outputPumps: 0,
+      activeAttempts: 0,
+      recoveryWaiters: 0,
+      queuedShells: 0
+    })
+
+    await sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
+    expect(sessions.resourceSnapshot()).toMatchObject({ sessions: 1, channels: 1, outputPumps: 1 })
+
+    await sessions.close(sessionId)
+    expect(sessions.resourceSnapshot()).toEqual({
+      sessions: 0,
+      channels: 0,
+      outputPumps: 0,
+      activeAttempts: 0,
+      recoveryWaiters: 0,
+      queuedShells: 0
+    })
+  })
+
   it("opens a PTY, forwards raw output packets, and closes an explicit session", async () => {
     const { sessions, channels, events } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"

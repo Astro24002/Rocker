@@ -8,6 +8,7 @@ import type {
 } from "../ssh/connection-manager"
 import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import type { TerminalFailureReason } from "../ssh/types"
+import type { ForwardingResourceSnapshot } from "../runtime/resource-snapshot"
 import type { ForwardingInfo, ForwardingSpec } from "./types"
 
 export interface LocalListener {
@@ -97,6 +98,18 @@ export class ForwardingManager {
   public ownerForForwarding(id: string): RuntimeOwner | undefined {
     const record = this.records.get(id)
     return record && record.info.status !== "stopped" ? record.owner : undefined
+  }
+
+  public resourceSnapshot(): ForwardingResourceSnapshot {
+    let forwards = 0
+    let listeners = 0
+    let activationTasks = 0
+    for (const record of this.records.values()) {
+      if (record.lease || record.listener || record.activation || record.info.status === "stopping") forwards += 1
+      if (record.listener) listeners += 1
+      if (record.activation) activationTasks += 1
+    }
+    return { forwards, listeners, activationTasks }
   }
 
   public list(): ForwardingInfo[] {

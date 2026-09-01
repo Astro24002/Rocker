@@ -29,6 +29,18 @@ const loopbackSpec: ForwardingSpec = {
 }
 
 describe("ForwardingManager", () => {
+  it("returns count-only resources and returns to baseline after stopping a forward", async () => {
+    const connections = new FakeConnections()
+    const forwards = new ForwardingManager(connections, { createListener: createListenerFactory().create })
+
+    expect(forwards.resourceSnapshot()).toEqual({ forwards: 0, listeners: 0, activationTasks: 0 })
+    const forward = await forwards.start(connectionId, loopbackSpec, owner)
+    expect(forwards.resourceSnapshot()).toMatchObject({ forwards: 1, listeners: 1 })
+
+    await forwards.stop(forward.id)
+    expect(forwards.resourceSnapshot()).toEqual({ forwards: 0, listeners: 0, activationTasks: 0 })
+  })
+
   it.each(["127.0.0.1", "::1"])("keeps a %s loopback forward suspended through transport loss and restores it on ready", async (localAddress) => {
     const connections = new FakeConnections()
     const listeners = createListenerFactory()

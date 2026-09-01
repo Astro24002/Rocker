@@ -11,6 +11,7 @@ import {
 } from "./types"
 import { inspectHostKey as inspectStoredHostKey, normalizeFingerprint, type HostKeyInspection, type HostKeyStore } from "./host-keys"
 import { retryDelayMs } from "./reconnect-policy"
+import type { ConnectionResourceSnapshot } from "../runtime/resource-snapshot"
 
 export { ConnectionFailureError, RemoteOperationError, type ConnectionFailureReason, type RemoteExecOptions } from "./types"
 
@@ -174,6 +175,26 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
 
   public ownerForConnection(connectionId: string): RuntimeOwner | undefined {
     return this.connections.get(connectionId)?.owner
+  }
+
+  public resourceSnapshot(): ConnectionResourceSnapshot {
+    let leases = 0
+    let readyWaiters = 0
+    let retryTimers = 0
+    let connectingTransports = 0
+    for (const record of this.connections.values()) {
+      leases += record.leases.size
+      readyWaiters += record.readyWaiters.size
+      if (record.retryTimer !== undefined) retryTimers += 1
+      if (record.state === "connecting" && record.client) connectingTransports += 1
+    }
+    return {
+      connections: this.connections.size,
+      leases,
+      readyWaiters,
+      retryTimers,
+      connectingTransports
+    }
   }
 
   private resolveRequest(request: ConnectionAcquireRequest): Promise<ResolvedConnectionRequest> {

@@ -7,6 +7,7 @@ import {
   type ConnectionLease
 } from "./connection-manager"
 import { TerminalOutputPump } from "./terminal-output-pump"
+import type { TerminalResourceSnapshot } from "../runtime/resource-snapshot"
 import { ConnectionFailureError } from "./types"
 import type {
   ConnectionCommandExecutor,
@@ -116,6 +117,30 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
 
   public ownerForSession(sessionId: string): RuntimeOwner | undefined {
     return this.sessions.get(sessionId)?.request.owner
+  }
+
+  public resourceSnapshot(): TerminalResourceSnapshot {
+    let channels = 0
+    let outputPumps = 0
+    let activeAttempts = 0
+    let recoveryWaiters = 0
+    for (const record of this.sessions.values()) {
+      if (record.channel) channels += 1
+      if (record.output) outputPumps += 1
+      if (!record.attempt.controller.signal.aborted &&
+        (record.state === "connecting" || record.state === "reconnecting" || record.state === "restoring")) {
+        activeAttempts += 1
+      }
+      recoveryWaiters += record.recoveryWaiters.size
+    }
+    return {
+      sessions: this.sessions.size,
+      channels,
+      outputPumps,
+      activeAttempts,
+      recoveryWaiters,
+      queuedShells: this.shellQueue.filter((task) => this.isCurrent(task.record)).length
+    }
   }
 
   public beginRestore(owner: RuntimeOwner, activeSessionId: string): void {
