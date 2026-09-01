@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto"
 import type { Socket } from "node:net"
-import { Server, type PseudoTtyInfo, type ServerChannel, type Session, type WindowChangeInfo } from "ssh2"
+import { Server, type AuthContext, type PseudoTtyInfo, type ServerChannel, type Session, type WindowChangeInfo } from "ssh2"
 
 export const TEST_USERNAME = "rocker-test"
 export const TEST_PASSWORD = "rocker-password"
@@ -12,6 +12,13 @@ export interface SshTestServerOptions {
   onPtyResize?: (info: WindowChangeInfo) => void
 }
 
+export interface SshResourceSnapshot {
+  clients: number
+  sessions: number
+  shells: number
+  forwards: number
+}
+
 export interface SshTestServer {
   readonly port: number
   readonly server: Server
@@ -19,6 +26,12 @@ export interface SshTestServer {
   readonly ptyRequests: PseudoTtyInfo[]
   readonly ptyResizes: WindowChangeInfo[]
   close(): Promise<void>
+  holdAuthentication(): void
+  releaseAuthentication(): void
+  holdNextShell(): void
+  releaseNextShell(): void
+  setKeepaliveResponse(enabled: boolean): void
+  resourceSnapshot(): SshResourceSnapshot
   dropTransports(): void
   resizePty(cols: number, rows: number): void
 }
@@ -28,25 +41,54 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
   const hostKey = privateKey.export({ type: "pkcs1", format: "pem" })
   const server = new Server({ hostKeys: [hostKey] })
   const sockets = new Set<Socket>()
+  const activeClients = new Set<object>()
+  const activeSessions = new Set<Session>()
+  const activeShells = new Set<ServerChannel>()
+  const activeForwards = new Set<ServerChannel>()
   const ptyRequests: PseudoTtyInfo[] = []
   const ptyResizes: WindowChangeInfo[] = []
+  const pendingAuthentications: AuthContext[] = []
+  const pendingShells: Array<{ accept: () => void; reject: () => void }> = []
   let connectionCount = 0
-  let lastChannel: ServerChannel | undefined
+  let authenticationHeld = false
+  let shellHoldCount = 0
+  let keepaliveResponse = true
   let listeningPort = 0
 
   server.on("connection", (connection) => {
     connectionCount += 1
+    activeClients.add(connection)
+    connection.once("close", () => activeClients.delete(connection))
+    const protocol = (connection as unknown as { _protocol?: { _handlers?: Record<string, (...args: any[]) => void> } })._protocol
+    const globalRequest = protocol?._handlers?.GLOBAL_REQUEST
+    if (protocol?._handlers && globalRequest) {
+      protocol._handlers.GLOBAL_REQUEST = (proto, name, wantReply, data) => {
+        if (name === "keepalive@openssh.com" && !keepaliveResponse) return
+        globalRequest(proto, name, wantReply, data)
+      }
+    }
     const socket = (connection as unknown as { _sock?: Socket })._sock
     if (socket) {
       sockets.add(socket)
       socket.once("close", () => sockets.delete(socket))
     }
     connection.on("authentication", (context) => {
-      if (context.method === "password" && context.username === (options.username ?? TEST_USERNAME) && context.password === (options.password ?? TEST_PASSWORD)) context.accept()
-      else context.reject()
+      const authenticate = (): void => {
+        if (context.method === "password" && context.username === (options.username ?? TEST_USERNAME) && context.password === (options.password ?? TEST_PASSWORD)) context.accept()
+        else context.reject()
+      }
+      if (authenticationHeld) pendingAuthentications.push(context)
+      else authenticate()
+    })
+    connection.on("tcpip", (accept, _reject, _details) => {
+      const channel = accept()
+      activeForwards.add(channel)
+      channel.once("close", () => activeForwards.delete(channel))
     })
     connection.on("session", (accept, reject) => {
       const session = accept() as Session
+      activeSessions.add(session)
+      session.once("close", () => activeSessions.delete(session))
       session.on("pty", (ptyAccept, _ptyReject, info) => {
         ptyRequests.push(info)
         ptyAccept()
@@ -57,20 +99,27 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
         options.onPtyResize?.(info)
       })
       session.on("shell", (shellAccept, shellReject) => {
-        const channel = shellAccept()
-        lastChannel = channel
-        if (options.welcome !== undefined) channel.write(options.welcome)
-        channel.on("data", (data: Buffer) => {
-          const text = data.toString("utf8")
-          if (text.length > 0) channel.write(`echo: ${text}`)
-        })
-        channel.on("close", () => {
-          if (lastChannel === channel) lastChannel = undefined
-        })
+        const openShell = (): void => {
+          const channel = shellAccept()
+          activeShells.add(channel)
+          channel.once("close", () => activeShells.delete(channel))
+          if (options.welcome !== undefined) channel.write(options.welcome)
+          channel.on("data", (data: Buffer) => {
+            const text = data.toString("utf8")
+            if (text.length > 0) channel.write(`echo: ${text}`)
+          })
+        }
+        if (shellHoldCount > 0) {
+          shellHoldCount -= 1
+          pendingShells.push({ accept: openShell, reject: shellReject })
+        } else {
+          openShell()
+        }
       })
       session.on("exec", (execAccept) => {
         const channel = execAccept()
-        lastChannel = channel
+        activeShells.add(channel)
+        channel.once("close", () => activeShells.delete(channel))
         channel.write("ok\n")
       })
       void reject
@@ -92,6 +141,28 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
     get connectionCount() { return connectionCount },
     ptyRequests,
     ptyResizes,
+    holdAuthentication() {
+      authenticationHeld = true
+    },
+    releaseAuthentication() {
+      authenticationHeld = false
+      for (const context of pendingAuthentications.splice(0)) {
+        if (context.method === "password" && context.username === (options.username ?? TEST_USERNAME) && context.password === (options.password ?? TEST_PASSWORD)) context.accept()
+        else context.reject()
+      }
+    },
+    holdNextShell() {
+      shellHoldCount += 1
+    },
+    releaseNextShell() {
+      pendingShells.shift()?.accept()
+    },
+    setKeepaliveResponse(enabled) {
+      keepaliveResponse = enabled
+    },
+    resourceSnapshot() {
+      return { clients: activeClients.size, sessions: activeSessions.size, shells: activeShells.size, forwards: activeForwards.size }
+    },
     resizePty(cols, rows) {
       const info = { cols, rows, width: 0, height: 0 }
       ptyResizes.push(info)
@@ -101,14 +172,21 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
       for (const socket of sockets) socket.destroy()
     },
     async close() {
+      authenticationHeld = false
+      for (const context of pendingAuthentications.splice(0)) context.reject()
+      shellHoldCount = 0
+      for (const pending of pendingShells.splice(0)) pending.reject()
       for (const socket of sockets) socket.destroy()
       await new Promise<void>((resolve) => {
         if (server.address() === null) return resolve()
         server.close(() => resolve())
       })
       while (sockets.size > 0) await new Promise((resolve) => setImmediate(resolve))
-      lastChannel?.close()
-      lastChannel = undefined
+      for (const channel of [...activeShells, ...activeForwards]) channel.close()
+      activeClients.clear()
+      activeSessions.clear()
+      activeShells.clear()
+      activeForwards.clear()
     }
   }
 }

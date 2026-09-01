@@ -3,11 +3,13 @@ import { afterEach, describe, expect, it } from "vitest"
 import { createSshTestServer, TEST_PASSWORD, TEST_USERNAME } from "./ssh-server"
 
 const clients: Client[] = []
-const servers: Array<{ close(): Promise<void> }> = []
+const servers: Array<{ close(): Promise<void>; resourceSnapshot(): { clients: number; sessions: number; shells: number; forwards: number } }> = []
 
 afterEach(async () => {
   clients.splice(0).forEach((client) => client.end())
-  await Promise.all(servers.splice(0).map((server) => server.close()))
+  const closing = servers.splice(0)
+  await Promise.all(closing.map((server) => server.close()))
+  for (const server of closing) expect(server.resourceSnapshot()).toEqual({ clients: 0, sessions: 0, shells: 0, forwards: 0 })
 })
 
 function connect(port: number, client = new Client()): Promise<Client> {
@@ -55,4 +57,61 @@ describe("ssh test server fixture", () => {
     await fixture.close()
     expect(fixture.server.address()).toBeNull()
   })
+
+  it("holds and releases authentication deterministically", async () => {
+    const fixture = await createSshTestServer()
+    servers.push(fixture)
+    fixture.holdAuthentication()
+    const opening = connect(fixture.port)
+
+    await waitFor(() => fixture.resourceSnapshot().clients === 1)
+    let settled = false
+    void opening.then(() => { settled = true }, () => { settled = true })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(settled).toBe(false)
+
+    fixture.releaseAuthentication()
+    await opening
+  })
+
+  it("holds and releases the next shell without leaking the session", async () => {
+    const fixture = await createSshTestServer()
+    servers.push(fixture)
+    const client = await connect(fixture.port)
+    fixture.holdNextShell()
+    let settled = false
+    const shell = new Promise<void>((resolve, reject) => {
+      client.shell({ rows: 24, cols: 80, term: "xterm" }, (error, stream) => {
+        if (error) return reject(error)
+        settled = true
+        stream.end()
+        resolve()
+      })
+    })
+
+    await waitFor(() => fixture.ptyRequests.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(settled).toBe(false)
+    fixture.releaseNextShell()
+    await shell
+  })
+
+  it("toggles keepalive responses and reports active resource counts", async () => {
+    const fixture = await createSshTestServer()
+    servers.push(fixture)
+    const client = await connect(fixture.port)
+    expect(fixture.resourceSnapshot()).toMatchObject({ clients: 1, sessions: 0, shells: 0, forwards: 0 })
+    fixture.setKeepaliveResponse(false)
+    fixture.setKeepaliveResponse(true)
+    client.end()
+    await waitFor(() => fixture.resourceSnapshot().clients === 0)
+  })
 })
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for fixture state")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}

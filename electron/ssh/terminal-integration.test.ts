@@ -5,11 +5,13 @@ import { createSshTestServer, TEST_PASSWORD, TEST_USERNAME } from "./test-fixtur
 import type { RuntimeOwner } from "../runtime/owner"
 
 const sessions: TerminalSessionManager[] = []
-const fixtures: Array<{ close(): Promise<void> }> = []
+const fixtures: Array<{ close(): Promise<void>; resourceSnapshot(): { clients: number; sessions: number; shells: number; forwards: number } }> = []
 const owner1: RuntimeOwner = { webContentsId: 1, rendererGeneration: 1 }
 afterEach(async () => {
   await Promise.all(sessions.splice(0).map((terminal) => terminal.releaseOwner(owner1)))
-  await Promise.all(fixtures.splice(0).map((fixture) => fixture.close()))
+  const closing = fixtures.splice(0)
+  await Promise.all(closing.map((fixture) => fixture.close()))
+  for (const fixture of closing) expect(fixture.resourceSnapshot()).toEqual({ clients: 0, sessions: 0, shells: 0, forwards: 0 })
 })
 
 class ManualScheduler implements RetryScheduler {
@@ -35,11 +37,12 @@ function openRequest(sessionId: string, port: number, owner = owner1): TerminalO
   return { sessionId, hostId: "fixture", cols: 80, rows: 24, owner }
 }
 
-function setup(port: number, resolved = request(port), scheduler?: ManualScheduler) {
+function setup(port: number, resolved = request(port), scheduler?: ManualScheduler, keepalivePolicy?: { intervalMs: number; countMax: number }) {
   const trusted = new Set<string>()
   const connectionEvents: unknown[] = []
   const connections = new SshConnectionManager({
     scheduler,
+    keepalivePolicy,
     resolve: async () => resolved,
     inspectHostKey: async (_request, fingerprint) => trusted.has(fingerprint) ? { status: "match", fingerprint } : { status: "unknown", fingerprint },
     promptForHostKey: async () => true,
@@ -119,5 +122,63 @@ describe("real SSH terminal integration", () => {
     scheduler.flush()
     await new Promise((resolve) => setImmediate(resolve))
     expect(events.some((event) => event.event.notice === "reconnected")).toBe(false)
+  })
+
+  it("cancels while authentication is held and leaves no fixture resources", async () => {
+    const fixture = await createSshTestServer(); fixtures.push(fixture)
+    fixture.holdAuthentication()
+    const { terminal, events } = setup(fixture.port)
+    const opening = terminal.open(openRequest("00000000-0000-4000-8000-000000000009", fixture.port))
+
+    await waitFor(() => fixture.resourceSnapshot().clients === 1)
+    terminal.cancelReconnect("00000000-0000-4000-8000-000000000009")
+
+    await expect(opening).rejects.toMatchObject({ reason: "cancelled" })
+    expect(events.at(-1).event).toMatchObject({ kind: "state", state: "disconnected", reason: "cancelled" })
+    await waitFor(() => fixture.resourceSnapshot().clients === 0)
+  })
+
+  it("recovers after dropping a transport while the first shell is held", async () => {
+    const fixture = await createSshTestServer(); fixtures.push(fixture)
+    const scheduler = new ManualScheduler(); const { terminal, events } = setup(fixture.port, request(fixture.port), scheduler)
+    fixture.holdNextShell()
+    const opening = terminal.open(openRequest("00000000-0000-4000-8000-00000000000a", fixture.port))
+
+    await waitFor(() => fixture.ptyRequests.length === 1)
+    fixture.dropTransports()
+    await waitFor(() => events.some((event) => event.event.kind === "state" && event.event.state === "reconnecting"))
+    fixture.releaseNextShell()
+    scheduler.flush()
+    await waitFor(() => events.some((event) => event.event.kind === "state" && event.event.notice === "reconnected"))
+
+    await expect(opening).resolves.toMatchObject({ state: "connected", channelGeneration: 1 })
+  })
+
+  it("cancels one shared session while the other continues after recovery", async () => {
+    const fixture = await createSshTestServer(); fixtures.push(fixture)
+    const scheduler = new ManualScheduler(); const { terminal, events } = setup(fixture.port, request(fixture.port), scheduler)
+    const first = await terminal.open(openRequest("00000000-0000-4000-8000-00000000000b", fixture.port))
+    const second = await terminal.open(openRequest("00000000-0000-4000-8000-00000000000c", fixture.port))
+
+    fixture.dropTransports()
+    await waitFor(() => events.filter((event) => event.event.kind === "state" && event.event.state === "reconnecting").length >= 2)
+    terminal.cancelReconnect(first.sessionId)
+    scheduler.flush()
+    await waitFor(() => events.some((event) => event.event.kind === "state" && event.event.notice === "reconnected" && event.event.sessionId === second.sessionId))
+
+    terminal.write(second.sessionId, 2, "shared recovery\n")
+    await waitFor(() => events.some((event) => event.event.kind === "output" && new TextDecoder().decode(event.event.packet.bytes).includes("echo: shared recovery")))
+    expect(events.filter((event) => event.event.kind === "state" && event.event.reason === "cancelled" && event.event.sessionId === first.sessionId)).toHaveLength(1)
+  })
+
+  it("detects ignored keepalives and recovers one terminal session", async () => {
+    const fixture = await createSshTestServer(); fixtures.push(fixture)
+    const scheduler = new ManualScheduler(); const { terminal, events } = setup(fixture.port, request(fixture.port), scheduler, { intervalMs: 20, countMax: 1 })
+    fixture.setKeepaliveResponse(false)
+    const opened = await terminal.open(openRequest("00000000-0000-4000-8000-00000000000d", fixture.port))
+
+    await waitFor(() => events.some((event) => event.event.kind === "state" && event.event.state === "reconnecting"), 3_000)
+    scheduler.flush()
+    await waitFor(() => events.some((event) => event.event.kind === "state" && event.event.notice === "reconnected" && event.event.channelGeneration > opened.channelGeneration), 3_000)
   })
 })
