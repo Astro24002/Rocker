@@ -81,6 +81,68 @@ describe("diagnostic sanitization", () => {
     expect(exported.lastError?.message).toBe("[redacted]")
   })
 
+  it("keeps finite storage and remote-operation vocabulary", () => {
+    const event = sanitizeDiagnosticEvent({
+      at: "2026-08-31T12:00:00.000Z",
+      category: "storage",
+      action: "blocked",
+      reason: "permission",
+      details: { store: "credentials", source: "backup" }
+    })
+    const monitoring = sanitizeDiagnosticEvent({
+      at: "2026-08-31T12:00:01.000Z",
+      category: "monitoring",
+      action: "sample-failed",
+      reason: "output-limit"
+    })
+
+    expect(event).toMatchObject({ category: "storage", reason: "permission" })
+    expect(monitoring).toMatchObject({ category: "monitoring", reason: "output-limit" })
+  })
+
+  it("removes sensitive keys and path-like values from otherwise allowed details", () => {
+    const result = sanitizeDiagnosticEvent({
+      at: "2026-08-31T12:00:00.000Z",
+      category: "storage",
+      action: "blocked",
+      reason: "permission",
+      details: {
+        store: "credentials",
+        identityFile: "/Users/alice/.ssh/id_ed25519",
+        agent: "/tmp/ssh-agent.sock",
+        path: "C:\\Users\\alice\\.ssh\\config",
+        command: "cat /proc/stat",
+        hostname: "prod.internal",
+        username: "root",
+        note: "failed while reading /home/alice/.config/rocker/settings.json",
+        windowsNote: "C:\\Users\\alice\\AppData\\Local\\Rocker\\settings.json",
+        safe: "retryable"
+      }
+    })
+
+    expect(result.details).toEqual({
+      store: "credentials",
+      note: "[redacted]",
+      windowsNote: "[redacted]",
+      safe: "retryable"
+    })
+  })
+
+  it("keeps only finite runtime metadata in diagnostic exports", () => {
+    const exported = sanitizeDiagnosticExport({
+      generatedAt: "2026-08-31T12:00:00.000Z",
+      appVersion: "0.3.2",
+      platform: "linux",
+      arch: "x64",
+      buildChannel: "release",
+      runtimeMode: "packaged",
+      events: [],
+      settings: {}
+    })
+
+    expect(exported).toMatchObject({ buildChannel: "release", runtimeMode: "packaged" })
+  })
+
   it("sanitizes settings and last errors using allow-listed fields", () => {
     expect(sanitizeSettingsSnapshot({
       locale: "zh-CN",

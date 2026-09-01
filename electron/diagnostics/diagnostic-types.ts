@@ -1,6 +1,15 @@
-import type { TerminalFailureReason } from "../ssh/types"
+import type { RemoteOperationFailureReason, TerminalFailureReason } from "../ssh/types"
 
-export type DiagnosticCategory = "connection" | "session" | "forwarding" | "window" | "system"
+export type StorageFailureReason = "corrupt" | "permission" | "unavailable" | "recovery-failed"
+
+export type DiagnosticReason = TerminalFailureReason | StorageFailureReason | RemoteOperationFailureReason
+
+export type DiagnosticCategory = "connection" | "session" | "forwarding" | "window" | "storage" | "monitoring" | "system"
+
+export type DiagnosticRuntimeMetadata = {
+  buildChannel: "development" | "release"
+  runtimeMode: "development" | "packaged"
+}
 
 export type SafeSettingsSnapshot = {
   locale?: "en" | "zh-CN"
@@ -20,7 +29,7 @@ export type DiagnosticEvent = {
   category: DiagnosticCategory | "unknown"
   action: string
   state?: string
-  reason?: TerminalFailureReason
+  reason?: DiagnosticReason
   hostId?: string
   connectionId?: string
   sessionId?: string
@@ -35,6 +44,8 @@ export type DiagnosticExport = {
   appVersion: string
   platform: string
   arch: string
+  buildChannel: DiagnosticRuntimeMetadata["buildChannel"]
+  runtimeMode: DiagnosticRuntimeMetadata["runtimeMode"]
   events: DiagnosticEvent[]
   settings: SafeSettingsSnapshot
   lastError?: { category: string; reason?: string; message: string }

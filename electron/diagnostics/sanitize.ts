@@ -1,26 +1,34 @@
-import type { TerminalFailureReason } from "../ssh/types"
-import type { DiagnosticCategory, DiagnosticEvent, DiagnosticExport, SafeSettingsSnapshot } from "./diagnostic-types"
+import type {
+  DiagnosticCategory,
+  DiagnosticEvent,
+  DiagnosticExport,
+  DiagnosticReason,
+  DiagnosticRuntimeMetadata,
+  SafeSettingsSnapshot
+} from "./diagnostic-types"
 
 const MAX_STRING = 256
 const MAX_EVENTS = 1000
-const categories = new Set<DiagnosticCategory>(["connection", "session", "forwarding", "window", "system"])
-const reasons = new Set<TerminalFailureReason>([
+const categories = new Set<DiagnosticCategory>(["connection", "session", "forwarding", "window", "storage", "monitoring", "system"])
+const reasons = new Set<DiagnosticReason>([
   "network", "timeout", "dns", "authentication", "host-key-changed", "host-key-rejected",
-  "configuration", "channel-ended", "local-port-in-use", "cancelled", "unknown"
+  "configuration", "channel-ended", "local-port-in-use", "cancelled", "unknown",
+  "corrupt", "permission", "unavailable", "recovery-failed",
+  "output-limit", "channel-error"
 ])
-const sensitiveKeys = /password|passphrase|private.?key|terminal.?input|terminal.?output|remote.?file|ssh.?config|fingerprint/i
+const sensitiveKeys = /password|passphrase|private.?key|identity.?file|agent|path|command|hostname|username|terminal.?input|terminal.?output|remote.?file|ssh.?config|fingerprint/i
 const fingerprintValue = /\b(?:sha256|md5):[a-z0-9+/=:_-]+/i
+const posixPathValue = /(?:^|[\s"'=:(])\/(?:[^\s,;)'"\]]+\/)*[^\s,;)'"\]]+/i
+const windowsPathValue = /(?:^|[\s"'=:(])(?:[a-z]:[\\/]|\\\\)[^\s,;)'"\]]+/i
 
 function bounded(value: unknown): string {
   if (typeof value !== "string") return "unknown"
-  const boundedValue = value.slice(0, MAX_STRING)
-  return fingerprintValue.test(boundedValue) ? "[redacted]" : boundedValue
+  return redactString(value.slice(0, MAX_STRING))
 }
 
 function optionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined
-  const boundedValue = value.slice(0, MAX_STRING)
-  return fingerprintValue.test(boundedValue) ? "[redacted]" : boundedValue
+  return redactString(value.slice(0, MAX_STRING))
 }
 
 function optionalNumber(value: unknown): number | undefined {
@@ -31,8 +39,8 @@ function category(value: unknown): DiagnosticCategory | "unknown" {
   return typeof value === "string" && categories.has(value as DiagnosticCategory) ? value as DiagnosticCategory : "unknown"
 }
 
-function reason(value: unknown): TerminalFailureReason | undefined {
-  return typeof value === "string" && reasons.has(value as TerminalFailureReason) ? value as TerminalFailureReason : value === undefined ? undefined : "unknown"
+function reason(value: unknown): DiagnosticReason | undefined {
+  return typeof value === "string" && reasons.has(value as DiagnosticReason) ? value as DiagnosticReason : value === undefined ? undefined : "unknown"
 }
 
 function details(value: unknown): Record<string, string | number | boolean> | undefined {
@@ -40,7 +48,7 @@ function details(value: unknown): Record<string, string | number | boolean> | un
   const result: Record<string, string | number | boolean> = {}
   for (const [key, item] of Object.entries(value)) {
     if (sensitiveKeys.test(key)) continue
-    if (typeof item === "string") result[key.slice(0, MAX_STRING)] = fingerprintValue.test(item) ? "[redacted]" : item.slice(0, MAX_STRING)
+    if (typeof item === "string") result[key.slice(0, MAX_STRING)] = redactString(item.slice(0, MAX_STRING))
     else if (typeof item === "number" && Number.isFinite(item)) result[key.slice(0, MAX_STRING)] = item
     else if (typeof item === "boolean") result[key.slice(0, MAX_STRING)] = item
   }
@@ -95,6 +103,8 @@ export function sanitizeDiagnosticExport(input: unknown): DiagnosticExport {
     appVersion: bounded(source.appVersion),
     platform: bounded(source.platform),
     arch: bounded(source.arch),
+    buildChannel: runtimeMetadata(source.buildChannel, "buildChannel", "development"),
+    runtimeMode: runtimeMetadata(source.runtimeMode, "runtimeMode", "development"),
     events: rawEvents.slice(-MAX_EVENTS).map(sanitizeDiagnosticEvent),
     settings: sanitizeSettingsSnapshot(source.settings)
   }
@@ -103,4 +113,18 @@ export function sanitizeDiagnosticExport(input: unknown): DiagnosticExport {
     result.lastError = { category: category(error.category), reason: reason(error.reason) ?? "unknown", message: bounded(error.message) }
   }
   return result
+}
+
+function redactString(value: string): string {
+  return fingerprintValue.test(value) || posixPathValue.test(value) || windowsPathValue.test(value) ? "[redacted]" : value
+}
+
+function runtimeMetadata<T extends DiagnosticRuntimeMetadata["buildChannel"] | DiagnosticRuntimeMetadata["runtimeMode"]>(
+  value: unknown,
+  field: "buildChannel" | "runtimeMode",
+  fallback: T
+): T {
+  if (field === "buildChannel" && (value === "development" || value === "release")) return value as T
+  if (field === "runtimeMode" && (value === "development" || value === "packaged")) return value as T
+  return fallback
 }
