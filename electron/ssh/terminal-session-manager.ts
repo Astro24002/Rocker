@@ -7,6 +7,7 @@ import {
   type ConnectionLease
 } from "./connection-manager"
 import { TerminalOutputPump } from "./terminal-output-pump"
+import { ConnectionFailureError } from "./types"
 import type {
   ConnectionCommandExecutor,
   OwnedTerminalSessionEvent,
@@ -46,7 +47,8 @@ interface SessionRecord {
   request: TerminalOpenRequest
   state: TerminalSessionState
   channelGeneration: number
-  transportAttempt: number
+  attempt: TerminalAttempt
+  nextAttemptId: number
   recoveryDesired: boolean
   connectionId?: string
   lease?: ConnectionLease
@@ -57,8 +59,9 @@ interface SessionRecord {
 }
 
 interface PendingStart {
-  attempt: number
+  attemptId: number
   promise: Promise<TerminalSessionInfo>
+  reject(error: Error): void
 }
 
 interface RecoveryWaiter {
@@ -73,9 +76,18 @@ interface RestoreAdmission {
 
 interface ShellTask {
   record: SessionRecord
+  attemptId: number
   priority: number
   order: number
+  reject(error: Error): void
   run(): Promise<void>
+}
+
+interface TerminalAttempt {
+  id: number
+  controller: AbortController
+  expectedTransportGeneration?: number
+  expectedChannelGeneration: number
 }
 
 class TerminalStartInvalidatedError extends Error {}
@@ -125,19 +137,21 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
       request: { ...request },
       state: isWorkspaceRestore ? "restoring" : "connecting",
       channelGeneration: 0,
-      transportAttempt: 1,
+      attempt: createTerminalAttempt(1, 1),
+      nextAttemptId: 2,
       recoveryDesired: true,
       recoveryWaiters: new Set()
     }
     this.sessions.set(request.sessionId, record)
     this.emitState(record, record.state)
-    const attempt = record.transportAttempt
+    const attempt = record.attempt
     try {
       return await this.queueStart(record, isWorkspaceRestore ? "restored-new-shell" : undefined, attempt)
     } catch (error) {
       if (error instanceof TerminalStartInvalidatedError && this.isCurrent(record) && record.recoveryDesired) {
         return this.waitForRecovery(record)
       }
+      if (isTerminalCancellation(error) || !this.isCurrent(record)) throw error
       await this.handleStartFailure(record, attempt, error)
       throw error
     }
@@ -167,7 +181,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     const record = this.requireSession(sessionId)
     if (!isReconnectableState(record.state)) throw new Error("Terminal session is not reconnectable")
     record.recoveryDesired = true
-    const attempt = this.nextTransportAttempt(record)
+    const attempt = this.beginAttempt(record)
     try {
       if (!record.lease) {
         record.state = "connecting"
@@ -186,6 +200,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
       }
       await this.queueStart(record, "reconnected", attempt)
     } catch (error) {
+      if (isTerminalCancellation(error) || !this.isCurrent(record)) throw error
       await this.handleStartFailure(record, attempt, error)
       throw error
     }
@@ -195,7 +210,10 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     const record = this.sessions.get(sessionId)
     if (!record || !record.recoveryDesired || (record.state !== "connecting" && record.state !== "reconnecting" && record.state !== "restoring")) return
     record.recoveryDesired = false
-    this.nextTransportAttempt(record)
+    record.attempt.controller.abort()
+    const cancellation = terminalCancellationError()
+    this.rejectPendingStart(record, cancellation)
+    this.rejectRecoveryWaiters(record, cancellation)
     record.output?.close()
     record.output = undefined
     record.channel = undefined
@@ -203,11 +221,10 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
       const lease = record.lease
       record.lease = undefined
       record.connectionId = undefined
-      void this.options.connections.release(lease.id)
+      void this.options.connections.release(lease.id).catch(() => undefined)
     }
     record.state = "disconnected"
     this.emitState(record, "disconnected", "cancelled")
-    this.rejectRecoveryWaiters(record, new Error("Terminal reconnect was cancelled"))
     this.releaseRestoreAdmission(record)
   }
 
@@ -215,13 +232,15 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     const record = this.sessions.get(sessionId)
     if (!record) return
     record.recoveryDesired = false
-    this.nextTransportAttempt(record)
+    record.attempt.controller.abort()
+    const closed = new Error("Terminal session is closed")
+    this.rejectPendingStart(record, closed)
+    this.rejectRecoveryWaiters(record, closed)
     this.emitState(record, "closing")
     record.output?.close()
     record.output = undefined
     record.channel?.end()
     record.channel = undefined
-    this.rejectRecoveryWaiters(record, new Error("Terminal session was closed"))
     this.releaseRestoreAdmission(record)
     await this.removeRecord(sessionId, false)
   }
@@ -264,15 +283,19 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
   private queueStart(
     record: SessionRecord,
     notice?: "reconnected" | "restored-new-shell",
-    attempt = record.transportAttempt
+    attempt = record.attempt
   ): Promise<TerminalSessionInfo> {
-    if (record.pendingStart?.attempt === attempt) return record.pendingStart.promise
+    if (record.pendingStart?.attemptId === attempt.id) return record.pendingStart.promise
+    let rejectTask = (_error: Error): void => undefined
     const task = new Promise<TerminalSessionInfo>((resolve, reject) => {
+      rejectTask = reject
       const priority = record.request.restorePriority === "background" ? 1 : 0
       this.shellQueue.push({
         record,
+        attemptId: attempt.id,
         priority,
         order: this.nextQueueOrder++,
+        reject: rejectTask,
         run: async () => {
           try {
             const info = await this.startSession(record, attempt, notice)
@@ -284,7 +307,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
       })
       this.scheduleQueueDrain()
     })
-    record.pendingStart = { attempt, promise: task }
+    record.pendingStart = { attemptId: attempt.id, promise: task, reject: rejectTask }
     void task.finally(() => {
       if (record.pendingStart?.promise === task) record.pendingStart = undefined
     }).catch(() => undefined)
@@ -293,7 +316,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
 
   private async startSession(
     record: SessionRecord,
-    attempt: number,
+    attempt: TerminalAttempt,
     notice?: "reconnected" | "restored-new-shell"
   ): Promise<TerminalSessionInfo> {
     this.assertCurrentAttempt(record, attempt)
@@ -302,7 +325,8 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
         hostId: record.request.hostId,
         owner: record.request.owner,
         kind: "terminal",
-        forceNewConnection: record.request.forceNewConnection
+        forceNewConnection: record.request.forceNewConnection,
+        signal: attempt.controller.signal
       })
       if (!this.isCurrentAttempt(record, attempt)) {
         await this.options.connections.release(lease.id)
@@ -316,14 +340,14 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
 
   private async openShell(
     record: SessionRecord,
-    attempt: number,
+    attempt: TerminalAttempt,
     notice?: "reconnected" | "restored-new-shell"
   ): Promise<TerminalSessionInfo> {
     this.assertCurrentAttempt(record, attempt)
     if (!record.connectionId) throw new Error("SSH connection is not ready")
     const connectionId = record.connectionId
     const client = this.options.connections.getClientForConnection(connectionId)
-    const generation = record.channelGeneration + 1
+    const generation = attempt.expectedChannelGeneration
     const channel = await new Promise<TerminalChannel>((resolve, reject) => {
       client.shell({ term: "xterm-256color", cols: record.request.cols, rows: record.request.rows }, (error, openedChannel) => {
         if (error || !openedChannel) {
@@ -374,7 +398,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     if (event.kind === "lost") {
       for (const record of affected) {
         if (!record.recoveryDesired) continue
-        this.nextTransportAttempt(record)
+        this.beginAttempt(record)
         record.output?.close()
         record.output = undefined
         record.channel = undefined
@@ -397,7 +421,8 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     if (event.kind === "ready") {
       for (const record of affected) {
         if (!record.recoveryDesired || (record.state !== "reconnecting" && record.state !== "restoring")) continue
-        const attempt = record.transportAttempt
+        const attempt = record.attempt
+        attempt.expectedTransportGeneration = event.transportGeneration
         const notice = record.state === "restoring" ? "restored-new-shell" : "reconnected"
         void this.queueStart(record, notice, attempt).catch((error) => this.handleRecoveredStartFailure(record, attempt, error))
       }
@@ -406,7 +431,7 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     if (event.kind === "failed") {
       for (const record of affected) {
         record.recoveryDesired = false
-        this.nextTransportAttempt(record)
+        record.attempt.controller.abort()
         record.lease = undefined
         record.connectionId = undefined
         record.output?.close()
@@ -420,13 +445,14 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     }
   }
 
-  private handleRecoveredStartFailure(record: SessionRecord, attempt: number, error: unknown): void {
+  private handleRecoveredStartFailure(record: SessionRecord, attempt: TerminalAttempt, error: unknown): void {
     void this.handleStartFailure(record, attempt, error).catch(() => undefined)
   }
 
-  private async handleStartFailure(record: SessionRecord, attempt: number, error: unknown): Promise<void> {
-    if (!this.isCurrent(record) || record.transportAttempt !== attempt || error instanceof TerminalStartInvalidatedError) return
+  private async handleStartFailure(record: SessionRecord, attempt: TerminalAttempt, error: unknown): Promise<void> {
+    if (!this.isCurrent(record) || record.attempt !== attempt || error instanceof TerminalStartInvalidatedError || isTerminalCancellation(error)) return
     record.recoveryDesired = false
+    attempt.controller.abort()
     record.output?.close()
     record.output = undefined
     record.channel?.end()
@@ -446,16 +472,23 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     }
   }
 
-  private nextTransportAttempt(record: SessionRecord): number {
-    record.transportAttempt += 1
-    return record.transportAttempt
+  private beginAttempt(record: SessionRecord): TerminalAttempt {
+    record.attempt.controller.abort()
+    const attempt = createTerminalAttempt(record.nextAttemptId, record.channelGeneration + 1)
+    record.nextAttemptId += 1
+    record.attempt = attempt
+    return attempt
   }
 
-  private isCurrentAttempt(record: SessionRecord, attempt: number): boolean {
-    return this.isCurrent(record) && record.recoveryDesired && record.transportAttempt === attempt
+  private isCurrentAttempt(record: SessionRecord, attempt: TerminalAttempt): boolean {
+    return this.isCurrent(record) && record.recoveryDesired && record.attempt === attempt && !attempt.controller.signal.aborted
   }
 
-  private assertCurrentAttempt(record: SessionRecord, attempt: number): void {
+  private isCurrentAttemptId(record: SessionRecord, attemptId: number): boolean {
+    return this.isCurrent(record) && record.recoveryDesired && record.attempt.id === attemptId && !record.attempt.controller.signal.aborted
+  }
+
+  private assertCurrentAttempt(record: SessionRecord, attempt: TerminalAttempt): void {
     if (!this.isCurrentAttempt(record, attempt)) throw this.currentAttemptError(record)
   }
 
@@ -481,7 +514,8 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
         const taskIndex = this.shellQueue.findIndex((task) => this.isRestoreTaskReady(task.record))
         if (taskIndex === -1) return
         const [task] = this.shellQueue.splice(taskIndex, 1)
-        await task.run()
+        if (this.isCurrentAttemptId(task.record, task.attemptId)) await task.run()
+        else task.reject(this.currentAttemptError(task.record))
         this.releaseRestoreAdmission(task.record)
       }
     } finally {
@@ -549,6 +583,10 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     record.recoveryWaiters.clear()
   }
 
+  private rejectPendingStart(record: SessionRecord, error: Error): void {
+    record.pendingStart?.reject(error)
+  }
+
   private emitState(
     record: SessionRecord,
     state: TerminalSessionState,
@@ -570,6 +608,18 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
 
 function isValidSessionId(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+function createTerminalAttempt(id: number, expectedChannelGeneration: number): TerminalAttempt {
+  return { id, controller: new AbortController(), expectedChannelGeneration }
+}
+
+function terminalCancellationError(): ConnectionFailureError {
+  return new ConnectionFailureError("Terminal connection was cancelled", "cancelled")
+}
+
+function isTerminalCancellation(error: unknown): boolean {
+  return error instanceof ConnectionFailureError && error.reason === "cancelled"
 }
 
 function isValidDimensions(cols: number, rows: number): boolean {

@@ -152,7 +152,7 @@ describe("TerminalSessionManager", () => {
     transport.releaseConnectionResolution()
 
     await expect(opening).rejects.toThrow("Terminal session is closed")
-    await waitFor(() => transport.clients[0]?.end.mock.calls.length === 1)
+    expect(transport.clients).toHaveLength(0)
   })
 
   it("ignores a stale shell close after an unexpected transport loss", async () => {
@@ -228,6 +228,95 @@ describe("TerminalSessionManager", () => {
     expect(channels.has(4)).toBe(false)
   })
 
+  it("cancels a deferred initial acquire before it resolves and retains the session for retry", async () => {
+    const { sessions, transport, events } = createSessionHarness({ deferConnectionResolution: true })
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
+    let openingSettled = false
+    void opening.then(() => { openingSettled = true }, () => { openingSettled = true })
+    await transport.waitForAcquire()
+
+    sessions.cancelReconnect(sessionId)
+    sessions.cancelReconnect(sessionId)
+    await flush()
+
+    try {
+      expect(transport.acquireSignals[0]?.aborted).toBe(true)
+      expect(openingSettled).toBe(true)
+      await expect(opening).rejects.toMatchObject({
+        name: "ConnectionFailureError",
+        message: "Terminal connection was cancelled",
+        reason: "cancelled"
+      })
+      expect(events.filter((event) => event.kind === "state" && event.state === "disconnected" && event.reason === "cancelled")).toHaveLength(1)
+      expect(sessions.ownerForSession(sessionId)).toEqual(owner7)
+    } finally {
+      transport.releaseConnectionResolution()
+      await opening.catch(() => undefined)
+    }
+
+    await sessions.reconnect(sessionId)
+    expect(sessions.ownerForSession(sessionId)).toEqual(owner7)
+  })
+
+  it("cancels a deferred manual retry before acquisition resolves and preserves prior output", async () => {
+    const { sessions, transport, channels, events } = createSessionHarness({ deferEachConnectionResolution: true })
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    const initial = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
+    await transport.waitForAcquire(1)
+    transport.resolveNextConnection()
+    await initial
+    channels.get(1)!.emitter.emit("data", Buffer.from("before cancellation"))
+    transport.dropUnexpectedly()
+    sessions.cancelReconnect(sessionId)
+
+    const retry = sessions.reconnect(sessionId)
+    let retrySettled = false
+    void retry.then(() => { retrySettled = true }, () => { retrySettled = true })
+    await transport.waitForAcquire(2)
+    sessions.cancelReconnect(sessionId)
+    sessions.cancelReconnect(sessionId)
+    await flush()
+
+    try {
+      expect(transport.acquireSignals[1]?.aborted).toBe(true)
+      expect(retrySettled).toBe(true)
+      await expect(retry).rejects.toMatchObject({
+        name: "ConnectionFailureError",
+        message: "Terminal connection was cancelled",
+        reason: "cancelled"
+      })
+      expect(events.some((event) => event.kind === "output" && new TextDecoder().decode(event.packet.bytes) === "before cancellation")).toBe(true)
+      expect(sessions.ownerForSession(sessionId)).toEqual(owner7)
+    } finally {
+      transport.resolveNextConnection()
+      await retry.catch(() => undefined)
+    }
+  })
+
+  it("cancels a deferred acquire before close removes the logical session", async () => {
+    const { sessions, transport, events } = createSessionHarness({ deferConnectionResolution: true })
+    const sessionId = "11111111-1111-4111-8111-111111111111"
+    const opening = sessions.open({ sessionId, hostId: "host-a", cols: 120, rows: 40, owner: owner7 })
+    let openingSettled = false
+    void opening.then(() => { openingSettled = true }, () => { openingSettled = true })
+    await transport.waitForAcquire()
+
+    const closing = sessions.close(sessionId)
+    await closing
+
+    try {
+      expect(transport.acquireSignals[0]?.aborted).toBe(true)
+      expect(openingSettled).toBe(true)
+      await expect(opening).rejects.toThrow("Terminal session is closed")
+      expect(sessions.ownerForSession(sessionId)).toBeUndefined()
+      expect(events.filter((event) => event.kind === "state" && event.state === "closing")).toHaveLength(1)
+    } finally {
+      transport.releaseConnectionResolution()
+      await opening.catch(() => undefined)
+    }
+  })
+
   it("does not tear down a healthy channel when a stale cancel-reconnect action arrives", async () => {
     const { sessions, channels } = createSessionHarness()
     const sessionId = "11111111-1111-4111-8111-111111111111"
@@ -259,7 +348,11 @@ describe("TerminalSessionManager", () => {
 
     sessions.cancelReconnect(sessionId)
     transport.releaseConnectionResolution()
-    await expect(opening).rejects.toThrow("Terminal session is closed")
+    await expect(opening).rejects.toMatchObject({
+      name: "ConnectionFailureError",
+      message: "Terminal connection was cancelled",
+      reason: "cancelled"
+    })
 
     await sessions.reconnect(sessionId)
     expect(channels).toHaveLength(1)
@@ -514,6 +607,7 @@ function createTransport(
   const connectionResolution = new Promise<void>((resolve) => { releaseConnectionResolution = resolve })
   const connectionResolutionStarted = new Promise<void>((resolve) => { signalConnectionResolution = resolve })
   const connectionRequests: string[] = []
+  const acquireSignals: Array<AbortSignal | undefined> = []
   const pendingConnectionResolutions: Array<() => void> = []
   const connections = new SshConnectionManager({
     createClient: () => {
@@ -537,6 +631,7 @@ function createTransport(
     random: () => 0.5,
     resolve: async (request) => {
       connectionRequests.push(request.hostId)
+      acquireSignals.push(request.signal)
       signalConnectionResolution?.()
       const failure = resolveFailures.shift()
       if (failure) throw failure
@@ -561,9 +656,11 @@ function createTransport(
     connections,
     dropUnexpectedly: () => clients.at(-1)?.emitter.emit("close"),
     connectionRequests,
+    acquireSignals,
     releaseConnectionResolution: () => releaseConnectionResolution?.(),
     resolveNextConnection: () => pendingConnectionResolutions.shift()?.(),
-    waitForConnectionResolution: () => connectionResolutionStarted
+    waitForConnectionResolution: () => connectionResolutionStarted,
+    waitForAcquire: (count = 1) => waitFor(() => acquireSignals.length >= count)
   }
 }
 
