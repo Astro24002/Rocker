@@ -58,7 +58,15 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
   server.on("connection", (connection) => {
     connectionCount += 1
     activeClients.add(connection)
-    connection.once("close", () => activeClients.delete(connection))
+    const connectionSessions = new Set<Session>()
+    const connectionShells = new Set<ServerChannel>()
+    const connectionForwards = new Set<ServerChannel>()
+    connection.once("close", () => {
+      activeClients.delete(connection)
+      for (const session of connectionSessions) activeSessions.delete(session)
+      for (const channel of connectionShells) activeShells.delete(channel)
+      for (const channel of connectionForwards) activeForwards.delete(channel)
+    })
     const protocol = (connection as unknown as { _protocol?: { _handlers?: Record<string, (...args: any[]) => void> } })._protocol
     const globalRequest = protocol?._handlers?.GLOBAL_REQUEST
     if (protocol?._handlers && globalRequest) {
@@ -83,12 +91,20 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
     connection.on("tcpip", (accept, _reject, _details) => {
       const channel = accept()
       activeForwards.add(channel)
-      channel.once("close", () => activeForwards.delete(channel))
+      connectionForwards.add(channel)
+      channel.once("close", () => {
+        activeForwards.delete(channel)
+        connectionForwards.delete(channel)
+      })
     })
     connection.on("session", (accept, reject) => {
       const session = accept() as Session
       activeSessions.add(session)
-      session.once("close", () => activeSessions.delete(session))
+      connectionSessions.add(session)
+      session.once("close", () => {
+        activeSessions.delete(session)
+        connectionSessions.delete(session)
+      })
       session.on("pty", (ptyAccept, _ptyReject, info) => {
         ptyRequests.push(info)
         ptyAccept()
@@ -102,7 +118,11 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
         const openShell = (): void => {
           const channel = shellAccept()
           activeShells.add(channel)
-          channel.once("close", () => activeShells.delete(channel))
+          connectionShells.add(channel)
+          channel.once("close", () => {
+            activeShells.delete(channel)
+            connectionShells.delete(channel)
+          })
           if (options.welcome !== undefined) channel.write(options.welcome)
           channel.on("data", (data: Buffer) => {
             const text = data.toString("utf8")
@@ -119,8 +139,21 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
       session.on("exec", (execAccept) => {
         const channel = execAccept()
         activeShells.add(channel)
-        channel.once("close", () => activeShells.delete(channel))
+        connectionShells.add(channel)
+        channel.once("close", () => {
+          activeShells.delete(channel)
+          connectionShells.delete(channel)
+        })
         channel.write("ok\n")
+        queueMicrotask(() => {
+          channel.exit(0)
+          channel.end()
+          // ssh2 keeps server-side exec streams half-open until the client
+          // acknowledges the close. The command itself is complete once EOF
+          // has been sent, so stop counting it as an active fixture resource.
+          activeShells.delete(channel)
+          connectionShells.delete(channel)
+        })
       })
       void reject
     })

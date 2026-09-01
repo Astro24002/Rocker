@@ -106,6 +106,26 @@ describe("ssh test server fixture", () => {
     client.end()
     await waitFor(() => fixture.resourceSnapshot().clients === 0)
   })
+
+  it("closes exec channels so bounded monitoring commands can settle", async () => {
+    const fixture = await createSshTestServer()
+    servers.push(fixture)
+    const client = await connect(fixture.port)
+    let execCallbackCalled = false
+
+    const opening = new Promise<void>((resolve, reject) => {
+      client.exec("cat /proc/stat", (error, channel) => {
+        execCallbackCalled = true
+        if (error || !channel) return reject(error ?? new Error("exec channel was not opened"))
+        channel.on("data", () => undefined)
+        channel.once("close", () => resolve())
+      })
+    })
+
+    await opening
+    expect(execCallbackCalled).toBe(true)
+    await waitFor(() => fixture.resourceSnapshot().shells === 0)
+  })
 })
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {

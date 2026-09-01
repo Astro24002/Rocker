@@ -119,6 +119,10 @@ export class TerminalSessionManager implements SessionCommandExecutor, Connectio
     return this.sessions.get(sessionId)?.request.owner
   }
 
+  public connectionIdForSession(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.connectionId
+  }
+
   public resourceSnapshot(): TerminalResourceSnapshot {
     let channels = 0
     let outputPumps = 0

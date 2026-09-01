@@ -1,0 +1,7 @@
+.git
+.worktrees
+node_modules
+out
+release
+*.log
+1.png
