@@ -721,7 +721,7 @@ function failureReason(error: unknown, fallback?: ConnectionFailureReason, authM
   if (authMethod === "agent" && isAgentEndpointFailure(error, message, code)) return "configuration"
   if (authMethod === "privateKey" && isPrivateKeyConfigurationFailure(message)) return "configuration"
   if (message.includes("authentication") || message.includes("auth failed")) return "authentication"
-  if (message.includes("private key") || message.includes("privatekey") || message.includes("security context") || message.includes("credential") || message.includes("configuration")) return "configuration"
+  if (message.includes("private key") || message.includes("security context") || message.includes("credential") || message.includes("configuration")) return "configuration"
   if (message.includes("cancelled") || message.includes("canceled")) return "cancelled"
   if (message.includes("timeout") || message.includes("timed out") || message.includes("etimedout") || code === "etimedout") return "timeout"
   if (message.includes("dns") || message.includes("enotfound") || code === "enotfound" || code === "eai_again" || code === "eai_fail") return "dns"
@@ -744,7 +744,7 @@ function normalizeConnectionFailure(error: unknown, authMethod: AuthMethod): Err
 }
 
 function isPrivateKeyConfigurationFailure(message: string): boolean {
-  return message.includes("private key") || message.includes("privatekey")
+  return message.includes("private key") || message.includes("cannot parse privatekey") || message.includes("privatekey value")
 }
 
 function isAgentEndpointFailure(error: unknown, message: string, code: string): boolean {
