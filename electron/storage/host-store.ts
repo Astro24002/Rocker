@@ -36,6 +36,26 @@ export class HostStore {
     })
   }
 
+  public async saveRedacted(
+    profile: Omit<HostProfile, "identityFile"> & { hasIdentityFile: boolean }
+  ): Promise<void> {
+    await this.store.update((document) => {
+      const next = normalizeHostDocument(document) ?? structuredClone(defaultDocument)
+      const current = next.hosts.find((host) => host.id === profile.id)
+      let candidate: HostProfile = profile
+      if (profile.hasIdentityFile) {
+        if (!current?.identityFile) throw new Error("Host identity file is unavailable")
+        candidate = { ...profile, identityFile: current.identityFile }
+      }
+      const normalized = normalizeHostProfile(candidate)
+      if (!normalized) return next
+      const index = next.hosts.findIndex((host) => host.id === normalized.id)
+      if (index === -1) next.hosts.push(normalized)
+      else next.hosts[index] = normalized
+      return next
+    })
+  }
+
   public async remove(id: string): Promise<void> {
     await this.store.update((document) => {
       const next = normalizeHostDocument(document) ?? structuredClone(defaultDocument)

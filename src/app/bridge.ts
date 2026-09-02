@@ -1,5 +1,10 @@
 import type { RockerBridge } from "../../electron/ipc/bridge-contract"
-import type { AppBootstrapSnapshot, BootstrapHostProfile, BootstrapResourceName } from "../../electron/ipc/bridge-contract"
+import type {
+  AppBootstrapSnapshot,
+  BootstrapHostProfile,
+  BootstrapResourceName,
+  HostSaveProfile
+} from "../../electron/ipc/bridge-contract"
 import type { StorageHealth, StorageKind } from "../../electron/storage/storage-result"
 import type { AppSettings, ForwardingInfo, HostProfile, StoredWorkspaceWindow } from "./types"
 
@@ -47,9 +52,11 @@ function createBrowserPreviewBridge(): RockerBridge {
     hosts: {
       list: async () => mockHosts,
       save: async ({ profile }) => {
+        const existing = mockHosts.find((host) => host.id === profile.id)
+        const nextProfile = normalizePreviewHostProfile(profile, existing)
         mockHosts = mockHosts.some((host) => host.id === profile.id)
-          ? mockHosts.map((host) => host.id === profile.id ? profile : host)
-          : [...mockHosts, profile]
+          ? mockHosts.map((host) => host.id === nextProfile.id ? nextProfile : host)
+          : [...mockHosts, nextProfile]
       },
       remove: async (id) => { mockHosts = mockHosts.filter((host) => host.id !== id) },
       importSshConfig: async () => []
@@ -195,6 +202,19 @@ async function createPreviewBootstrapSnapshot(): Promise<AppBootstrapSnapshot> {
 function toPreviewBootstrapHostProfile(profile: HostProfile): BootstrapHostProfile {
   const { identityFile: _identityFile, ...safeProfile } = profile
   return { ...safeProfile, hasIdentityFile: Boolean(profile.identityFile) }
+}
+
+function normalizePreviewHostProfile(profile: HostSaveProfile, existing: HostProfile | undefined): HostProfile {
+  if (!isRedactedHostProfile(profile)) return profile
+  const { hasIdentityFile: _hasIdentityFile, ...safeProfile } = profile
+  return profile.hasIdentityFile && existing?.identityFile
+    ? { ...safeProfile, identityFile: existing.identityFile }
+    : safeProfile
+}
+
+function isRedactedHostProfile(profile: HostSaveProfile): profile is BootstrapHostProfile {
+  return typeof (profile as { hasIdentityFile?: unknown }).hasIdentityFile === "boolean"
+    && (profile as HostProfile).identityFile === undefined
 }
 
 function previewHealth(store: StorageKind): StorageHealth {

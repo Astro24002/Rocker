@@ -75,13 +75,18 @@ const bootstrapResourceNames: BootstrapResourceName[] = [
 ]
 
 export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
+  let hostSaveQueue = Promise.resolve()
   ipcMain.handle(ipcChannels.hostsList, () => dependencies.hosts.list())
   ipcMain.handle(ipcChannels.hostsSave, async (_event, request: HostSaveRequest) => {
     assertHostProfile(request?.profile)
-    const profile = await restoreRedactedIdentityFile(dependencies, request.profile)
-    await dependencies.hosts.save(profile)
-    if (request.credentials?.password) await dependencies.credentials.set(request.profile.id, "password", request.credentials.password)
-    if (request.credentials?.passphrase) await dependencies.credentials.set(request.profile.id, "passphrase", request.credentials.passphrase)
+    const save = hostSaveQueue.then(async () => {
+      if (isRedactedHostProfile(request.profile)) await dependencies.hosts.saveRedacted(request.profile)
+      else await dependencies.hosts.save(request.profile)
+      if (request.credentials?.password) await dependencies.credentials.set(request.profile.id, "password", request.credentials.password)
+      if (request.credentials?.passphrase) await dependencies.credentials.set(request.profile.id, "passphrase", request.credentials.passphrase)
+    })
+    hostSaveQueue = save.then(() => undefined, () => undefined)
+    await save
   })
   ipcMain.handle(ipcChannels.hostsRemove, async (_event, id: unknown) => {
     assertId(id, "host")
@@ -597,25 +602,6 @@ function assertOwnedForwarding(dependencies: IpcDependencies, owner: RuntimeOwne
       ? "Port forwarding is owned by another renderer generation"
       : "Port forwarding is owned by another window")
   }
-}
-
-async function restoreRedactedIdentityFile(
-  dependencies: IpcDependencies,
-  profile: HostSaveProfile
-): Promise<HostProfile> {
-  if (!isRedactedHostProfile(profile)) return profile
-  const { hasIdentityFile: _hasIdentityFile, ...safeProfile } = profile
-  if (!profile.hasIdentityFile) return safeProfile
-
-  let storedHosts: HostProfile[]
-  try {
-    storedHosts = await dependencies.hosts.list()
-  } catch {
-    throw new Error("Host identity file is unavailable")
-  }
-  const storedProfile = storedHosts.find((candidate) => candidate.id === profile.id)
-  if (!storedProfile?.identityFile) throw new Error("Host identity file is unavailable")
-  return { ...safeProfile, identityFile: storedProfile.identityFile }
 }
 
 function isRedactedHostProfile(profile: HostSaveProfile): profile is BootstrapHostProfile {

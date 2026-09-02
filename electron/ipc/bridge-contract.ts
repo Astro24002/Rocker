@@ -17,7 +17,7 @@ export interface DiagnosticsExportResult {
 }
 
 export type BootstrapHostProfile = Omit<HostProfile, "identityFile"> & {
-  hasIdentityFile?: boolean
+  hasIdentityFile: boolean
 }
 
 export type HostSaveProfile = HostProfile | BootstrapHostProfile

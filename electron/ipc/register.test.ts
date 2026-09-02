@@ -32,6 +32,7 @@ vi.mock("electron", () => electron)
 import { ipcChannels } from "./bridge-contract"
 import { registerIpcHandlers, type IpcDependencies } from "./register"
 import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
+import { HostStore } from "../storage/host-store"
 import type { HostProfile } from "../storage/types"
 
 const sessionId = "11111111-1111-4111-8111-111111111111"
@@ -272,18 +273,6 @@ describe("registerIpcHandlers", () => {
 
   it("restores a redacted host identity file in Main before saving", async () => {
     const harness = createHarness()
-    const identityFile = "/private/user-data/.ssh/id_ed25519"
-    harness.hosts.list.mockResolvedValue([{
-      id: "host-a",
-      name: "Host A",
-      host: "127.0.0.1",
-      port: 22,
-      username: "rock",
-      authMethod: "privateKey",
-      identityFile,
-      favorite: false,
-      notes: ""
-    }])
     registerIpcHandlers(harness.dependencies)
 
     await invokeFrom(21, ipcChannels.hostsSave, {
@@ -300,11 +289,69 @@ describe("registerIpcHandlers", () => {
       }
     })
 
-    expect(harness.hosts.save).toHaveBeenCalledWith(expect.objectContaining({
+    expect(harness.hosts.saveRedacted).toHaveBeenCalledWith(expect.objectContaining({
       id: "host-a",
-      identityFile,
+      hasIdentityFile: true,
       favorite: true
     }))
+    expect(harness.hosts.save).not.toHaveBeenCalled()
+  })
+
+  it("serializes redacted host saves so a stale identity file cannot overwrite a newer save", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-ipc-hosts-"))
+    try {
+      const store = new HostStore(join(directory, "rocker.json"))
+      const oldIdentityFile = "/private/user-data/.ssh/old_key"
+      const newIdentityFile = "/private/user-data/.ssh/new_key"
+      await store.save({
+        id: "host-a",
+        name: "Host A",
+        host: "127.0.0.1",
+        port: 22,
+        username: "rock",
+        authMethod: "privateKey",
+        identityFile: oldIdentityFile,
+        favorite: false,
+        notes: ""
+      })
+      const harness = createHarness()
+      const dependencies = { ...harness.dependencies, hosts: store } as IpcDependencies
+      registerIpcHandlers(dependencies)
+
+      await Promise.all([
+        invokeFrom(21, ipcChannels.hostsSave, {
+          profile: {
+            id: "host-a",
+            name: "Host A",
+            host: "127.0.0.1",
+            port: 22,
+            username: "rock",
+            authMethod: "privateKey",
+            hasIdentityFile: true,
+            favorite: true,
+            notes: ""
+          }
+        }),
+        invokeFrom(21, ipcChannels.hostsSave, {
+          profile: {
+            id: "host-a",
+            name: "Host A",
+            host: "127.0.0.1",
+            port: 22,
+            username: "rock",
+            authMethod: "privateKey",
+            identityFile: newIdentityFile,
+            favorite: false,
+            notes: ""
+          }
+        })
+      ])
+
+      const stored = (await store.list()).find((profile) => profile.id === "host-a")
+      expect(stored).toMatchObject({ id: "host-a", identityFile: newIdentityFile, favorite: false })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   it("settles each bootstrap resource independently and bounds unexpected adapter errors", async () => {
@@ -432,7 +479,7 @@ function createHarness() {
   const credentials = { get: vi.fn(), set: vi.fn(), clear: vi.fn(), health: vi.fn() }
   const hostKeys = { health: vi.fn() }
   const diagnostics = { snapshot: vi.fn(() => [{ at: "2026-08-28T12:00:00.000Z", category: "session", action: "connected" }]) }
-  const hosts = { list: vi.fn(), save: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn(), loadWithStatus: vi.fn() }
+  const hosts = { list: vi.fn(), save: vi.fn(), saveRedacted: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn(), loadWithStatus: vi.fn() }
   const currentOwnerForWebContents = vi.fn((id: number) => id === owner21.webContentsId ? owner21 : id === owner22.webContentsId ? owner22 : undefined)
   const windowForWebContents = vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined)
   const sendToOwner = vi.fn((targetOwner: RuntimeOwner, channel: string, ...args: unknown[]): boolean => {
