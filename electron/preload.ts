@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import { ipcChannels, type RockerBridge } from "./ipc/bridge-contract"
+import { ipcChannels, type AppBootstrapSnapshot, type BootstrapResourceName, type RockerBridge } from "./ipc/bridge-contract"
 import type { TerminalSessionEvent } from "./ssh/types"
 import type { SessionLaunchRequest } from "./ipc/bridge-contract"
 
@@ -41,8 +41,8 @@ const bridge: RockerBridge = {
     save: (snapshot) => ipcRenderer.invoke(ipcChannels.workspaceSave, snapshot)
   },
   bootstrap: {
-    load: () => ipcRenderer.invoke(ipcChannels.bootstrapLoad),
-    retry: (resources) => ipcRenderer.invoke(ipcChannels.bootstrapRetry, resources)
+    load: (): Promise<AppBootstrapSnapshot> => ipcRenderer.invoke(ipcChannels.bootstrapLoad),
+    retry: (resources: BootstrapResourceName[]): Promise<Partial<AppBootstrapSnapshot>> => ipcRenderer.invoke(ipcChannels.bootstrapRetry, resources)
   },
   monitor: {
     sample: (sessionId) => ipcRenderer.invoke(ipcChannels.monitorSample, sessionId)

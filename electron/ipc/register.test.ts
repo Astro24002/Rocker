@@ -234,6 +234,79 @@ describe("registerIpcHandlers", () => {
     expect(harness.hostKeys.health).toHaveBeenCalledWith({ consumeHealth: true })
   })
 
+  it("redacts host identity file paths from the bootstrap snapshot", async () => {
+    const harness = createHarness()
+    const identityFile = "/private/user-data/.ssh/id_ed25519"
+    harness.hosts.loadWithStatus.mockResolvedValue({
+      status: "ok",
+      value: [{
+        id: "host-a",
+        name: "Host A",
+        host: "127.0.0.1",
+        port: 22,
+        username: "rock",
+        authMethod: "privateKey",
+        identityFile,
+        favorite: true,
+        notes: ""
+      }]
+    })
+    registerIpcHandlers(harness.dependencies)
+
+    const result = await invokeFrom(21, ipcChannels.bootstrapLoad) as {
+      hosts: { value?: Array<Record<string, unknown>> }
+    }
+
+    expect(result.hosts.value).toHaveLength(1)
+    expect(result.hosts.value?.[0]).toMatchObject({ id: "host-a", hasIdentityFile: true })
+    expect(result.hosts.value?.[0]).not.toHaveProperty("identityFile")
+    expect(JSON.stringify(result)).not.toContain(identityFile)
+
+    const retry = await invokeFrom(21, ipcChannels.bootstrapRetry, ["hosts"]) as {
+      hosts: { value?: Array<Record<string, unknown>> }
+    }
+    expect(retry.hosts.value?.[0]).toMatchObject({ id: "host-a", hasIdentityFile: true })
+    expect(retry.hosts.value?.[0]).not.toHaveProperty("identityFile")
+    expect(JSON.stringify(retry)).not.toContain(identityFile)
+  })
+
+  it("restores a redacted host identity file in Main before saving", async () => {
+    const harness = createHarness()
+    const identityFile = "/private/user-data/.ssh/id_ed25519"
+    harness.hosts.list.mockResolvedValue([{
+      id: "host-a",
+      name: "Host A",
+      host: "127.0.0.1",
+      port: 22,
+      username: "rock",
+      authMethod: "privateKey",
+      identityFile,
+      favorite: false,
+      notes: ""
+    }])
+    registerIpcHandlers(harness.dependencies)
+
+    await invokeFrom(21, ipcChannels.hostsSave, {
+      profile: {
+        id: "host-a",
+        name: "Host A",
+        host: "127.0.0.1",
+        port: 22,
+        username: "rock",
+        authMethod: "privateKey",
+        hasIdentityFile: true,
+        favorite: true,
+        notes: ""
+      }
+    })
+
+    expect(harness.hosts.save).toHaveBeenCalledWith(expect.objectContaining({
+      id: "host-a",
+      identityFile,
+      favorite: true
+    }))
+  })
+
   it("settles each bootstrap resource independently and bounds unexpected adapter errors", async () => {
     const harness = createHarness()
     harness.settings.loadWithStatus.mockResolvedValue({ status: "ok", value: { locale: "en" } })

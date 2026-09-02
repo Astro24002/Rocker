@@ -1,5 +1,5 @@
 import type { RockerBridge } from "../../electron/ipc/bridge-contract"
-import type { AppBootstrapSnapshot, BootstrapResourceName } from "../../electron/ipc/bridge-contract"
+import type { AppBootstrapSnapshot, BootstrapHostProfile, BootstrapResourceName } from "../../electron/ipc/bridge-contract"
 import type { StorageHealth, StorageKind } from "../../electron/storage/storage-result"
 import type { AppSettings, ForwardingInfo, HostProfile, StoredWorkspaceWindow } from "./types"
 
@@ -186,10 +186,15 @@ async function createPreviewBootstrapSnapshot(): Promise<AppBootstrapSnapshot> {
       ]
     },
     workspace: { health: previewHealth("workspace"), value: mockWorkspace },
-    hosts: { health: previewHealth("hosts"), value: [...mockHosts] },
+    hosts: { health: previewHealth("hosts"), value: mockHosts.map(toPreviewBootstrapHostProfile) },
     credentials: { health: previewHealth("credentials") },
     hostKeys: { health: previewHealth("hostKeys") }
   }
+}
+
+function toPreviewBootstrapHostProfile(profile: HostProfile): BootstrapHostProfile {
+  const { identityFile: _identityFile, ...safeProfile } = profile
+  return { ...safeProfile, hasIdentityFile: Boolean(profile.identityFile) }
 }
 
 function previewHealth(store: StorageKind): StorageHealth {

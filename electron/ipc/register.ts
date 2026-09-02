@@ -32,8 +32,10 @@ import type { WorkspaceWindowManager } from "../windows/workspace-window-manager
 import {
   type AppBootstrapSnapshot,
   type BootstrapResource,
+  type BootstrapHostProfile,
   type BootstrapResourceName,
   ipcChannels,
+  type HostSaveProfile,
   type HostSaveRequest,
   type SessionOpenRequest,
   type WorkspaceSaveRequest
@@ -76,7 +78,8 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   ipcMain.handle(ipcChannels.hostsList, () => dependencies.hosts.list())
   ipcMain.handle(ipcChannels.hostsSave, async (_event, request: HostSaveRequest) => {
     assertHostProfile(request?.profile)
-    await dependencies.hosts.save(request.profile)
+    const profile = await restoreRedactedIdentityFile(dependencies, request.profile)
+    await dependencies.hosts.save(profile)
     if (request.credentials?.password) await dependencies.credentials.set(request.profile.id, "password", request.credentials.password)
     if (request.credentials?.passphrase) await dependencies.credentials.set(request.profile.id, "passphrase", request.credentials.passphrase)
   })
@@ -386,7 +389,7 @@ async function loadBootstrapSnapshot(
     settings: settledResource(settled[0], "settings") as BootstrapResource<AppSettings>,
     history: settledResource(settled[1], "history") as BootstrapResource<import("../storage/types").ConnectionHistoryItem[]>,
     workspace: settledResource(settled[2], "workspace") as BootstrapResource<import("../storage/types").StoredWorkspaceWindow | undefined>,
-    hosts: settledResource(settled[3], "hosts") as BootstrapResource<HostProfile[]>,
+    hosts: settledResource(settled[3], "hosts") as BootstrapResource<BootstrapHostProfile[]>,
     credentials: settledResource(settled[4], "credentials") as BootstrapResource<never>,
     hostKeys: settledResource(settled[5], "hostKeys") as BootstrapResource<never>
   }
@@ -405,7 +408,11 @@ function loadBootstrapResource(
     case "workspace":
       return loadWorkspaceResource(dependencies, owner)
     case "hosts":
-      return loadValueResource("hosts", () => dependencies.hosts.loadWithStatus({ consumeHealth: true }))
+      return loadValueResource<HostProfile[], BootstrapHostProfile[]>(
+        "hosts",
+        () => dependencies.hosts.loadWithStatus({ consumeHealth: true }),
+        (profiles) => profiles.map(toBootstrapHostProfile)
+      )
     case "credentials":
       return loadHealthResource("credentials", () => dependencies.credentials.health({ consumeHealth: true }))
     case "hostKeys":
@@ -427,15 +434,21 @@ async function loadWorkspaceResource(
   }
 }
 
-async function loadValueResource<T>(
+async function loadValueResource<T, U = T>(
   store: StorageKind,
-  load: () => Promise<LoadResult<T>>
-): Promise<BootstrapResource<T>> {
+  load: () => Promise<LoadResult<T>>,
+  map: (value: T) => U = (value) => value as unknown as U
+): Promise<BootstrapResource<U>> {
   try {
-    return resourceFromLoadResult(store, await load())
+    return resourceFromLoadResult(store, await load(), map)
   } catch (error) {
     return blockedResource(store, error)
   }
+}
+
+function toBootstrapHostProfile(profile: HostProfile): BootstrapHostProfile {
+  const { identityFile: _identityFile, ...safeProfile } = profile
+  return { ...safeProfile, hasIdentityFile: Boolean(profile.identityFile) }
 }
 
 async function loadHealthResource(
@@ -458,11 +471,15 @@ function settledResource(
     : blockedResource(resourceStore(resource), settled.reason)
 }
 
-function resourceFromLoadResult<T>(store: StorageKind, result: LoadResult<T>): BootstrapResource<T> {
+function resourceFromLoadResult<T, U = T>(
+  store: StorageKind,
+  result: LoadResult<T>,
+  map: (value: T) => U = (value) => value as unknown as U
+): BootstrapResource<U> {
   if (result.status === "blocked") return blockedResource(store, result.issue)
-  if (result.status === "recovered") return { health: { store, status: "recovered", source: "backup" }, value: result.value }
-  if (result.status === "defaulted") return { health: { store, status: "defaulted", reason: result.reason }, value: result.value }
-  return { health: { store, status: "ok" }, value: result.value }
+  if (result.status === "recovered") return { health: { store, status: "recovered", source: "backup" }, value: map(result.value) }
+  if (result.status === "defaulted") return { health: { store, status: "defaulted", reason: result.reason }, value: map(result.value) }
+  return { health: { store, status: "ok" }, value: map(result.value) }
 }
 
 function blockedResource(store: StorageKind, error: unknown): BootstrapResource<never> {
@@ -582,7 +599,31 @@ function assertOwnedForwarding(dependencies: IpcDependencies, owner: RuntimeOwne
   }
 }
 
-function assertHostProfile(profile: HostProfile | undefined): asserts profile is HostProfile {
+async function restoreRedactedIdentityFile(
+  dependencies: IpcDependencies,
+  profile: HostSaveProfile
+): Promise<HostProfile> {
+  if (!isRedactedHostProfile(profile)) return profile
+  const { hasIdentityFile: _hasIdentityFile, ...safeProfile } = profile
+  if (!profile.hasIdentityFile) return safeProfile
+
+  let storedHosts: HostProfile[]
+  try {
+    storedHosts = await dependencies.hosts.list()
+  } catch {
+    throw new Error("Host identity file is unavailable")
+  }
+  const storedProfile = storedHosts.find((candidate) => candidate.id === profile.id)
+  if (!storedProfile?.identityFile) throw new Error("Host identity file is unavailable")
+  return { ...safeProfile, identityFile: storedProfile.identityFile }
+}
+
+function isRedactedHostProfile(profile: HostSaveProfile): profile is BootstrapHostProfile {
+  return typeof (profile as { hasIdentityFile?: unknown }).hasIdentityFile === "boolean"
+    && (profile as HostProfile).identityFile === undefined
+}
+
+function assertHostProfile(profile: HostSaveProfile | undefined): asserts profile is HostSaveProfile {
   if (!profile || !profile.id || !profile.name.trim() || !profile.host.trim() || !profile.username.trim()) {
     throw new Error("Host name, address, and username are required")
   }

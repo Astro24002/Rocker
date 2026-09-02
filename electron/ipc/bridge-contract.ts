@@ -16,8 +16,14 @@ export interface DiagnosticsExportResult {
   path?: string
 }
 
+export type BootstrapHostProfile = Omit<HostProfile, "identityFile"> & {
+  hasIdentityFile?: boolean
+}
+
+export type HostSaveProfile = HostProfile | BootstrapHostProfile
+
 export interface HostSaveRequest {
-  profile: HostProfile
+  profile: HostSaveProfile
   credentials?: {
     password?: string
     passphrase?: string
@@ -60,7 +66,7 @@ export interface AppBootstrapSnapshot {
   settings: BootstrapResource<AppSettings>
   history: BootstrapResource<ConnectionHistoryItem[]>
   workspace: BootstrapResource<StoredWorkspaceWindow | undefined>
-  hosts: BootstrapResource<HostProfile[]>
+  hosts: BootstrapResource<BootstrapHostProfile[]>
   credentials: BootstrapResource<never>
   hostKeys: BootstrapResource<never>
 }
