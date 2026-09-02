@@ -5,7 +5,7 @@ import { MonitorSummary } from "../monitoring/MonitorSummary"
 import { visibleSessionIds } from "./layout"
 import type { TerminalWorkspaceState } from "./session-state"
 import { TerminalView } from "./TerminalView"
-import type { TerminalController } from "./terminal-controller"
+import type { TerminalController, TerminalPreferences } from "./terminal-controller"
 
 interface TerminalWorkspaceProps {
   workspace: TerminalWorkspaceState
@@ -14,8 +14,7 @@ interface TerminalWorkspaceProps {
   monitor: MonitorState
   monitorHostName?: string
   onMonitorToggle(): void
-  fontFamily: string
-  fontSize: number
+  preferences: TerminalPreferences
   confirmMultilinePaste: boolean
   multilinePasteConfirmation?: string
   onInput(sessionId: string, channelGeneration: number, data: string): void
@@ -44,8 +43,7 @@ export function TerminalWorkspace(props: TerminalWorkspaceProps) {
             key={session.id}
             session={session}
             visible={props.workspaceVisible !== false && visibleIds.has(session.id)}
-            fontFamily={props.fontFamily}
-            fontSize={props.fontSize}
+            preferences={props.preferences}
             confirmMultilinePaste={props.confirmMultilinePaste}
             multilinePasteConfirmation={props.multilinePasteConfirmation}
             onInput={(data) => props.onInput(session.id, session.channelGeneration, data)}

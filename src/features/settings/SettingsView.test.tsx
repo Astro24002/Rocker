@@ -14,7 +14,11 @@ const settings: AppSettings = {
   reconnectMode: "limited",
   restorePreviousWorkspace: true,
   confirmMultilinePaste: true,
-  bindAddress: "127.0.0.1"
+  bindAddress: "127.0.0.1",
+  scrollback: 10000,
+  cursorStyle: "bar",
+  cursorBlink: true,
+  terminalBell: true
 }
 
 describe("SettingsView", () => {
@@ -54,6 +58,25 @@ describe("SettingsView", () => {
     expect(onUpdate).toHaveBeenCalledWith({ restorePreviousWorkspace: false })
     expect(onUpdate).toHaveBeenCalledWith({ confirmMultilinePaste: false })
     expect(screen.queryByText("Port recommendations")).not.toBeInTheDocument()
+  })
+
+  it("exposes bounded terminal appearance controls and emits typed updates", () => {
+    const onUpdate = vi.fn()
+    render(<I18nProvider><SettingsView locale="en" settings={settings} onLocaleChange={vi.fn()} onUpdate={onUpdate} onExportDiagnostics={vi.fn(async () => ({ canceled: true }))} /></I18nProvider>)
+
+    const scrollback = screen.getByRole("combobox", { name: "Scrollback lines" })
+    expect([...scrollback.querySelectorAll("option")].map((option) => option.value)).toEqual(["1000", "5000", "10000", "25000", "50000"])
+    expect([...screen.getByRole("combobox", { name: "Cursor style" }).querySelectorAll("option")].map((option) => option.value)).toEqual(["block", "underline", "bar"])
+
+    fireEvent.change(scrollback, { target: { value: "50000" } })
+    fireEvent.change(screen.getByRole("combobox", { name: "Cursor style" }), { target: { value: "underline" } })
+    fireEvent.click(screen.getByRole("checkbox", { name: "Cursor blink" }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "Terminal bell" }))
+
+    expect(onUpdate).toHaveBeenNthCalledWith(1, { scrollback: 50000 })
+    expect(onUpdate).toHaveBeenNthCalledWith(2, { cursorStyle: "underline" })
+    expect(onUpdate).toHaveBeenNthCalledWith(3, { cursorBlink: false })
+    expect(onUpdate).toHaveBeenNthCalledWith(4, { terminalBell: false })
   })
 
   it("exports diagnostics through the bridge and disables the command while pending", async () => {

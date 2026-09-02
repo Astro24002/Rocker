@@ -1139,6 +1139,14 @@
   width: 80px;
 }
 
+.settings-persistence-status {
+  margin: 0;
+  padding: 10px 30px;
+  border-bottom: 1px solid var(--line);
+  color: var(--warning);
+  font-size: 12px;
+}
+
 .settings-action-group {
   display: flex;
   max-width: min(100%, 460px);

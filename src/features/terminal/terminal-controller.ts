@@ -1,11 +1,23 @@
 import type { TerminalDimensions, TerminalOutputPacket } from "../../../electron/ssh/types"
 
+export type TerminalScrollback = 1000 | 5000 | 10000 | 25000 | 50000
+export type TerminalCursorStyle = "block" | "underline" | "bar"
+
+export interface TerminalPreferences {
+  fontFamily: string
+  fontSize: number
+  scrollback: TerminalScrollback
+  cursorStyle: TerminalCursorStyle
+  cursorBlink: boolean
+  terminalBell: boolean
+}
+
 export interface TerminalWriteAdapter {
   write(bytes: Uint8Array, done: () => void): void
   focus(): void
   dispose(): void
   setDisableStdin(disabled: boolean): void
-  setFont(fontFamily: string, fontSize: number): void
+  setPreferences(preferences: TerminalPreferences): void
 }
 
 export interface TerminalFitAdapter {
@@ -32,6 +44,7 @@ export class TerminalController {
   private writing = false
   private readonly queue: QueuedWrite[] = []
   private lastDimensions?: TerminalDimensions
+  private lastPreferences?: TerminalPreferences
 
   public constructor(
     private readonly sessionId: string,
@@ -88,9 +101,11 @@ export class TerminalController {
     if (!this.disposed && this.connected && data.length > 0) this.callbacks.onInput(data)
   }
 
-  public applyPreferences(fontFamily: string, fontSize: number): void {
+  public applyPreferences(preferences: TerminalPreferences): void {
     if (this.disposed) return
-    this.terminal.setFont(fontFamily, fontSize)
+    if (samePreferences(this.lastPreferences, preferences)) return
+    this.lastPreferences = { ...preferences }
+    this.terminal.setPreferences(preferences)
   }
 
   public fit(): TerminalDimensions | undefined {
@@ -140,4 +155,13 @@ function isValidDimensions(value: TerminalDimensions | undefined): value is Term
 
 function sameDimensions(left: TerminalDimensions | undefined, right: TerminalDimensions): boolean {
   return left?.cols === right.cols && left.rows === right.rows
+}
+
+function samePreferences(left: TerminalPreferences | undefined, right: TerminalPreferences): boolean {
+  return left?.fontFamily === right.fontFamily &&
+    left.fontSize === right.fontSize &&
+    left.scrollback === right.scrollback &&
+    left.cursorStyle === right.cursorStyle &&
+    left.cursorBlink === right.cursorBlink &&
+    left.terminalBell === right.terminalBell
 }

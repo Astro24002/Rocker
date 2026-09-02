@@ -7,6 +7,10 @@ export const defaultSettings: AppSettings = {
   sidebarWidth: 220,
   terminalFont: "JetBrains Mono",
   terminalFontSize: 13,
+  scrollback: 10000,
+  cursorStyle: "bar",
+  cursorBlink: true,
+  terminalBell: true,
   connectionTimeout: 15,
   autoReconnect: true,
   reconnectMode: "limited",
@@ -51,6 +55,10 @@ export function normalizeSettings(value: unknown): AppSettings | undefined {
     sidebarWidth: clamp(settings.sidebarWidth ?? defaultSettings.sidebarWidth, 180, 360, 220),
     terminalFont: typeof settings.terminalFont === "string" && settings.terminalFont.length <= 80 ? settings.terminalFont : defaultSettings.terminalFont,
     terminalFontSize: clamp(settings.terminalFontSize ?? defaultSettings.terminalFontSize, 10, 24, 13),
+    scrollback: isScrollback(settings.scrollback) ? settings.scrollback : defaultSettings.scrollback,
+    cursorStyle: isCursorStyle(settings.cursorStyle) ? settings.cursorStyle : defaultSettings.cursorStyle,
+    cursorBlink: settings.cursorBlink === false ? false : true,
+    terminalBell: settings.terminalBell === false ? false : true,
     connectionTimeout: clamp(settings.connectionTimeout ?? defaultSettings.connectionTimeout, 5, 120, 15),
     autoReconnect: settings.autoReconnect !== false,
     reconnectMode: settings.reconnectMode === "continuous" ? "continuous" : "limited",
@@ -80,4 +88,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function clamp(value: number, min: number, max: number, fallback: number): number {
   return Number.isFinite(value) ? Math.max(min, Math.min(max, Math.round(value))) : fallback
+}
+
+function isScrollback(value: unknown): value is AppSettings["scrollback"] {
+  return value === 1000 || value === 5000 || value === 10000 || value === 25000 || value === 50000
+}
+
+function isCursorStyle(value: unknown): value is AppSettings["cursorStyle"] {
+  return value === "block" || value === "underline" || value === "bar"
 }

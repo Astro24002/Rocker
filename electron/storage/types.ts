@@ -64,6 +64,10 @@ export interface AppSettings {
   sidebarWidth: number
   terminalFont: string
   terminalFontSize: number
+  scrollback: 1000 | 5000 | 10000 | 25000 | 50000
+  cursorStyle: "block" | "underline" | "bar"
+  cursorBlink: boolean
+  terminalBell: boolean
   connectionTimeout: number
   autoReconnect: boolean
   reconnectMode: "limited" | "continuous"

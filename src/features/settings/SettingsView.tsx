@@ -7,6 +7,8 @@ import { useI18n } from "../../i18n"
 interface SettingsViewProps {
   locale: Locale
   disabled?: boolean
+  terminalAppearanceDisabled?: boolean
+  persistenceUnavailable?: boolean
   onLocaleChange(locale: Locale): void
   settings: AppSettings
   onUpdate(update: Partial<AppSettings>): void
@@ -19,7 +21,7 @@ type ExportStatus =
   | { kind: "cancelled" }
   | { kind: "error" }
 
-export function SettingsView({ locale, disabled = false, onLocaleChange, settings, onUpdate, onExportDiagnostics }: SettingsViewProps) {
+export function SettingsView({ locale, disabled = false, terminalAppearanceDisabled = disabled, persistenceUnavailable = false, onLocaleChange, settings, onUpdate, onExportDiagnostics }: SettingsViewProps) {
   const { t } = useI18n()
   const [exporting, setExporting] = useState(false)
   const [exportStatus, setExportStatus] = useState<ExportStatus>({ kind: "idle" })
@@ -41,12 +43,17 @@ export function SettingsView({ locale, disabled = false, onLocaleChange, setting
   return (
     <section className="settings-view">
       <header className="view-header"><div><span className="view-eyebrow">Rocker</span><h1>{t("settings.title")}</h1><p>{t("settings.subtitle")}</p></div></header>
+      {persistenceUnavailable && <p className="settings-persistence-status" role="status">{t("settings.persistenceUnavailable")}</p>}
       <div className="settings-list">
         <SettingRow title={t("settings.language")} description={t("settings.languageHint")}>
           <div className="segmented-control" aria-label={t("settings.language")}><button disabled={disabled} data-active={locale === "en"} type="button" onClick={() => { if (!disabled) onLocaleChange("en") }}>{t("settings.english")}</button><button disabled={disabled} data-active={locale === "zh-CN"} type="button" onClick={() => { if (!disabled) onLocaleChange("zh-CN") }}>{t("settings.chinese")}</button></div>
         </SettingRow>
-        <SettingRow title={t("settings.terminalFont")} description={t("settings.terminalFontHint")}><select disabled={disabled} aria-label={t("settings.terminalFont")} value={settings.terminalFont} onChange={(event) => { if (!disabled) onUpdate({ terminalFont: event.target.value }) }}><option>JetBrains Mono</option><option>SFMono-Regular</option><option>Consolas</option></select></SettingRow>
-        <SettingRow title={t("settings.fontSize")} description={t("settings.fontSizeHint")}><input disabled={disabled} aria-label={t("settings.fontSize")} className="number-setting" type="number" min={10} max={24} value={settings.terminalFontSize} onChange={(event) => { if (!disabled) onUpdate({ terminalFontSize: Number(event.target.value) }) }} /></SettingRow>
+        <SettingRow title={t("settings.terminalFont")} description={t("settings.terminalFontHint")}><select disabled={terminalAppearanceDisabled} aria-label={t("settings.terminalFont")} value={settings.terminalFont} onChange={(event) => { if (!terminalAppearanceDisabled) onUpdate({ terminalFont: event.target.value }) }}><option>JetBrains Mono</option><option>SFMono-Regular</option><option>Consolas</option></select></SettingRow>
+        <SettingRow title={t("settings.fontSize")} description={t("settings.fontSizeHint")}><input disabled={terminalAppearanceDisabled} aria-label={t("settings.fontSize")} className="number-setting" type="number" min={10} max={24} value={settings.terminalFontSize} onChange={(event) => { if (!terminalAppearanceDisabled) onUpdate({ terminalFontSize: Number(event.target.value) }) }} /></SettingRow>
+        <SettingRow title={t("settings.scrollback")} description={t("settings.scrollbackHint")}><select disabled={terminalAppearanceDisabled} aria-label={t("settings.scrollback")} value={settings.scrollback} onChange={(event) => { if (!terminalAppearanceDisabled) onUpdate({ scrollback: Number(event.target.value) as AppSettings["scrollback"] }) }}><option value="1000">1,000</option><option value="5000">5,000</option><option value="10000">10,000</option><option value="25000">25,000</option><option value="50000">50,000</option></select></SettingRow>
+        <SettingRow title={t("settings.cursorStyle")} description={t("settings.cursorStyleHint")}><select disabled={terminalAppearanceDisabled} aria-label={t("settings.cursorStyle")} value={settings.cursorStyle} onChange={(event) => { if (!terminalAppearanceDisabled) onUpdate({ cursorStyle: event.target.value as AppSettings["cursorStyle"] }) }}><option value="block">{t("settings.cursorBlock")}</option><option value="underline">{t("settings.cursorUnderline")}</option><option value="bar">{t("settings.cursorBar")}</option></select></SettingRow>
+        <SettingRow title={t("settings.cursorBlink")} description={t("settings.cursorBlinkHint")}><input disabled={terminalAppearanceDisabled} aria-label={t("settings.cursorBlink")} className="toggle-input" type="checkbox" checked={settings.cursorBlink} onChange={(event) => { if (!terminalAppearanceDisabled) onUpdate({ cursorBlink: event.target.checked }) }} /></SettingRow>
+        <SettingRow title={t("settings.terminalBell")} description={t("settings.terminalBellHint")}><input disabled={terminalAppearanceDisabled} aria-label={t("settings.terminalBell")} className="toggle-input" type="checkbox" checked={settings.terminalBell} onChange={(event) => { if (!terminalAppearanceDisabled) onUpdate({ terminalBell: event.target.checked }) }} /></SettingRow>
         <SettingRow title={t("settings.connectionTimeout")} description={t("settings.connectionTimeoutHint")}><select disabled={disabled} aria-label={t("settings.connectionTimeout")} value={settings.connectionTimeout} onChange={(event) => { if (!disabled) onUpdate({ connectionTimeout: Number(event.target.value) }) }}><option value="10">10 seconds</option><option value="15">15 seconds</option><option value="30">30 seconds</option></select></SettingRow>
         <SettingRow title={t("settings.autoReconnect")} description={t("settings.autoReconnectHint")}><input disabled={disabled} aria-label={t("settings.autoReconnect")} className="toggle-input" type="checkbox" checked={settings.autoReconnect} onChange={(event) => { if (!disabled) onUpdate({ autoReconnect: event.target.checked }) }} /></SettingRow>
         <SettingRow title={t("settings.reconnectMode")} description={t("settings.reconnectModeHint")}><select disabled={disabled} aria-label={t("settings.reconnectMode")} value={settings.reconnectMode} onChange={(event) => { if (!disabled) onUpdate({ reconnectMode: event.target.value as AppSettings["reconnectMode"] }) }}><option value="limited">{t("settings.reconnectLimited")}</option><option value="continuous">{t("settings.reconnectContinuous")}</option></select></SettingRow>

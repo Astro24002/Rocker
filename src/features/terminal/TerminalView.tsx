@@ -3,13 +3,15 @@ import { Terminal } from "@xterm/xterm"
 import { useCallback, useEffect, useRef, type ClipboardEvent as ReactClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import type { TerminalDimensions } from "../../../electron/ssh/types"
 import type { WorkspaceSession } from "./session-state"
-import { TerminalController } from "./terminal-controller"
+import { TerminalController, type TerminalPreferences } from "./terminal-controller"
+
+type TerminalOptionsWithBell = ConstructorParameters<typeof Terminal>[0] & { bellStyle?: "sound" | "none" }
+type TerminalRuntimeOptions = TerminalOptionsWithBell & { bellStyle: "sound" | "none" }
 
 export interface TerminalViewProps {
   session: WorkspaceSession
   visible: boolean
-  fontFamily: string
-  fontSize: number
+  preferences: TerminalPreferences
   confirmMultilinePaste: boolean
   multilinePasteConfirmation?: string
   onInput(data: string): void
@@ -50,13 +52,14 @@ export function TerminalView(props: TerminalViewProps) {
     if (!container) return
 
     const terminal = new Terminal({
-      cursorBlink: true,
-      cursorStyle: "bar",
+      cursorBlink: propsRef.current.preferences.cursorBlink,
+      cursorStyle: propsRef.current.preferences.cursorStyle,
       disableStdin: propsRef.current.session.state !== "connected",
-      fontFamily: propsRef.current.fontFamily,
-      fontSize: propsRef.current.fontSize,
+      fontFamily: propsRef.current.preferences.fontFamily,
+      fontSize: propsRef.current.preferences.fontSize,
       lineHeight: 1.25,
-      scrollback: 10_000,
+      scrollback: propsRef.current.preferences.scrollback,
+      bellStyle: propsRef.current.preferences.terminalBell ? "sound" : "none",
       theme: {
         background: "#11131b",
         foreground: "#d8ddcf",
@@ -71,7 +74,8 @@ export function TerminalView(props: TerminalViewProps) {
         cyan: "#51c8c1",
         white: "#d9dce4"
       }
-    })
+    } as TerminalOptionsWithBell)
+    const terminalOptions = terminal.options as TerminalRuntimeOptions
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(container)
@@ -83,9 +87,13 @@ export function TerminalView(props: TerminalViewProps) {
         focus: () => terminal.focus(),
         dispose: () => terminal.dispose(),
         setDisableStdin: (disabled) => { terminal.options.disableStdin = disabled },
-        setFont: (fontFamily, fontSize) => {
-          terminal.options.fontFamily = fontFamily
-          terminal.options.fontSize = fontSize
+        setPreferences: (preferences) => {
+          terminalOptions.fontFamily = preferences.fontFamily
+          terminalOptions.fontSize = preferences.fontSize
+          terminalOptions.scrollback = preferences.scrollback
+          terminalOptions.cursorStyle = preferences.cursorStyle
+          terminalOptions.cursorBlink = preferences.cursorBlink
+          terminalOptions.bellStyle = preferences.terminalBell ? "sound" : "none"
         }
       },
       {
@@ -150,9 +158,9 @@ export function TerminalView(props: TerminalViewProps) {
   }, [props.session.channelGeneration, props.session.state])
 
   useEffect(() => {
-    controllerRef.current?.applyPreferences(props.fontFamily, props.fontSize)
+    controllerRef.current?.applyPreferences(props.preferences)
     scheduleFit()
-  }, [props.fontFamily, props.fontSize, scheduleFit])
+  }, [props.preferences, scheduleFit])
 
   useEffect(() => {
     if (props.visible) scheduleFit()

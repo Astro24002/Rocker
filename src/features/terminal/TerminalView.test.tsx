@@ -3,6 +3,7 @@ import type { ComponentProps } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { WorkspaceSession } from "./session-state"
 import { TerminalView } from "./TerminalView"
+import type { TerminalPreferences } from "./terminal-controller"
 
 const xterm = vi.hoisted(() => {
   const terminals: FakeTerminal[] = []
@@ -141,15 +142,26 @@ describe("TerminalView", () => {
     await waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith("macOS selection"))
   })
 
-  it("keeps one xterm instance while applying live font preferences", async () => {
+  it("keeps one xterm instance while applying live appearance preferences", async () => {
     const { rerender } = render(<TerminalView {...createProps()} />)
     const terminal = xterm.terminals[0]
 
-    rerender(<TerminalView {...createProps({ fontFamily: "Cascadia Mono", fontSize: 15 })} />)
+    rerender(<TerminalView {...createProps({ preferences: {
+      fontFamily: "Cascadia Mono",
+      fontSize: 15,
+      scrollback: 25000,
+      cursorStyle: "underline",
+      cursorBlink: false,
+      terminalBell: false
+    } })} />)
 
     expect(xterm.terminals).toHaveLength(1)
     expect(terminal.options.fontFamily).toBe("Cascadia Mono")
     expect(terminal.options.fontSize).toBe(15)
+    expect(terminal.options.scrollback).toBe(25000)
+    expect(terminal.options.cursorStyle).toBe("underline")
+    expect(terminal.options.cursorBlink).toBe(false)
+    expect(terminal.options.bellStyle).toBe("none")
     await waitFor(() => expect(fit.addons[0].fit).toHaveBeenCalled())
   })
 
@@ -173,8 +185,14 @@ function createProps(overrides: Partial<ComponentProps<typeof TerminalView>> = {
   return {
     session,
     visible: true,
-    fontFamily: "JetBrains Mono",
-    fontSize: 13,
+    preferences: {
+      fontFamily: "JetBrains Mono",
+      fontSize: 13,
+      scrollback: 10000,
+      cursorStyle: "bar",
+      cursorBlink: true,
+      terminalBell: true
+    } satisfies TerminalPreferences,
     confirmMultilinePaste: true,
     onInput: vi.fn(),
     onResize: vi.fn(),

@@ -14,8 +14,10 @@ const terminalHarness = vi.hoisted(() => ({
     acceptOutput: vi.fn(),
     writeLocalNotice: vi.fn(),
     setChannelGeneration: vi.fn(),
-    setConnected: vi.fn()
+    setConnected: vi.fn(),
+    applyPreferences: vi.fn()
   },
+  controllers: new Map<string, { applyPreferences: ReturnType<typeof vi.fn> }>(),
   registeredSessions: new Set<string>(),
   latestWorkspace: undefined as unknown
 }))
@@ -34,7 +36,7 @@ vi.mock("../features/terminal/TerminalWorkspace", async () => {
         for (const session of props.workspace.sessions) {
           if (terminalHarness.registeredSessions.has(session.id)) continue
           terminalHarness.registeredSessions.add(session.id)
-          props.onController(session.id, terminalHarness.controller)
+          props.onController(session.id, (terminalHarness.controllers.get(session.id) ?? terminalHarness.controller) as typeof terminalHarness.controller)
           props.onResize(session.id, session.channelGeneration, session.dimensions ?? { cols: 120, rows: 40 })
         }
       }, [props.workspace, props.onController, props.onResize])
@@ -52,6 +54,8 @@ beforeEach(() => {
   terminalHarness.controller.writeLocalNotice.mockReset()
   terminalHarness.controller.setChannelGeneration.mockReset()
   terminalHarness.controller.setConnected.mockReset()
+  terminalHarness.controller.applyPreferences.mockReset()
+  terminalHarness.controllers.clear()
   terminalHarness.registeredSessions.clear()
   terminalHarness.latestWorkspace = undefined
   sessionListener = undefined
@@ -288,6 +292,53 @@ describe("desktop workspace shell", () => {
       vi.useRealTimers()
     }
   })
+
+  it("applies one debounced appearance update to every live terminal controller", async () => {
+    vi.useFakeTimers()
+    try {
+      const firstController = { applyPreferences: vi.fn() }
+      const secondController = { applyPreferences: vi.fn() }
+      terminalHarness.controllers.set("22222222-2222-4222-8222-222222222222", firstController)
+      terminalHarness.controllers.set("33333333-3333-4333-8333-333333333333", secondController)
+      bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshotWithTwoSessions(host.id)))
+      render(<App />)
+
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+      fireEvent.change(screen.getByRole("combobox", { name: "Scrollback lines" }), { target: { value: "50000" } })
+
+      expect(firstController.applyPreferences).toHaveBeenCalledWith(expect.objectContaining({ scrollback: 50000 }))
+      expect(secondController.applyPreferences).toHaveBeenCalledWith(expect.objectContaining({ scrollback: 50000 }))
+      expect(bridge.settings.update).not.toHaveBeenCalled()
+
+      await act(async () => { vi.advanceTimersByTime(299) })
+      expect(bridge.settings.update).not.toHaveBeenCalled()
+      await act(async () => { vi.advanceTimersByTime(1) })
+      expect(bridge.settings.update).toHaveBeenCalledTimes(1)
+      expect(bridge.settings.update).toHaveBeenCalledWith({ scrollback: 50000 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("keeps terminal appearance changes temporary when Settings persistence is blocked", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id), {
+      settings: { health: blockedHealth("settings"), value: undefined }
+    }))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    expect(screen.getByRole("status")).toHaveTextContent("settings storage is unavailable")
+    fireEvent.change(screen.getByRole("combobox", { name: "Scrollback lines" }), { target: { value: "50000" } })
+
+    expect(terminalHarness.controller.applyPreferences).toHaveBeenCalledWith(expect.objectContaining({ scrollback: 50000 }))
+    expect(bridge.settings.update).not.toHaveBeenCalled()
+  })
 })
 
 function workspace(): TerminalWorkspaceState {
@@ -311,6 +362,18 @@ function workspaceSnapshot(hostId: string) {
     maximized: false,
     activeSessionId: "22222222-2222-4222-8222-222222222222",
     sessions: [{ sessionId: "22222222-2222-4222-8222-222222222222", hostId, label: "G11", cols: 120, rows: 40 }]
+  }
+}
+
+function workspaceSnapshotWithTwoSessions(hostId: string) {
+  return {
+    workspaceId: "11111111-1111-4111-8111-111111111111",
+    maximized: false,
+    activeSessionId: "22222222-2222-4222-8222-222222222222",
+    sessions: [
+      { sessionId: "22222222-2222-4222-8222-222222222222", hostId, label: "G11", cols: 120, rows: 40 },
+      { sessionId: "33333333-3333-4333-8333-333333333333", hostId, label: "G11 copy", cols: 120, rows: 40 }
+    ]
   }
 }
 
@@ -354,8 +417,8 @@ function createBridge() {
     monitor: { sample: vi.fn(async (sessionId: string) => ({ sessionId, latencyMs: 1, cpuPercent: null, memoryPercent: null, diskPercent: null, loadAverage: null, receiveBytesPerSecond: null, transmitBytesPerSecond: null, sampledAt: "2026-08-19T12:00:00.000Z" })) },
     history: { list: vi.fn(async () => []), clear: vi.fn(async () => undefined) },
     settings: {
-      get: vi.fn(async () => ({ locale: "en" as const, sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited" as const, restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1" as const })),
-      update: vi.fn(async (update: object) => ({ locale: "en" as const, sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited" as const, restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1" as const, ...update }))
+      get: vi.fn(async () => ({ locale: "en" as const, sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, scrollback: 10000 as const, cursorStyle: "bar" as const, cursorBlink: true, terminalBell: true, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited" as const, restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1" as const })),
+      update: vi.fn(async (update: object) => ({ locale: "en" as const, sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, scrollback: 10000 as const, cursorStyle: "bar" as const, cursorBlink: true, terminalBell: true, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited" as const, restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1" as const, ...update }))
     },
     diagnostics: { export: vi.fn(async () => ({ canceled: true })) },
     events: {
@@ -372,6 +435,7 @@ function bootstrapSnapshot(hosts: HostProfile[], workspace: StoredWorkspaceWindo
   return {
     settings: { health: okHealth("settings"), value: {
       locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13,
+      scrollback: 10000, cursorStyle: "bar", cursorBlink: true, terminalBell: true,
       connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited", restorePreviousWorkspace: true,
       confirmMultilinePaste: true, bindAddress: "127.0.0.1"
     } },

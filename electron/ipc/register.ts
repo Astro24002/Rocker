@@ -369,6 +369,10 @@ function normalizeSettingsUpdate(value: unknown): Partial<AppSettings> {
   if (typeof value.sidebarWidth === "number") update.sidebarWidth = value.sidebarWidth
   if (typeof value.terminalFont === "string") update.terminalFont = value.terminalFont
   if (typeof value.terminalFontSize === "number") update.terminalFontSize = value.terminalFontSize
+  if (isScrollback(value.scrollback)) update.scrollback = value.scrollback
+  if (isCursorStyle(value.cursorStyle)) update.cursorStyle = value.cursorStyle
+  if (typeof value.cursorBlink === "boolean") update.cursorBlink = value.cursorBlink
+  if (typeof value.terminalBell === "boolean") update.terminalBell = value.terminalBell
   if (typeof value.connectionTimeout === "number") update.connectionTimeout = value.connectionTimeout
   if (typeof value.autoReconnect === "boolean") update.autoReconnect = value.autoReconnect
   if (value.reconnectMode === "limited" || value.reconnectMode === "continuous") update.reconnectMode = value.reconnectMode
@@ -376,6 +380,14 @@ function normalizeSettingsUpdate(value: unknown): Partial<AppSettings> {
   if (typeof value.confirmMultilinePaste === "boolean") update.confirmMultilinePaste = value.confirmMultilinePaste
   if (value.bindAddress === "127.0.0.1" || value.bindAddress === "::1" || value.bindAddress === "0.0.0.0") update.bindAddress = value.bindAddress
   return update
+}
+
+function isScrollback(value: unknown): value is AppSettings["scrollback"] {
+  return value === 1000 || value === 5000 || value === 10000 || value === 25000 || value === 50000
+}
+
+function isCursorStyle(value: unknown): value is AppSettings["cursorStyle"] {
+  return value === "block" || value === "underline" || value === "bar"
 }
 
 async function loadBootstrapSnapshot(

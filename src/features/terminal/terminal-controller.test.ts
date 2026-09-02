@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { TerminalController, type TerminalWriteAdapter } from "./terminal-controller"
+import { TerminalController, type TerminalPreferences, type TerminalWriteAdapter } from "./terminal-controller"
 
 const sessionId = "11111111-1111-4111-8111-111111111111"
 
@@ -65,17 +65,26 @@ describe("TerminalController", () => {
     expect(callbacks.onAck).not.toHaveBeenCalled()
   })
 
-  it("gates input by connection state and applies terminal preferences without disposal", () => {
+  it("gates input by connection state and applies all terminal preferences without disposal", () => {
     const { controller, terminal, callbacks } = createHarness()
     controller.setConnected(false)
     controller.sendInput("blocked")
     controller.setConnected(true)
     controller.sendInput("accepted")
-    controller.applyPreferences("Cascadia Mono", 15)
+    const preferences: TerminalPreferences = {
+      fontFamily: "Cascadia Mono",
+      fontSize: 15,
+      scrollback: 25000,
+      cursorStyle: "underline",
+      cursorBlink: false,
+      terminalBell: false
+    }
+    controller.applyPreferences(preferences)
 
     expect(terminal.setDisableStdin).toHaveBeenLastCalledWith(false)
     expect(callbacks.onInput).toHaveBeenCalledWith("accepted")
-    expect(terminal.setFont).toHaveBeenCalledWith("Cascadia Mono", 15)
+    expect(terminal.setPreferences).toHaveBeenCalledWith(preferences)
+    expect(callbacks.onResize).not.toHaveBeenCalled()
     expect(terminal.dispose).not.toHaveBeenCalled()
   })
 })
@@ -105,7 +114,7 @@ class FakeTerminal implements TerminalWriteAdapter {
   public readonly focus = vi.fn()
   public readonly dispose = vi.fn()
   public readonly setDisableStdin = vi.fn()
-  public readonly setFont = vi.fn()
+  public readonly setPreferences = vi.fn()
 
   public write(bytes: Uint8Array, done: () => void): void {
     this.writes.push(bytes)

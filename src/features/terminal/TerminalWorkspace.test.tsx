@@ -29,8 +29,7 @@ describe("TerminalWorkspace layout", () => {
       monitor={monitor}
       monitorHostName="G11"
       onMonitorToggle={vi.fn()}
-      fontFamily="JetBrains Mono"
-      fontSize={13}
+      preferences={preferences}
       confirmMultilinePaste
       onInput={vi.fn()}
       onResize={vi.fn()}
@@ -56,8 +55,7 @@ describe("TerminalWorkspace layout", () => {
       workspace={workspace}
       monitor={createMonitorState()}
       onMonitorToggle={vi.fn()}
-      fontFamily="JetBrains Mono"
-      fontSize={13}
+      preferences={preferences}
       confirmMultilinePaste
       onInput={vi.fn()}
       onResize={vi.fn()}
@@ -80,4 +78,13 @@ const workspace: TerminalWorkspaceState = {
     { id: "b", hostId: "host-b", label: "Build", state: "disconnected", channelGeneration: 2 },
     { id: "c", hostId: "host-c", label: "Logs", state: "idle", channelGeneration: 0 }
   ]
+}
+
+const preferences = {
+  fontFamily: "JetBrains Mono",
+  fontSize: 13,
+  scrollback: 10000 as const,
+  cursorStyle: "bar" as const,
+  cursorBlink: true,
+  terminalBell: true
 }

@@ -23,7 +23,7 @@ import {
   type WorkspaceSession
 } from "../features/terminal/session-state"
 import { TerminalWorkspace } from "../features/terminal/TerminalWorkspace"
-import { type TerminalController } from "../features/terminal/terminal-controller"
+import { type TerminalController, type TerminalPreferences } from "../features/terminal/terminal-controller"
 import { I18nProvider, useI18n } from "../i18n"
 import { bootstrapReducer, createBootstrapState, deriveBootstrapCapabilities, retryableBootstrapResources } from "./bootstrap-state"
 import { getRockerBridge } from "./bridge"
@@ -60,6 +60,10 @@ const defaultSettings: AppSettings = {
   sidebarWidth: 220,
   terminalFont: "JetBrains Mono",
   terminalFontSize: 13,
+  scrollback: 10000,
+  cursorStyle: "bar",
+  cursorBlink: true,
+  terminalBell: true,
   connectionTimeout: 15,
   autoReconnect: true,
   reconnectMode: "limited",
@@ -85,12 +89,16 @@ function Workspace() {
   const [bootstrapState, dispatchBootstrap] = useReducer(bootstrapReducer, undefined, createBootstrapState)
   const [monitor, setMonitor] = useState(createMonitorState)
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
+  const [settingsPersistenceFailed, setSettingsPersistenceFailed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const stored = Number(localStorage.getItem("rocker.sidebarWidth") ?? defaultSettings.sidebarWidth)
     return clampSidebarWidth(Number.isFinite(stored) ? stored : defaultSettings.sidebarWidth)
   })
 
   const controllers = useRef(new Map<string, TerminalController>())
+  const settingsRef = useRef(settings)
+  const pendingAppearanceUpdate = useRef<Partial<AppSettings>>({})
+  const settingsPersistTimer = useRef<number | undefined>(undefined)
   const connectionIds = useRef(new Map<string, string>())
   const pendingOpens = useRef(new Map<string, PendingTerminalOpen>())
   const openingSessionIds = useRef(new Set<string>())
@@ -101,6 +109,15 @@ function Workspace() {
   const retryGeneration = useRef(0)
   const capabilities = useMemo(() => deriveBootstrapCapabilities(bootstrapState), [bootstrapState])
   const settingsMutationsAvailable = capabilities.settingsWritable
+  settingsRef.current = settings
+  const terminalPreferences = useMemo<TerminalPreferences>(() => terminalPreferencesForSettings(settings), [
+    settings.terminalFont,
+    settings.terminalFontSize,
+    settings.scrollback,
+    settings.cursorStyle,
+    settings.cursorBlink,
+    settings.terminalBell
+  ])
 
   useEffect(() => {
     bootstrapMounted.current = true
@@ -108,6 +125,7 @@ function Workspace() {
     return () => {
       bootstrapMounted.current = false
       retryGeneration.current += 1
+      if (settingsPersistTimer.current !== undefined) window.clearTimeout(settingsPersistTimer.current)
     }
   }, [])
 
@@ -190,8 +208,12 @@ function Workspace() {
   }, [bridge])
 
   const handleTerminalController = useCallback((sessionId: string, controller: TerminalController | undefined): void => {
-    if (controller) controllers.current.set(sessionId, controller)
-    else controllers.current.delete(sessionId)
+    if (controller) {
+      controllers.current.set(sessionId, controller)
+      controller.applyPreferences(terminalPreferencesForSettings(settingsRef.current))
+    } else {
+      controllers.current.delete(sessionId)
+    }
   }, [])
 
   const handleSessionEvent = useCallback((event: TerminalSessionEvent): void => {
@@ -322,7 +344,9 @@ function Workspace() {
       const mergedCapabilities = deriveBootstrapCapabilities(mergedResources)
       let nextSettings = settings
       if (result.settings) {
-        nextSettings = result.settings.health.status === "blocked" ? defaultSettings : result.settings.value ?? defaultSettings
+        const settingsBlocked = result.settings.health.status === "blocked"
+        nextSettings = settingsBlocked ? defaultSettings : result.settings.value ?? defaultSettings
+        setSettingsPersistenceFailed(settingsBlocked)
         setSettings(nextSettings)
         setLocale(nextSettings.locale)
         setSidebarWidth(clampSidebarWidth(nextSettings.sidebarWidth))
@@ -434,9 +458,38 @@ function Workspace() {
   }
 
   const updateSettings = (update: Partial<AppSettings>): void => {
+    const appearanceUpdate = pickTerminalAppearanceUpdate(update)
+    const nonAppearanceUpdate = omitTerminalAppearanceUpdate(update)
+    if (!settingsMutationsAvailable && Object.keys(appearanceUpdate).length === 0) return
+
+    const acceptedUpdate = settingsMutationsAvailable ? update : appearanceUpdate
+    const nextSettings = { ...settingsRef.current, ...acceptedUpdate }
+    settingsRef.current = nextSettings
+    setSettings(nextSettings)
+    if (Object.keys(appearanceUpdate).length > 0) {
+      const preferences = terminalPreferencesForSettings(nextSettings)
+      for (const controller of controllers.current.values()) controller.applyPreferences(preferences)
+    }
+
     if (!settingsMutationsAvailable) return
-    setSettings((current) => ({ ...current, ...update }))
-    void bridge.settings.update(update).then(setSettings).catch(() => undefined)
+    if (Object.keys(nonAppearanceUpdate).length > 0) {
+      void bridge.settings.update(nonAppearanceUpdate)
+        .then((persisted) => { setSettings((current) => ({ ...current, ...persisted })); setSettingsPersistenceFailed(false) })
+        .catch(() => setSettingsPersistenceFailed(true))
+    }
+    if (Object.keys(appearanceUpdate).length === 0) return
+
+    pendingAppearanceUpdate.current = { ...pendingAppearanceUpdate.current, ...appearanceUpdate }
+    if (settingsPersistTimer.current !== undefined) window.clearTimeout(settingsPersistTimer.current)
+    settingsPersistTimer.current = window.setTimeout(() => {
+      settingsPersistTimer.current = undefined
+      const pending = pendingAppearanceUpdate.current
+      pendingAppearanceUpdate.current = {}
+      if (Object.keys(pending).length === 0) return
+      void bridge.settings.update(pending)
+        .then((persisted) => { setSettings((current) => ({ ...current, ...persisted })); setSettingsPersistenceFailed(false) })
+        .catch(() => setSettingsPersistenceFailed(true))
+    }, 300)
   }
 
   const connectHost = (host: HostProfile): void => {
@@ -551,8 +604,7 @@ function Workspace() {
                 monitor={monitor}
                 monitorHostName={activeHost?.name}
                 onMonitorToggle={() => setMonitor((current) => toggleMonitor(current))}
-                fontFamily={settings.terminalFont}
-                fontSize={settings.terminalFontSize}
+                preferences={terminalPreferences}
                 confirmMultilinePaste={settings.confirmMultilinePaste}
                 multilinePasteConfirmation={t("terminal.multilinePasteConfirmation")}
                 onInput={handleTerminalInput}
@@ -563,7 +615,7 @@ function Workspace() {
             </div>
           )}
           {activeNav === "settings" ? (
-            <SettingsView locale={locale} settings={settings} disabled={!settingsMutationsAvailable} onLocaleChange={(next) => {
+            <SettingsView locale={locale} settings={settings} disabled={!settingsMutationsAvailable} terminalAppearanceDisabled={false} persistenceUnavailable={!settingsMutationsAvailable || settingsPersistenceFailed} onLocaleChange={(next) => {
               if (!settingsMutationsAvailable) return
               setLocale(next)
               updateSettings({ locale: next })
@@ -674,6 +726,39 @@ function sameDimensions(left: TerminalDimensions | undefined, right: TerminalDim
 
 function validDimensions(cols: number, rows: number): boolean {
   return Number.isInteger(cols) && cols >= 1 && cols <= 1_000 && Number.isInteger(rows) && rows >= 1 && rows <= 1_000
+}
+
+function terminalPreferencesForSettings(settings: AppSettings): TerminalPreferences {
+  return {
+    fontFamily: settings.terminalFont,
+    fontSize: settings.terminalFontSize,
+    scrollback: settings.scrollback,
+    cursorStyle: settings.cursorStyle,
+    cursorBlink: settings.cursorBlink,
+    terminalBell: settings.terminalBell
+  }
+}
+
+function pickTerminalAppearanceUpdate(update: Partial<AppSettings>): Partial<AppSettings> {
+  const appearance: Partial<AppSettings> = {}
+  if (update.terminalFont !== undefined) appearance.terminalFont = update.terminalFont
+  if (update.terminalFontSize !== undefined) appearance.terminalFontSize = update.terminalFontSize
+  if (update.scrollback !== undefined) appearance.scrollback = update.scrollback
+  if (update.cursorStyle !== undefined) appearance.cursorStyle = update.cursorStyle
+  if (update.cursorBlink !== undefined) appearance.cursorBlink = update.cursorBlink
+  if (update.terminalBell !== undefined) appearance.terminalBell = update.terminalBell
+  return appearance
+}
+
+function omitTerminalAppearanceUpdate(update: Partial<AppSettings>): Partial<AppSettings> {
+  const nonAppearance = { ...update }
+  delete nonAppearance.terminalFont
+  delete nonAppearance.terminalFontSize
+  delete nonAppearance.scrollback
+  delete nonAppearance.cursorStyle
+  delete nonAppearance.cursorBlink
+  delete nonAppearance.terminalBell
+  return nonAppearance
 }
 
 export function failureReasonFor(error: unknown): TerminalFailureReason {

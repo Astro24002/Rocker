@@ -1,6 +1,6 @@
 import { TerminalOutputPump } from "../../electron/ssh/terminal-output-pump"
 import type { TerminalOutputPacket } from "../../electron/ssh/types"
-import { TerminalController, type TerminalWriteAdapter } from "../../src/features/terminal/terminal-controller"
+import { TerminalController, type TerminalPreferences, type TerminalWriteAdapter } from "../../src/features/terminal/terminal-controller"
 
 class FakeChannel {
   public paused = false
@@ -42,7 +42,7 @@ class ManualTerminal implements TerminalWriteAdapter {
 
   public setDisableStdin(_disabled: boolean): void {}
 
-  public setFont(_fontFamily: string, _fontSize: number): void {}
+  public setPreferences(_preferences: TerminalPreferences): void {}
 }
 
 export function createTerminalEngineHarness(sessionId: string) {

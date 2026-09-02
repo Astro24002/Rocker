@@ -80,6 +80,7 @@ function snapshot(overrides: Partial<AppBootstrapSnapshot> = {}): AppBootstrapSn
   return {
     settings: { health: { store: "settings", status: "ok" }, value: {
       locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13,
+      scrollback: 10000, cursorStyle: "bar", cursorBlink: true, terminalBell: true,
       connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited", restorePreviousWorkspace: true,
       confirmMultilinePaste: true, bindAddress: "127.0.0.1"
     } },
