@@ -65,7 +65,8 @@ jobs:
           - os: windows-latest
             command: npm run dist:win
             artifacts: |
-              release/Rocker-v*.exe
+              release/Rocker-v*-x64.exe
+              release/Rocker-v*-arm64.exe
           - os: macos-14
             command: npm run dist:mac
             artifacts: |

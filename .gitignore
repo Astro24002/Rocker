@@ -3,4 +3,5 @@
 /node_modules/
 /out/
 /release/
+/.rocker-win-release/
 *.log
