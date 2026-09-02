@@ -7,9 +7,10 @@ export interface TerminalSearchOverlayProps {
   controller?: TerminalSearchController
   open: boolean
   onClose(): void
+  onRestoreFocus(): void
 }
 
-export function TerminalSearchOverlay({ controller, open, onClose }: TerminalSearchOverlayProps) {
+export function TerminalSearchOverlay({ controller, open, onClose, onRestoreFocus }: TerminalSearchOverlayProps) {
   const { t } = useI18n()
   const queryRef = useRef<HTMLInputElement>(null)
   const [state, setState] = useState<TerminalSearchState | undefined>(() => controller?.getState())
@@ -33,17 +34,17 @@ export function TerminalSearchOverlay({ controller, open, onClose }: TerminalSea
   const controllerState = controller.getState()
   const visibleState = state?.sessionId === controllerState.sessionId ? state : controllerState
   const hasQuery = visibleState.query.length > 0
-  const hasResult = visibleState.resultIndex !== undefined && visibleState.resultIndex >= 0 && (visibleState.resultCount ?? 0) > 0
-  const hasNoResults = hasQuery && visibleState.resultCount === 0
+  const hasResult = visibleState.resultStatus === "matches" && visibleState.resultIndex !== undefined && visibleState.resultIndex >= 0 && (visibleState.resultCount ?? 0) > 0
 
   const updateOptions = (update: Partial<TerminalSearchOptions>): void => {
     controller.setOptions({ ...controller.getState().options, ...update })
   }
 
-  const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (event.key === "Escape") {
       event.preventDefault()
       onClose()
+      onRestoreFocus()
       return
     }
     if (event.key !== "Enter") return
@@ -53,21 +54,32 @@ export function TerminalSearchOverlay({ controller, open, onClose }: TerminalSea
   }
 
   return (
-    <section aria-label={t("terminal.search")} className="terminal-search-overlay" data-session-id={visibleState.sessionId} role="search">
+    <section aria-label={t("terminal.search")} className="terminal-search-overlay" data-result-status={visibleState.resultStatus} data-session-id={visibleState.sessionId} onKeyDownCapture={handleKeyDown} role="search" tabIndex={-1}>
       <div className="terminal-search-input-row">
         <input
           aria-label={t("terminal.searchInput")}
           autoComplete="off"
           onChange={(event) => controller.setQuery(event.target.value)}
-          onKeyDown={handleKeyDown}
           placeholder={t("terminal.searchInput")}
           ref={queryRef}
           role="searchbox"
           type="search"
           value={visibleState.query}
         />
-        <span aria-live="polite" className="terminal-search-result" data-testid="terminal-search-result">
-          {hasResult ? `${visibleState.resultIndex! + 1} / ${visibleState.resultCount}` : hasNoResults ? t("terminal.searchNoResults") : null}
+        <span aria-atomic="true" aria-live="polite" className="terminal-search-result" data-testid="terminal-search-result">
+          {visibleState.error === "invalid-pattern"
+            ? t("terminal.searchInvalidPattern")
+            : visibleState.error === "search-unavailable"
+              ? t("terminal.searchUnavailable")
+              : hasResult
+                ? `${visibleState.resultIndex! + 1} / ${visibleState.resultCount}`
+                : visibleState.resultStatus === "limit-reached"
+                  ? t("terminal.searchMoreThanLimit")
+                  : visibleState.resultStatus === "no-results" && hasQuery
+                    ? t("terminal.searchNoResults")
+                    : visibleState.resultStatus === "matches"
+                      ? t("terminal.searchMatchesFound")
+                      : null}
         </span>
         <button aria-label={t("terminal.searchClear")} className="terminal-search-icon-button" disabled={!hasQuery} onClick={() => controller.clear()} title={t("terminal.searchClear")} type="button">
           <X size={14} />

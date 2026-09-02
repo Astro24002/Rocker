@@ -891,8 +891,8 @@
 
 .terminal-search-overlay {
   position: absolute;
-  z-index: 6;
-  top: 12px;
+  z-index: 3;
+  top: 112px;
   right: 14px;
   width: min(460px, calc(100% - 28px));
   padding: 8px;
@@ -901,6 +901,18 @@
   background: rgba(21, 26, 32, 0.96);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(14px);
+}
+
+.terminal-workspace[data-monitor-expanded="true"] .terminal-search-overlay {
+  top: 190px;
+}
+
+@container (min-width: 1120px) {
+  .terminal-search-overlay,
+  .terminal-workspace[data-monitor-expanded="true"] .terminal-search-overlay {
+    top: 12px;
+    right: 644px;
+  }
 }
 
 .terminal-search-input-row {

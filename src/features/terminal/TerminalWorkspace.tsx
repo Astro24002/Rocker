@@ -32,7 +32,7 @@ export function TerminalWorkspace(props: TerminalWorkspaceProps) {
   const visibleCount = [...visibleIds].filter((id) => props.workspace.sessions.some((session) => session.id === id)).length
 
   return (
-    <section className="terminal-workspace">
+    <section className="terminal-workspace" data-monitor-expanded={props.monitor.expanded}>
       <MonitorSummary state={props.monitor} hostName={props.monitorHostName} onToggle={props.onMonitorToggle} />
       {props.overlay}
       <div

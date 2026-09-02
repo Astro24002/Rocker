@@ -155,6 +155,7 @@
 .terminal-workspace {
   position: relative;
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .terminal-stack {

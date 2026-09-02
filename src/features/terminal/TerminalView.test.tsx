@@ -11,6 +11,8 @@ const xterm = vi.hoisted(() => {
   class FakeTerminal {
     public readonly options: Record<string, unknown>
     public readonly loadAddon = vi.fn()
+    public readonly onWriteParsed = vi.fn(() => ({ dispose: vi.fn() }))
+    public readonly onResize = vi.fn(() => ({ dispose: vi.fn() }))
     public readonly open = vi.fn()
     public readonly focus = vi.fn()
     public readonly dispose = vi.fn()

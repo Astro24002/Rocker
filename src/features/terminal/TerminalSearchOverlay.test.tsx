@@ -8,7 +8,7 @@ describe("TerminalSearchOverlay", () => {
   it("focuses the query and updates the per-session query and option toggles", () => {
     const adapter = createAdapter()
     const controller = new TerminalSearchController("session-one", adapter)
-    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={vi.fn()} /></I18nProvider>)
+    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={vi.fn()} onRestoreFocus={vi.fn()} /></I18nProvider>)
 
     const input = screen.getByRole("searchbox", { name: "Search terminal output" })
     expect(input).toHaveFocus()
@@ -27,7 +27,7 @@ describe("TerminalSearchOverlay", () => {
   it("moves next and previous with Enter and Shift+Enter", () => {
     const adapter = createAdapter()
     const controller = new TerminalSearchController("session-one", adapter)
-    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={vi.fn()} /></I18nProvider>)
+    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={vi.fn()} onRestoreFocus={vi.fn()} /></I18nProvider>)
     const input = screen.getByRole("searchbox", { name: "Search terminal output" })
     fireEvent.change(input, { target: { value: "needle" } })
     adapter.findNext.mockClear()
@@ -44,7 +44,7 @@ describe("TerminalSearchOverlay", () => {
   it("shows result counts and an explicit no-results state", () => {
     const adapter = createAdapter({ resultIndex: 1, resultCount: 3 })
     const controller = new TerminalSearchController("session-one", adapter)
-    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={vi.fn()} /></I18nProvider>)
+    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={vi.fn()} onRestoreFocus={vi.fn()} /></I18nProvider>)
     const input = screen.getByRole("searchbox", { name: "Search terminal output" })
     fireEvent.change(input, { target: { value: "needle" } })
     expect(screen.getByText("2 / 3")).toBeInTheDocument()
@@ -55,11 +55,16 @@ describe("TerminalSearchOverlay", () => {
     controller.dispose()
   })
 
-  it("closes on Escape, returns control to the caller, and exposes accessible actions", () => {
+  it("closes on Escape from the query input, returns focus to the terminal, and exposes accessible actions", () => {
     const adapter = createAdapter()
     const controller = new TerminalSearchController("session-one", adapter)
     const onClose = vi.fn()
-    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={onClose} /></I18nProvider>)
+    const terminal = document.createElement("button")
+    terminal.type = "button"
+    terminal.textContent = "Terminal"
+    document.body.append(terminal)
+    const onRestoreFocus = vi.fn(() => terminal.focus())
+    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={onClose} onRestoreFocus={onRestoreFocus} /></I18nProvider>)
     const input = screen.getByRole("searchbox", { name: "Search terminal output" })
 
     expect(screen.getByRole("button", { name: "Previous match" })).toBeInTheDocument()
@@ -68,6 +73,65 @@ describe("TerminalSearchOverlay", () => {
     fireEvent.keyDown(input, { key: "Escape" })
 
     expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onRestoreFocus).toHaveBeenCalledTimes(1)
+    expect(terminal).toHaveFocus()
+    terminal.remove()
+    controller.dispose()
+  })
+
+  it.each([
+    ["checkbox", "Match case"],
+    ["button", "Next match"]
+  ])("closes on Escape from a descendant %s", (_controlType, controlName) => {
+    const adapter = createAdapter({ resultIndex: 0, resultCount: 1 })
+    const controller = new TerminalSearchController("session-one", adapter)
+    controller.setQuery("needle")
+    const onClose = vi.fn()
+    const terminal = document.createElement("button")
+    terminal.type = "button"
+    document.body.append(terminal)
+    const onRestoreFocus = vi.fn(() => terminal.focus())
+    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={onClose} onRestoreFocus={onRestoreFocus} /></I18nProvider>)
+
+    const control = controlName === "Match case"
+      ? screen.getByRole("checkbox", { name: controlName })
+      : screen.getByRole("button", { name: controlName })
+    fireEvent.keyDown(control, { key: "Escape" })
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onRestoreFocus).toHaveBeenCalledTimes(1)
+    expect(terminal).toHaveFocus()
+    terminal.remove()
+    controller.dispose()
+  })
+
+  it("shows a bounded invalid-pattern state and recovers after a valid regex", () => {
+    const adapter = createAdapter()
+    const controller = new TerminalSearchController("session-one", adapter)
+    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={vi.fn()} onRestoreFocus={vi.fn()} /></I18nProvider>)
+    const input = screen.getByRole("searchbox", { name: "Search terminal output" })
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use regular expression" }))
+    adapter.throwNext(new SyntaxError("raw exception details"))
+
+    fireEvent.change(input, { target: { value: "[" } })
+    expect(screen.getByText("Invalid regular expression")).toBeInTheDocument()
+    expect(screen.queryByText("raw exception details")).not.toBeInTheDocument()
+
+    adapter.setNextResult({ resultIndex: 0, resultCount: 1 })
+    fireEvent.change(input, { target: { value: "[a]" } })
+    expect(screen.queryByText("Invalid regular expression")).not.toBeInTheDocument()
+    expect(screen.getByText("1 / 1")).toBeInTheDocument()
+    controller.dispose()
+  })
+
+  it("shows an explicit capped-match state", () => {
+    const adapter = createAdapter({ resultIndex: -1, resultCount: 1000 })
+    const controller = new TerminalSearchController("session-one", adapter)
+    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={vi.fn()} onRestoreFocus={vi.fn()} /></I18nProvider>)
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search terminal output" }), { target: { value: "common" } })
+
+    expect(screen.getByText("More than 1,000 matches")).toBeInTheDocument()
     controller.dispose()
   })
 
@@ -75,10 +139,10 @@ describe("TerminalSearchOverlay", () => {
     const first = new TerminalSearchController("session-one", createAdapter())
     const second = new TerminalSearchController("session-two", createAdapter())
     first.setQuery("first session")
-    const { rerender } = render(<I18nProvider><TerminalSearchOverlay controller={first} open onClose={vi.fn()} /></I18nProvider>)
+    const { rerender } = render(<I18nProvider><TerminalSearchOverlay controller={first} open onClose={vi.fn()} onRestoreFocus={vi.fn()} /></I18nProvider>)
     expect(screen.getByRole("searchbox", { name: "Search terminal output" })).toHaveValue("first session")
 
-    rerender(<I18nProvider><TerminalSearchOverlay controller={second} open onClose={vi.fn()} /></I18nProvider>)
+    rerender(<I18nProvider><TerminalSearchOverlay controller={second} open onClose={vi.fn()} onRestoreFocus={vi.fn()} /></I18nProvider>)
     expect(screen.getByRole("searchbox", { name: "Search terminal output" })).toHaveValue("")
     first.dispose()
     second.dispose()
@@ -86,23 +150,32 @@ describe("TerminalSearchOverlay", () => {
 })
 
 function createAdapter(initialResult?: { resultIndex: number; resultCount: number }) {
-  const listeners = new Set<(event: { resultIndex: number; resultCount: number }) => void>()
+  const listeners = new Set<(event: { resultIndex: number; resultCount: number; requestToken: number }) => void>()
   let nextResult = initialResult
   let nextFound = true
-  const emit = (event: { resultIndex: number; resultCount: number }): void => {
-    for (const listener of listeners) listener(event)
+  let nextError: Error | undefined
+  let currentRequestToken = 0
+  const emit = (event: { resultIndex: number; resultCount: number }, requestToken = currentRequestToken): void => {
+    for (const listener of listeners) listener({ ...event, requestToken })
   }
   const adapter = {
-    findNext: vi.fn(() => {
+    findNext: vi.fn((_query: string, _options: unknown, requestToken: number) => {
+      currentRequestToken = requestToken
+      if (nextError) {
+        const error = nextError
+        nextError = undefined
+        throw error
+      }
       if (nextResult) emit(nextResult)
       return nextFound
     }),
-    findPrevious: vi.fn(() => {
+    findPrevious: vi.fn((_query: string, _options: unknown, requestToken: number) => {
+      currentRequestToken = requestToken
       if (nextResult) emit(nextResult)
       return nextFound
     }),
     clearDecorations: vi.fn(),
-    onDidChangeResults(listener: (event: { resultIndex: number; resultCount: number }) => void) {
+    onDidChangeResults(listener: (event: { resultIndex: number; resultCount: number; requestToken: number }) => void) {
       listeners.add(listener)
       return { dispose: vi.fn(() => listeners.delete(listener)) }
     },
@@ -111,6 +184,9 @@ function createAdapter(initialResult?: { resultIndex: number; resultCount: numbe
     setNextResult(result: { resultIndex: number; resultCount: number } | undefined, found = true): void {
       nextResult = result
       nextFound = found
+    },
+    throwNext(error: Error): void {
+      nextError = error
     }
   }
   return adapter
