@@ -165,7 +165,7 @@ export const zhCN = {
   "terminal.searchNoResults": "无结果",
   "terminal.searchInvalidPattern": "正则表达式无效",
   "terminal.searchUnavailable": "搜索不可用",
-  "terminal.searchMoreThanLimit": "匹配超过 1,000 项",
+  "terminal.searchMoreThanLimit": "至少 1,000 个匹配项",
   "terminal.searchMatchesFound": "找到匹配项",
   "terminal.noticeReconnected": "[Rocker] 已重新连接",
   "terminal.noticeRestored": "[Rocker] 已恢复新的 Shell"

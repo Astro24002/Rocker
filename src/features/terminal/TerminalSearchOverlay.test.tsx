@@ -172,7 +172,7 @@ describe("TerminalSearchOverlay", () => {
 
     fireEvent.change(screen.getByRole("searchbox", { name: "Search terminal output" }), { target: { value: "common" } })
 
-    expect(screen.getByText("More than 1,000 matches")).toBeInTheDocument()
+    expect(screen.getByText("1,000 or more matches")).toBeInTheDocument()
     controller.dispose()
   })
 

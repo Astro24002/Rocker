@@ -19,26 +19,48 @@ const searchAddonHarness = vi.hoisted(() => {
     private cachedSearchTerm: string | undefined
     private lastSearchOptions: SearchOptions | undefined
     private refreshTimer: ReturnType<typeof setTimeout> | undefined
+    private readonly refreshSubscriptions: Array<{ dispose(): void }> = []
+    private disposed = false
     public delayedRefreshResult: { resultIndex: number; resultCount: number } | undefined
+    public nextSearchResult: { resultIndex: number; resultCount: number } | undefined
     public readonly findNext = vi.fn((query: string, options: SearchOptions) => {
       this.cachedSearchTerm = query
       this.lastSearchOptions = options
+      if (this.nextSearchResult) {
+        this.emit(this.nextSearchResult)
+        this.nextSearchResult = undefined
+      }
       return true
     })
     public readonly findPrevious = vi.fn((query: string, options: SearchOptions) => {
       this.cachedSearchTerm = query
       this.lastSearchOptions = options
+      if (this.nextSearchResult) {
+        this.emit(this.nextSearchResult)
+        this.nextSearchResult = undefined
+      }
       return true
     })
-    public readonly clearDecorations = vi.fn()
+    public readonly clearDecorations = vi.fn(() => {
+      this.cachedSearchTerm = undefined
+    })
     public readonly dispose = vi.fn(() => {
-      if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer)
+      if (this.disposed) return
+      this.disposed = true
+      if (this.refreshTimer !== undefined) {
+        clearTimeout(this.refreshTimer)
+        this.refreshTimer = undefined
+      }
+      for (const subscription of this.refreshSubscriptions) subscription.dispose()
+      this.refreshSubscriptions.length = 0
     })
     public readonly listeners = new Set<ResultListener>()
 
     public activate(terminal: RefreshSource): void {
-      terminal.onWriteParsed(() => this.scheduleRefresh())
-      terminal.onResize(() => this.scheduleRefresh())
+      this.refreshSubscriptions.push(
+        terminal.onWriteParsed(() => this.scheduleRefresh()),
+        terminal.onResize(() => this.scheduleRefresh())
+      )
     }
 
     public onDidChangeResults(listener: ResultListener) {
@@ -51,7 +73,7 @@ const searchAddonHarness = vi.hoisted(() => {
     }
 
     private scheduleRefresh(): void {
-      if (!this.cachedSearchTerm || !this.lastSearchOptions?.decorations) return
+      if (this.disposed || !this.cachedSearchTerm || !this.lastSearchOptions?.decorations) return
       if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer)
       this.refreshTimer = setTimeout(() => {
         const query = this.cachedSearchTerm
@@ -59,8 +81,8 @@ const searchAddonHarness = vi.hoisted(() => {
         this.cachedSearchTerm = undefined
         this.lastSearchOptions = undefined
         this.refreshTimer = undefined
-        if (!query || !options) return
-        this.findPrevious(query, { ...options, incremental: true })
+        if (!options) return
+        this.findPrevious(query as string, { ...options, incremental: true })
         if (this.delayedRefreshResult) this.emit(this.delayedRefreshResult)
       }, 200)
     }
@@ -232,27 +254,86 @@ describe("terminal search", () => {
   })
 
   it.each([
-    ["clear", (controller: TerminalSearchController) => controller.clear()],
-    ["query replacement", (controller: TerminalSearchController) => controller.setQuery("new query")],
-    ["options replacement", (controller: TerminalSearchController) => controller.setOptions({ caseSensitive: true })]
-  ] as const)("invalidates a pending refresh after %s", (_description, invalidate) => {
-    const terminal = createTerminalSurface()
+    ["clear", (controller: TerminalSearchController) => controller.clear(), { query: "" }],
+    ["query replacement", (controller: TerminalSearchController) => controller.setQuery("new query"), { query: "new query" }],
+    ["options replacement", (controller: TerminalSearchController) => controller.setOptions({ caseSensitive: true }), { query: "old query", options: { caseSensitive: true } }]
+  ] as const)("invalidates a delayed refresh after %s", (_description, invalidate, expectedState) => {
+    vi.useFakeTimers()
+    const terminal = createFaithfulTerminalSurface()
     const adapter = createTerminalSearchAdapter(terminal)
-    const listener = vi.fn()
-    const subscription = adapter.onDidChangeResults(listener)
+    const addon = searchAddonHarness.addons[searchAddonHarness.addons.length - 1]
+    addon.delayedRefreshResult = { resultIndex: 0, resultCount: 1 }
     const controller = new TerminalSearchController("session-one", adapter)
+    const stateChanges = vi.fn()
+    const subscription = controller.onStateChange(stateChanges)
 
     try {
       controller.setQuery("old query")
       terminal.emitWriteParsed()
       invalidate(controller)
-      searchAddonHarness.addons[searchAddonHarness.addons.length - 1].emit({ resultIndex: 0, resultCount: 1 })
+      stateChanges.mockClear()
+      vi.advanceTimersByTime(201)
 
-      expect(listener).not.toHaveBeenCalled()
+      expect(addon.findPrevious).toHaveBeenCalledTimes(1)
+      expect(controller.getState()).toMatchObject(expectedState)
+      expect(stateChanges).not.toHaveBeenCalled()
+    } finally {
+      subscription.dispose()
+      controller.dispose()
+      vi.useRealTimers()
+    }
+  })
+
+  it("rejects a stale delayed refresh after a newer search generation while keeping the newer result", () => {
+    vi.useFakeTimers()
+    const terminal = createFaithfulTerminalSurface()
+    const adapter = createTerminalSearchAdapter(terminal)
+    const addon = searchAddonHarness.addons[searchAddonHarness.addons.length - 1]
+    addon.delayedRefreshResult = { resultIndex: 4, resultCount: 5 }
+    const controller = new TerminalSearchController("session-one", adapter)
+
+    try {
+      controller.setQuery("old query")
+      terminal.emitWriteParsed()
+      addon.nextSearchResult = { resultIndex: 0, resultCount: 1 }
+      controller.setQuery("new query")
+      const stateAfterNewSearch = controller.getState()
+
+      vi.advanceTimersByTime(201)
+
+      expect(addon.findPrevious).toHaveBeenCalledTimes(1)
+      expect(stateAfterNewSearch).toMatchObject({ query: "new query", resultIndex: 0, resultCount: 1 })
+      expect(controller.getState()).toEqual(stateAfterNewSearch)
     } finally {
       controller.dispose()
+      vi.useRealTimers()
+    }
+  })
+
+  it("does not deliver a pending refresh after controller disposal", () => {
+    vi.useFakeTimers()
+    const terminal = createFaithfulTerminalSurface()
+    const adapter = createTerminalSearchAdapter(terminal)
+    const addon = searchAddonHarness.addons[searchAddonHarness.addons.length - 1]
+    addon.delayedRefreshResult = { resultIndex: 0, resultCount: 1 }
+    const controller = new TerminalSearchController("session-one", adapter)
+    const stateChanges = vi.fn()
+    const subscription = controller.onStateChange(stateChanges)
+
+    try {
+      controller.setQuery("needle")
+      terminal.emitResize()
+      stateChanges.mockClear()
+      controller.dispose()
+      vi.advanceTimersByTime(201)
+
+      expect(addon.findPrevious).not.toHaveBeenCalled()
+      expect(stateChanges).not.toHaveBeenCalled()
+    } finally {
       subscription.dispose()
+      controller.dispose()
       adapter.dispose()
+      vi.useRealTimers()
     }
   })
 

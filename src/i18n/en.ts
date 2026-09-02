@@ -163,7 +163,7 @@ export const en = {
   "terminal.searchNoResults": "No results",
   "terminal.searchInvalidPattern": "Invalid regular expression",
   "terminal.searchUnavailable": "Search unavailable",
-  "terminal.searchMoreThanLimit": "More than 1,000 matches",
+  "terminal.searchMoreThanLimit": "1,000 or more matches",
   "terminal.searchMatchesFound": "Matches found",
   "terminal.noticeReconnected": "[Rocker] Reconnected",
   "terminal.noticeRestored": "[Rocker] Restored a new shell"
