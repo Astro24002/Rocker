@@ -36,7 +36,9 @@ describe("connection history", () => {
 
     await Promise.all(items.map((item) => store.add(item)))
 
-    expect((await store.list()).map((item) => item.id)).toHaveLength(items.length)
+    const persistedIds = (await store.list()).map((item) => item.id)
+    expect(persistedIds).toHaveLength(items.length)
+    expect(new Set(persistedIds)).toEqual(new Set(items.map((item) => item.id)))
   })
 
   it("stores newest records first and clears them", async () => {

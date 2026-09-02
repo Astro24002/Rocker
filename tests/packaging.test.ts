@@ -8,15 +8,15 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
 }
 
 describe("desktop packaging metadata", () => {
-  it("prepares the 0.3.2 release version in package and lock metadata", () => {
+  it("prepares the 0.3.3 release version in package and lock metadata", () => {
     const lockfile = JSON.parse(readFileSync("package-lock.json", "utf8")) as {
       version: string
       packages: { "": { version: string } }
     }
 
-    expect(packageJson.version).toBe("0.3.2")
-    expect(lockfile.version).toBe("0.3.2")
-    expect(lockfile.packages[""].version).toBe("0.3.2")
+    expect(packageJson.version).toBe("0.3.3")
+    expect(lockfile.version).toBe("0.3.3")
+    expect(lockfile.packages[""].version).toBe("0.3.3")
   })
 
   it("targets only Rocker for Windows and macOS", () => {

@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises"
+import { chmod, readFile, readdir, writeFile } from "node:fs/promises"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -7,7 +7,8 @@ import { CredentialVault, type CredentialCipher } from "../electron/storage/cred
 import { JsonCredentialValueStore } from "../electron/storage/credential-store"
 import { HostStore } from "../electron/storage/host-store"
 import { StorageBlockedError } from "../electron/storage/storage-result"
-import type { HostProfile } from "../electron/storage/types"
+import { WorkspaceSnapshotStore } from "../electron/storage/workspace-store"
+import type { HostProfile, StoredWorkspaceWindow } from "../electron/storage/types"
 
 const temporaryPaths: string[] = []
 
@@ -76,6 +77,66 @@ describe("local host storage", () => {
     expect(serialized).not.toContain("BEGIN OPENSSH PRIVATE KEY")
     expect(serialized).not.toContain("hunter2")
   })
+
+  it("blocks corrupt protected host storage when no valid backup exists", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-storage-"))
+    temporaryPaths.push(directory)
+    const filePath = join(directory, "rocker.json")
+    await writeFile(filePath, "{not valid json", "utf8")
+
+    const result = await new HostStore(filePath).loadWithStatus()
+
+    expect(result).toMatchObject({ status: "blocked", issue: { store: "hosts", reason: "corrupt" } })
+    expect(await readdir(directory)).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^rocker\..+\.corrupt$/)
+    ]))
+    await expect(readFile(filePath, "utf8")).rejects.toMatchObject({ code: "ENOENT" })
+  })
+})
+
+describe("workspace recovery", () => {
+  it("recovers a corrupt workspace primary from its backup", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-storage-"))
+    temporaryPaths.push(directory)
+    const filePath = join(directory, "workspace.json")
+    const window = workspaceWindow()
+    await writeFile(filePath, "{not valid json", "utf8")
+    await writeFile(`${filePath}.bak`, JSON.stringify({ version: 1, windows: [window] }), "utf8")
+
+    const result = await new WorkspaceSnapshotStore(filePath).loadWithStatus()
+
+    expect(result).toEqual({ status: "recovered", value: { version: 1, windows: [window] }, source: "backup" })
+    expect(JSON.parse(await readFile(filePath, "utf8"))).toEqual({ version: 1, windows: [window] })
+  })
+
+  it("defaults a corrupt workspace without a backup and quarantines the primary", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-storage-"))
+    temporaryPaths.push(directory)
+    const filePath = join(directory, "workspace.json")
+    await writeFile(filePath, "{not valid json", "utf8")
+
+    const result = await new WorkspaceSnapshotStore(filePath).loadWithStatus()
+
+    expect(result).toEqual({ status: "defaulted", value: { version: 1, windows: [] }, reason: "corrupt" })
+    expect(await readdir(directory)).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^workspace\..+\.corrupt$/)
+    ]))
+  })
+
+  it("reports a permission-blocked workspace without replacing the file", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-storage-"))
+    temporaryPaths.push(directory)
+    const filePath = join(directory, "workspace.json")
+    await writeFile(filePath, JSON.stringify({ version: 1, windows: [] }), "utf8")
+    await chmod(directory, 0o000)
+
+    try {
+      const result = await new WorkspaceSnapshotStore(filePath).loadWithStatus()
+      expect(result).toMatchObject({ status: "blocked", issue: { store: "workspace", reason: "permission" } })
+    } finally {
+      await chmod(directory, 0o700)
+    }
+  })
 })
 
 describe("credential vault", () => {
@@ -110,3 +171,11 @@ describe("credential vault", () => {
     expect(await vault.get("host-1", "password")).toBeUndefined()
   })
 })
+
+function workspaceWindow(): StoredWorkspaceWindow {
+  return {
+    workspaceId: "11111111-1111-4111-8111-111111111111",
+    maximized: false,
+    sessions: []
+  }
+}
