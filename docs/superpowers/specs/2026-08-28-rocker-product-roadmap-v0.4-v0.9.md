@@ -1,7 +1,7 @@
 # Rocker Product Roadmap: v0.4.0 to v0.9.0
 
-Date: 2026-08-28
-Status: Proposed
+Date: 2026-08-28 (updated 2026-09-02)
+Status: Maintained product evolution baseline
 Scope: Windows and macOS desktop application
 
 ## Version Policy
@@ -52,7 +52,7 @@ underlying SSH protocol or introducing a large visual redesign.
 - Command Palette for terminal actions and navigation.
 - Explicit Clear, Copy, Paste, Select All, and Focus actions.
 - Configurable scrollback limit and cursor behavior.
-- Keyboard shortcut settings with conflict validation.
+- Minimal platform shortcut policy with Linux shell pass-through.
 - Session rename and recent-session ordering.
 - Improved connection overlay copy and retry/close affordances.
 - Terminal context menu for common actions.
@@ -62,7 +62,8 @@ underlying SSH protocol or introducing a large visual redesign.
 - Keep xterm.js as the buffer owner.
 - Add a terminal command registry consumed by Command Palette and context
   menu actions.
-- Keep keyboard settings renderer-owned and persist them through `SettingsStore`.
+- Keep the two platform shortcut entry points renderer-owned; do not persist
+  arbitrary shortcut bindings.
 - Do not send terminal output through React state.
 
 ### Acceptance
@@ -76,6 +77,26 @@ underlying SSH protocol or introducing a large visual redesign.
 
 - tmux integration, terminal recording, AI command generation, and shell
   process restoration.
+
+### v0.4 Design Decision Log
+
+The approved detailed design is [v0.4 Terminal Productivity Design](./2026-09-02-rocker-v0.4-terminal-productivity-design.md).
+
+- Command Palette is a centered terminal-first command surface with essential
+  application navigation.
+- Terminal Search is an xterm.js-backed floating overlay with per-Session
+  state and no React output accumulation.
+- Only `Ctrl/Cmd+Shift+F` and `Ctrl/Cmd+Shift+P` are global shortcuts. Common
+  Linux shell combinations remain untouched.
+- Session recency appears in Command Palette; Sidebar order and split layout
+  remain stable, and recency is not persisted.
+- Terminal appearance changes apply to all Sessions in the current window with
+  debounced SettingsStore persistence.
+- Local Terminal remains a placeholder in v0.4; no `node-pty` is introduced.
+
+Implementation planning starts only after the detailed design receives final
+product-owner review. This roadmap remains the source of truth for the order
+and boundaries of v0.4 through v0.9.
 
 ## v0.5.0: Hosts and Security Center
 
