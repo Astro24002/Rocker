@@ -6,15 +6,40 @@ import {
   type TerminalSearchOptions
 } from "./terminal-search"
 
+type RefreshSource = {
+  onWriteParsed(listener: (event: void) => void): { dispose(): void }
+  onResize(listener: (event: { cols: number; rows: number }) => void): { dispose(): void }
+}
+
 const searchAddonHarness = vi.hoisted(() => {
   type ResultListener = (event: { resultIndex: number; resultCount: number }) => void
+  type SearchOptions = { decorations?: unknown; [key: string]: unknown }
 
   class FakeSearchAddon {
-    public readonly findNext = vi.fn(() => true)
-    public readonly findPrevious = vi.fn(() => true)
+    private cachedSearchTerm: string | undefined
+    private lastSearchOptions: SearchOptions | undefined
+    private refreshTimer: ReturnType<typeof setTimeout> | undefined
+    public delayedRefreshResult: { resultIndex: number; resultCount: number } | undefined
+    public readonly findNext = vi.fn((query: string, options: SearchOptions) => {
+      this.cachedSearchTerm = query
+      this.lastSearchOptions = options
+      return true
+    })
+    public readonly findPrevious = vi.fn((query: string, options: SearchOptions) => {
+      this.cachedSearchTerm = query
+      this.lastSearchOptions = options
+      return true
+    })
     public readonly clearDecorations = vi.fn()
-    public readonly dispose = vi.fn()
+    public readonly dispose = vi.fn(() => {
+      if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer)
+    })
     public readonly listeners = new Set<ResultListener>()
+
+    public activate(terminal: RefreshSource): void {
+      terminal.onWriteParsed(() => this.scheduleRefresh())
+      terminal.onResize(() => this.scheduleRefresh())
+    }
 
     public onDidChangeResults(listener: ResultListener) {
       this.listeners.add(listener)
@@ -23,6 +48,21 @@ const searchAddonHarness = vi.hoisted(() => {
 
     public emit(event: { resultIndex: number; resultCount: number }): void {
       for (const listener of this.listeners) listener(event)
+    }
+
+    private scheduleRefresh(): void {
+      if (!this.cachedSearchTerm || !this.lastSearchOptions?.decorations) return
+      if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer)
+      this.refreshTimer = setTimeout(() => {
+        const query = this.cachedSearchTerm
+        const options = this.lastSearchOptions
+        this.cachedSearchTerm = undefined
+        this.lastSearchOptions = undefined
+        this.refreshTimer = undefined
+        if (!query || !options) return
+        this.findPrevious(query, { ...options, incremental: true })
+        if (this.delayedRefreshResult) this.emit(this.delayedRefreshResult)
+      }, 200)
     }
   }
 
@@ -160,6 +200,62 @@ describe("terminal search", () => {
     controller.dispose()
   })
 
+  it.each(["output", "resize"] as const)("preserves a delayed %s refresh after same-query navigation", (refreshSource) => {
+    vi.useFakeTimers()
+    const terminal = createFaithfulTerminalSurface()
+    const adapter = createTerminalSearchAdapter(terminal)
+    const addon = searchAddonHarness.addons[searchAddonHarness.addons.length - 1]
+    addon.delayedRefreshResult = { resultIndex: 1, resultCount: 2 }
+    const controller = new TerminalSearchController("session-one", adapter)
+
+    try {
+      controller.setQuery("needle")
+      if (refreshSource === "output") terminal.emitWriteParsed()
+      else terminal.emitResize()
+      controller.findNext()
+
+      vi.advanceTimersByTime(199)
+      expect(controller.getState()).not.toMatchObject({ resultIndex: 1, resultCount: 2 })
+      vi.advanceTimersByTime(1)
+
+      expect(addon.findPrevious).toHaveBeenCalledWith("needle", expect.objectContaining({ incremental: true }))
+      expect(controller.getState()).toMatchObject({
+        query: "needle",
+        resultIndex: 1,
+        resultCount: 2,
+        resultStatus: "matches"
+      })
+    } finally {
+      controller.dispose()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    ["clear", (controller: TerminalSearchController) => controller.clear()],
+    ["query replacement", (controller: TerminalSearchController) => controller.setQuery("new query")],
+    ["options replacement", (controller: TerminalSearchController) => controller.setOptions({ caseSensitive: true })]
+  ] as const)("invalidates a pending refresh after %s", (_description, invalidate) => {
+    const terminal = createTerminalSurface()
+    const adapter = createTerminalSearchAdapter(terminal)
+    const listener = vi.fn()
+    const subscription = adapter.onDidChangeResults(listener)
+    const controller = new TerminalSearchController("session-one", adapter)
+
+    try {
+      controller.setQuery("old query")
+      terminal.emitWriteParsed()
+      invalidate(controller)
+      searchAddonHarness.addons[searchAddonHarness.addons.length - 1].emit({ resultIndex: 0, resultCount: 1 })
+
+      expect(listener).not.toHaveBeenCalled()
+    } finally {
+      controller.dispose()
+      subscription.dispose()
+      adapter.dispose()
+    }
+  })
+
   it("contains invalid regex errors and recovers when the pattern becomes valid", () => {
     const adapter = createFakeAdapter()
     const controller = new TerminalSearchController("session-one", adapter)
@@ -213,6 +309,17 @@ describe("terminal search", () => {
     adapter.emit({ resultIndex: -1, resultCount: 1000 }, requestToken)
 
     expect(controller.getState()).toMatchObject({ resultStatus: "limit-reached", resultCount: 1000 })
+    controller.dispose()
+  })
+
+  it("does not present a capped positive result set as an exact total", () => {
+    const adapter = createFakeAdapter()
+    const controller = new TerminalSearchController("session-one", adapter)
+    controller.setQuery("common")
+    const requestToken = adapter.findNext.mock.calls[0][2] as number
+    adapter.emit({ resultIndex: 0, resultCount: 1000 }, requestToken)
+
+    expect(controller.getState()).toMatchObject({ resultStatus: "limit-reached", resultIndex: 0, resultCount: 1000 })
     controller.dispose()
   })
 
@@ -278,6 +385,14 @@ function createTerminalSurface() {
       for (const listener of listeners.resize) listener({ cols: 120, rows: 40 })
     }
   }
+}
+
+function createFaithfulTerminalSurface() {
+  const terminal = createTerminalSurface()
+  terminal.loadAddon.mockImplementation((addon: { activate?: (terminal: RefreshSource) => void }) => {
+    addon.activate?.(terminal)
+  })
+  return terminal
 }
 
 class RendererSearchSurface implements TerminalSearchAdapter {

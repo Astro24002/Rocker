@@ -43,6 +43,8 @@ export class XtermSearchAdapter implements TerminalSearchAdapter {
   private currentRequestToken: number | undefined
   private pendingRefreshToken: number | undefined
   private inFlightRequestToken: number | undefined
+  private activeQuery: string | undefined
+  private activeOptions: TerminalSearchOptions | undefined
 
   public constructor(terminal: Pick<Terminal, "loadAddon" | "onWriteParsed" | "onResize">) {
     this.addon = new SearchAddon({ highlightLimit: TERMINAL_SEARCH_HIGHLIGHT_LIMIT })
@@ -54,16 +56,18 @@ export class XtermSearchAdapter implements TerminalSearchAdapter {
   }
 
   public findNext(query: string, options: TerminalSearchOptions, requestToken: number): boolean {
-    return this.runSearch(requestToken, () => this.addon.findNext(query, toXtermSearchOptions(options)))
+    return this.runSearch(requestToken, query, options, () => this.addon.findNext(query, toXtermSearchOptions(options)))
   }
 
   public findPrevious(query: string, options: TerminalSearchOptions, requestToken: number): boolean {
-    return this.runSearch(requestToken, () => this.addon.findPrevious(query, toXtermSearchOptions(options)))
+    return this.runSearch(requestToken, query, options, () => this.addon.findPrevious(query, toXtermSearchOptions(options)))
   }
 
   public clearDecorations(): void {
     this.currentRequestToken = undefined
     this.pendingRefreshToken = undefined
+    this.activeQuery = undefined
+    this.activeOptions = undefined
     if (!this.disposed) this.addon.clearDecorations()
   }
 
@@ -85,13 +89,19 @@ export class XtermSearchAdapter implements TerminalSearchAdapter {
     this.currentRequestToken = undefined
     this.pendingRefreshToken = undefined
     this.inFlightRequestToken = undefined
+    this.activeQuery = undefined
+    this.activeOptions = undefined
     this.addon.dispose()
   }
 
-  private runSearch(requestToken: number, search: () => boolean): boolean {
+  private runSearch(requestToken: number, query: string, options: TerminalSearchOptions, search: () => boolean): boolean {
     if (this.disposed) return false
+    const sameSearchGeneration = this.activeQuery === query && this.activeOptions !== undefined && sameOptions(this.activeOptions, options)
+    if (!sameSearchGeneration) this.pendingRefreshToken = undefined
+    else if (this.pendingRefreshToken !== undefined) this.pendingRefreshToken = requestToken
     this.currentRequestToken = requestToken
-    this.pendingRefreshToken = undefined
+    this.activeQuery = query
+    this.activeOptions = { ...options }
     this.inFlightRequestToken = requestToken
     try {
       return search()
@@ -240,7 +250,7 @@ export class TerminalSearchController {
 
 function resultStatusFor(result: TerminalSearchResult): TerminalSearchResultStatus {
   if (result.resultCount === 0) return "no-results"
-  if (result.resultIndex < 0 && result.resultCount >= TERMINAL_SEARCH_HIGHLIGHT_LIMIT) return "limit-reached"
+  if (result.resultCount >= TERMINAL_SEARCH_HIGHLIGHT_LIMIT) return "limit-reached"
   return "matches"
 }
 

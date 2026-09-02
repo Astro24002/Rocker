@@ -41,6 +41,47 @@ describe("TerminalSearchOverlay", () => {
     controller.dispose()
   })
 
+  it("does not capture Enter from action buttons or option controls", () => {
+    const adapter = createAdapter({ resultIndex: 0, resultCount: 2 })
+    const controller = new TerminalSearchController("session-one", adapter)
+    render(<I18nProvider><TerminalSearchOverlay controller={controller} open onClose={vi.fn()} onRestoreFocus={vi.fn()} /></I18nProvider>)
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search terminal output" }), { target: { value: "needle" } })
+
+    adapter.findNext.mockClear()
+    adapter.findPrevious.mockClear()
+    const next = screen.getByRole("button", { name: "Next match" })
+    fireEvent.keyDown(next, { key: "Enter" })
+    fireEvent.click(next)
+    expect(adapter.findNext).toHaveBeenCalledTimes(1)
+    expect(adapter.findPrevious).not.toHaveBeenCalled()
+
+    adapter.findNext.mockClear()
+    adapter.findPrevious.mockClear()
+    const previous = screen.getByRole("button", { name: "Previous match" })
+    fireEvent.keyDown(previous, { key: "Enter", shiftKey: true })
+    fireEvent.click(previous)
+    expect(adapter.findNext).not.toHaveBeenCalled()
+    expect(adapter.findPrevious).toHaveBeenCalledTimes(1)
+
+    adapter.findNext.mockClear()
+    adapter.findPrevious.mockClear()
+    const caseSensitive = screen.getByRole("checkbox", { name: "Match case" })
+    fireEvent.keyDown(caseSensitive, { key: "Enter" })
+    fireEvent.click(caseSensitive)
+    expect(adapter.findNext).toHaveBeenCalledTimes(1)
+    expect(adapter.findPrevious).not.toHaveBeenCalled()
+
+    adapter.findNext.mockClear()
+    adapter.findPrevious.mockClear()
+    const clear = screen.getByRole("button", { name: "Clear search" })
+    fireEvent.keyDown(clear, { key: "Enter" })
+    fireEvent.click(clear)
+    expect(adapter.findNext).not.toHaveBeenCalled()
+    expect(adapter.findPrevious).not.toHaveBeenCalled()
+    expect(controller.getState().query).toBe("")
+    controller.dispose()
+  })
+
   it("shows result counts and an explicit no-results state", () => {
     const adapter = createAdapter({ resultIndex: 1, resultCount: 3 })
     const controller = new TerminalSearchController("session-one", adapter)

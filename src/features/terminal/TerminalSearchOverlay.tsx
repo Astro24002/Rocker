@@ -47,7 +47,7 @@ export function TerminalSearchOverlay({ controller, open, onClose, onRestoreFocu
       onRestoreFocus()
       return
     }
-    if (event.key !== "Enter") return
+    if (event.key !== "Enter" || event.target !== queryRef.current) return
     event.preventDefault()
     if (event.shiftKey) controller.findPrevious()
     else controller.findNext()
