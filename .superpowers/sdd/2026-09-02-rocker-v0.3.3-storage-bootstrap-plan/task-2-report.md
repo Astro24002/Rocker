@@ -105,6 +105,42 @@ electron/main.ts, electron/preload.ts, electron/ipc/register.test.ts,
 src/app/bridge.ts, and electron/windows/workspace-window-manager.test.ts.
 ```
 
+## Final Review Fix
+
+The final review identified that Workspace reload recovery hard-coded
+`consumeHealth: true` for its first JsonStore read and omitted the option on
+the corrupt retry read. `loadWithStatus()` now passes the caller's flag through
+both reload reads. A reload without consumption preserves a cached
+`defaulted/corrupt` notice even when the primary has been repaired; a reload
+with consumption clears a still-corrupt defaulted notice after both reads,
+while the returned attempt remains correctly `defaulted`. Blocked results
+continue to remain blocked because JsonStore latches filesystem failures.
+
+TDD evidence for this fix:
+
+```text
+RED: 2 Workspace regression tests failed against the hard-coded implementation
+GREEN: npx vitest run electron/storage/workspace-store.test.ts
+       PASS: 1 file, 11 tests
+```
+
+Final verification in the shared worktree:
+
+```text
+npx vitest run electron/storage/json-store.test.ts \
+  electron/storage/settings-store.test.ts \
+  electron/storage/workspace-store.test.ts \
+  electron/ssh/host-key-store.test.ts \
+  tests/storage.test.ts tests/settings-store.test.ts tests/history-store.test.ts
+PASS: 7 files, 40 tests
+
+npm run typecheck
+PASS
+
+npm test
+PASS: 50 files, 337 passed, 1 skipped
+```
+
 ## Concerns
 
 Workspace window bootstrap still owns the compatibility `load()` call and may

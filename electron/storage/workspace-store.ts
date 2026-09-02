@@ -41,7 +41,7 @@ export class WorkspaceSnapshotStore {
   }
 
   public async loadWithStatus(options: { consumeHealth?: boolean; reload?: boolean } = {}): Promise<LoadResult<StoredWorkspaceDocument>> {
-    const result = await this.ensureLoaded(options.reload === true)
+    const result = await this.ensureLoaded(options.reload === true, true, options.consumeHealth === true)
     if (result.status === "blocked") return cloneLoadResult(result)
     const current = structuredClone(this.document ?? result.value)
     if (options.consumeHealth && result.status !== "ok" && options.reload !== true) {
@@ -123,10 +123,14 @@ export class WorkspaceSnapshotStore {
     await nextWrite
   }
 
-  private async ensureLoaded(reload = false, schedulePendingWrite = true): Promise<LoadResult<StoredWorkspaceDocument>> {
+  private async ensureLoaded(
+    reload = false,
+    schedulePendingWrite = true,
+    consumeHealth = false
+  ): Promise<LoadResult<StoredWorkspaceDocument>> {
     if (!reload && this.document) return loadResultFromHealth(this.store.health(), this.document)
     if (reload) this.loading = undefined
-    if (!this.loading) this.loading = this.readDocument(reload)
+    if (!this.loading) this.loading = this.readDocument(reload, consumeHealth)
     const loading = this.loading
     const result = await loading
     if (result.status === "blocked") {
@@ -139,11 +143,11 @@ export class WorkspaceSnapshotStore {
     return withValue(result, this.document)
   }
 
-  private async readDocument(reload: boolean): Promise<LoadResult<StoredWorkspaceDocument>> {
+  private async readDocument(reload: boolean, consumeHealth: boolean): Promise<LoadResult<StoredWorkspaceDocument>> {
     if (!reload) return this.store.load()
-    const first = await this.store.load({ consumeHealth: true })
+    const first = await this.store.load({ consumeHealth })
     if (first.status !== "defaulted" || first.reason !== "corrupt") return first
-    const refreshed = await this.store.load()
+    const refreshed = await this.store.load({ consumeHealth })
     return refreshed
   }
 }

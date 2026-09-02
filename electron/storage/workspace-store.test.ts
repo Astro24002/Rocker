@@ -144,6 +144,43 @@ describe("WorkspaceSnapshotStore", () => {
     })
   })
 
+  it("keeps a cached defaulted notice when reload does not consume health", async () => {
+    const filePath = await temporaryFilePath()
+    await writeFile(filePath, "{not json", "utf8")
+    const store = new WorkspaceSnapshotStore(filePath)
+    expect(await store.loadWithStatus()).toMatchObject({ status: "defaulted", reason: "corrupt" })
+
+    await writeFile(filePath, JSON.stringify({ version: 1, windows: [] }), "utf8")
+
+    expect(await store.loadWithStatus({ reload: true })).toEqual({
+      status: "defaulted",
+      value: { version: 1, windows: [] },
+      reason: "corrupt"
+    })
+    expect(await store.loadWithStatus()).toEqual({
+      status: "defaulted",
+      value: { version: 1, windows: [] },
+      reason: "corrupt"
+    })
+  })
+
+  it("consumes a still-corrupt defaulted notice across both reload reads", async () => {
+    const filePath = await temporaryFilePath()
+    await writeFile(filePath, "{not json", "utf8")
+    const store = new WorkspaceSnapshotStore(filePath)
+    expect(await store.loadWithStatus()).toMatchObject({ status: "defaulted", reason: "corrupt" })
+
+    expect(await store.loadWithStatus({ reload: true, consumeHealth: true })).toEqual({
+      status: "defaulted",
+      value: { version: 1, windows: [] },
+      reason: "corrupt"
+    })
+    expect(await store.loadWithStatus()).toEqual({
+      status: "ok",
+      value: { version: 1, windows: [] }
+    })
+  })
+
   it("reloads a repaired primary after an existing document write is blocked", async () => {
     const filePath = await temporaryFilePath()
     const store = new WorkspaceSnapshotStore(filePath, 0)
