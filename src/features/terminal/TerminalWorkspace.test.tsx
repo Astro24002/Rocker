@@ -6,8 +6,8 @@ import type { TerminalWorkspaceState } from "./session-state"
 import { TerminalWorkspace } from "./TerminalWorkspace"
 
 vi.mock("./TerminalView", () => ({
-  TerminalView: ({ session, visible }: { session: { id: string }; visible: boolean }) => (
-    <div data-testid={`terminal-surface-${session.id}`} data-visible={String(visible)} />
+  TerminalView: ({ session, visible, onSearchController }: { session: { id: string }; visible: boolean; onSearchController: () => void }) => (
+    <div data-testid={`terminal-surface-${session.id}`} data-search-handler={String(typeof onSearchController === "function")} data-visible={String(visible)} />
   )
 }))
 
@@ -35,6 +35,7 @@ describe("TerminalWorkspace layout", () => {
       onResize={vi.fn()}
       onAck={vi.fn()}
       onController={vi.fn()}
+      onSearchController={vi.fn()}
     /></I18nProvider>)
 
     expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument()
@@ -61,12 +62,14 @@ describe("TerminalWorkspace layout", () => {
       onResize={vi.fn()}
       onAck={vi.fn()}
       onController={vi.fn()}
+      onSearchController={vi.fn()}
     /></I18nProvider>)
 
     expect(screen.getAllByTestId(/terminal-surface-/)).toHaveLength(3)
     expect(screen.getByTestId("terminal-surface-a")).toHaveAttribute("data-visible", "true")
     expect(screen.getByTestId("terminal-surface-b")).toHaveAttribute("data-visible", "false")
     expect(screen.getByTestId("terminal-surface-c")).toHaveAttribute("data-visible", "false")
+    expect(screen.getByTestId("terminal-surface-a")).toHaveAttribute("data-search-handler", "true")
   })
 })
 

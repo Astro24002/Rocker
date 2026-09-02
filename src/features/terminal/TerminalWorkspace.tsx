@@ -4,6 +4,7 @@ import type { MonitorState } from "../monitoring/monitor-state"
 import { MonitorSummary } from "../monitoring/MonitorSummary"
 import { visibleSessionIds } from "./layout"
 import type { TerminalWorkspaceState } from "./session-state"
+import type { TerminalSearchController } from "./terminal-search"
 import { TerminalView } from "./TerminalView"
 import type { TerminalController, TerminalPreferences } from "./terminal-controller"
 
@@ -21,6 +22,7 @@ interface TerminalWorkspaceProps {
   onResize(sessionId: string, channelGeneration: number, dimensions: TerminalDimensions): void
   onAck(sessionId: string, channelGeneration: number, sequence: number): void
   onController(sessionId: string, controller: TerminalController | undefined): void
+  onSearchController?(sessionId: string, controller: TerminalSearchController | undefined): void
 }
 
 export function TerminalWorkspace(props: TerminalWorkspaceProps) {
@@ -50,6 +52,7 @@ export function TerminalWorkspace(props: TerminalWorkspaceProps) {
             onResize={(dimensions) => props.onResize(session.id, session.channelGeneration, dimensions)}
             onAck={(channelGeneration, sequence) => props.onAck(session.id, channelGeneration, sequence)}
             onController={props.onController}
+            onSearchController={props.onSearchController}
           />
         ))}
       </div>

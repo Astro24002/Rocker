@@ -61,8 +61,27 @@ const fit = vi.hoisted(() => {
   return { addons, FitAddon: FakeFitAddon }
 })
 
+const search = vi.hoisted(() => {
+  const addons: FakeSearchAddon[] = []
+
+  class FakeSearchAddon {
+    public readonly dispose = vi.fn()
+    public readonly findNext = vi.fn(() => true)
+    public readonly findPrevious = vi.fn(() => true)
+    public readonly clearDecorations = vi.fn()
+    public readonly onDidChangeResults = vi.fn(() => ({ dispose: vi.fn() }))
+
+    public constructor() {
+      addons.push(this)
+    }
+  }
+
+  return { addons, SearchAddon: FakeSearchAddon }
+})
+
 vi.mock("@xterm/xterm", () => ({ Terminal: xterm.Terminal }))
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: fit.FitAddon }))
+vi.mock("@xterm/addon-search", () => ({ SearchAddon: search.SearchAddon }))
 
 const session: WorkspaceSession = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -77,6 +96,7 @@ describe("TerminalView", () => {
   beforeEach(() => {
     xterm.terminals.length = 0
     fit.addons.length = 0
+    search.addons.length = 0
     vi.clearAllMocks()
   })
 
@@ -174,6 +194,19 @@ describe("TerminalView", () => {
     expect(onController).toHaveBeenLastCalledWith(session.id, undefined)
   })
 
+  it("creates one per-session search controller and disposes it with the xterm", () => {
+    const onSearchController = vi.fn()
+    const { unmount } = render(<TerminalView {...createProps({ onSearchController })} />)
+
+    expect(search.addons).toHaveLength(1)
+    expect(onSearchController).toHaveBeenCalledWith(session.id, expect.objectContaining({ getState: expect.any(Function) }))
+
+    unmount()
+
+    expect(search.addons[0].dispose).toHaveBeenCalledTimes(1)
+    expect(onSearchController).toHaveBeenLastCalledWith(session.id, undefined)
+  })
+
   it("fits a mounted hidden surface so a restored session receives a real grid", async () => {
     render(<TerminalView {...createProps({ visible: false })} />)
 
@@ -198,6 +231,7 @@ function createProps(overrides: Partial<ComponentProps<typeof TerminalView>> = {
     onResize: vi.fn(),
     onAck: vi.fn(),
     onController: vi.fn(),
+    onSearchController: vi.fn(),
     ...overrides
   }
 }

@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm"
 import { useCallback, useEffect, useRef, type ClipboardEvent as ReactClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import type { TerminalDimensions } from "../../../electron/ssh/types"
 import type { WorkspaceSession } from "./session-state"
+import { createTerminalSearchAdapter, TerminalSearchController } from "./terminal-search"
 import { TerminalController, type TerminalPreferences } from "./terminal-controller"
 
 type TerminalOptionsWithBell = ConstructorParameters<typeof Terminal>[0] & { bellStyle?: "sound" | "none" }
@@ -18,6 +19,7 @@ export interface TerminalViewProps {
   onResize(dimensions: TerminalDimensions): void
   onAck(channelGeneration: number, sequence: number): void
   onController(sessionId: string, controller: TerminalController | undefined): void
+  onSearchController?(sessionId: string, controller: TerminalSearchController | undefined): void
 }
 
 export function TerminalView(props: TerminalViewProps) {
@@ -79,6 +81,7 @@ export function TerminalView(props: TerminalViewProps) {
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(container)
+    const searchController = new TerminalSearchController(props.session.id, createTerminalSearchAdapter(terminal))
 
     const controller = new TerminalController(
       props.session.id,
@@ -115,6 +118,7 @@ export function TerminalView(props: TerminalViewProps) {
     terminalRef.current = terminal
     controllerRef.current = controller
     propsRef.current.onController(props.session.id, controller)
+    propsRef.current.onSearchController?.(props.session.id, searchController)
 
     const dataDisposable = terminal.onData((data) => controller.sendInput(data))
     terminal.attachCustomKeyEventHandler((event) => {
@@ -143,6 +147,8 @@ export function TerminalView(props: TerminalViewProps) {
       }
       frameRef.current = undefined
       fitHiddenRef.current = false
+      searchController.dispose()
+      propsRef.current.onSearchController?.(props.session.id, undefined)
       controller.dispose()
       if (controllerRef.current === controller) controllerRef.current = null
       if (terminalRef.current === terminal) terminalRef.current = null

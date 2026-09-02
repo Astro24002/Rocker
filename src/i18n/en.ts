@@ -152,6 +152,15 @@ export const en = {
   "terminal.reconnectCancelledDetail": "Automatic reconnect was cancelled. The terminal buffer is preserved.",
   "terminal.closeSession": "Close session",
   "terminal.multilinePasteConfirmation": "Paste multiple lines into the terminal?",
+  "terminal.search": "Search terminal",
+  "terminal.searchInput": "Search terminal output",
+  "terminal.searchCaseSensitive": "Match case",
+  "terminal.searchWholeWord": "Match whole word",
+  "terminal.searchRegex": "Use regular expression",
+  "terminal.searchPrevious": "Previous match",
+  "terminal.searchNext": "Next match",
+  "terminal.searchClear": "Clear search",
+  "terminal.searchNoResults": "No results",
   "terminal.noticeReconnected": "[Rocker] Reconnected",
   "terminal.noticeRestored": "[Rocker] Restored a new shell"
 } as const

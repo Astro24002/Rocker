@@ -154,6 +154,15 @@ export const zhCN = {
   "terminal.reconnectCancelledDetail": "自动重连已取消，终端缓冲区已保留。",
   "terminal.closeSession": "关闭会话",
   "terminal.multilinePasteConfirmation": "要将多行内容粘贴到终端吗？",
+  "terminal.search": "搜索终端",
+  "terminal.searchInput": "搜索终端输出",
+  "terminal.searchCaseSensitive": "区分大小写",
+  "terminal.searchWholeWord": "全字匹配",
+  "terminal.searchRegex": "使用正则表达式",
+  "terminal.searchPrevious": "上一个匹配",
+  "terminal.searchNext": "下一个匹配",
+  "terminal.searchClear": "清除搜索",
+  "terminal.searchNoResults": "无结果",
   "terminal.noticeReconnected": "[Rocker] 已重新连接",
   "terminal.noticeRestored": "[Rocker] 已恢复新的 Shell"
 } satisfies Record<TranslationKey, string>
