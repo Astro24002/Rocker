@@ -112,6 +112,17 @@ describe("WorkspaceSnapshotStore", () => {
     expect(await new WorkspaceSnapshotStore(filePath).load()).toEqual({ version: 1, windows: [] })
   })
 
+  it("reports a malformed top-level document as defaulted while preserving the value shape", async () => {
+    const filePath = await temporaryFilePath()
+    await writeFile(filePath, JSON.stringify({ version: 2, windows: [] }), "utf8")
+
+    expect(await new WorkspaceSnapshotStore(filePath).loadWithStatus()).toEqual({
+      status: "defaulted",
+      value: { version: 1, windows: [] },
+      reason: "corrupt"
+    })
+  })
+
   it("flushes pending saves and removes one workspace without disturbing another", async () => {
     const filePath = await temporaryFilePath()
     const store = new WorkspaceSnapshotStore(filePath)

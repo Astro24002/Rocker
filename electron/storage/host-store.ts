@@ -2,58 +2,133 @@ import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { JsonStore } from "./json-store"
+import { StorageBlockedError, type LoadResult } from "./storage-result"
 import type { HostProfile, StoredHostDocument } from "./types"
 
 const defaultDocument: StoredHostDocument = { hosts: [] }
 
 export class HostStore {
-  public constructor(private readonly store: JsonStore<StoredHostDocument>) {}
+  private readonly store: JsonStore<StoredHostDocument>
+
+  public constructor(filePath: string)
+  public constructor(store: JsonStore<StoredHostDocument>)
+  public constructor(store: JsonStore<unknown>)
+  public constructor(filePathOrStore: string | JsonStore<StoredHostDocument> | JsonStore<unknown>) {
+    this.store = typeof filePathOrStore === "string"
+      ? createJsonStore(filePathOrStore)
+      : filePathOrStore as JsonStore<StoredHostDocument>
+  }
+
+  public async loadWithStatus(options: { consumeHealth?: boolean } = {}): Promise<LoadResult<HostProfile[]>> {
+    return mapLoadResult(await this.store.load(options), (document) => normalizeHostDocument(document)?.hosts ?? [])
+  }
 
   public async list(): Promise<HostProfile[]> {
-    const document = await this.readDocument()
-    return document.hosts.map((host) => ({ ...host }))
+    const result = await this.loadWithStatus()
+    if (result.status === "blocked") throw new StorageBlockedError(result.issue)
+    return result.value.map((host) => ({ ...host }))
   }
 
   public async save(profile: HostProfile): Promise<void> {
-    const document = await this.readDocument()
-    const index = document.hosts.findIndex((host) => host.id === profile.id)
-    if (index === -1) {
-      document.hosts.push({ ...profile })
-    } else {
-      document.hosts[index] = { ...profile }
-    }
-    await this.store.write(document)
+    const normalized = normalizeHostProfile(profile)
+    if (!normalized) return
+    await this.store.update((document) => {
+      const next = normalizeHostDocument(document) ?? structuredClone(defaultDocument)
+      const index = next.hosts.findIndex((host) => host.id === normalized.id)
+      if (index === -1) next.hosts.push(normalized)
+      else next.hosts[index] = normalized
+      return next
+    })
   }
 
   public async remove(id: string): Promise<void> {
-    const document = await this.readDocument()
-    document.hosts = document.hosts.filter((host) => host.id !== id)
-    await this.store.write(document)
+    await this.store.update((document) => {
+      const next = normalizeHostDocument(document) ?? structuredClone(defaultDocument)
+      return { hosts: next.hosts.filter((host) => host.id !== id) }
+    })
   }
 
   public async importOpenSSHConfig(text: string, homeDirectory = homedir()): Promise<HostProfile[]> {
     const profiles = parseOpenSSHConfig(text, homeDirectory)
-    const document = await this.readDocument()
-    const existingIds = new Set(document.hosts.map((host) => host.id))
-    for (const profile of profiles) {
-      if (!existingIds.has(profile.id)) {
-        document.hosts.push(profile)
+    await this.store.update((document) => {
+      const next = normalizeHostDocument(document) ?? structuredClone(defaultDocument)
+      const existingIds = new Set(next.hosts.map((host) => host.id))
+      for (const profile of profiles) {
+        if (!existingIds.has(profile.id)) {
+          next.hosts.push(profile)
+          existingIds.add(profile.id)
+        }
       }
-    }
-    await this.store.write(document)
+      return next
+    })
     return profiles
-  }
-
-  private async readDocument(): Promise<StoredHostDocument> {
-    const document = await this.store.read()
-    return {
-      hosts: Array.isArray(document.hosts) ? document.hosts : []
-    }
   }
 }
 
 export function createHostStore(userDataPath: string): HostStore {
-  return new HostStore(new JsonStore(join(userDataPath, "rocker.json"), defaultDocument))
+  return new HostStore(join(userDataPath, "rocker.json"))
+}
+
+function createJsonStore(filePath: string): JsonStore<StoredHostDocument> {
+  return new JsonStore({
+    filePath,
+    store: "hosts",
+    defaultValue: defaultDocument,
+    recovery: "blocked",
+    normalize: normalizeHostDocument
+  })
+}
+
+export function normalizeHostDocument(value: unknown): StoredHostDocument | undefined {
+  if (!isRecord(value) || !Array.isArray(value.hosts)) return undefined
+  const hosts = value.hosts.map(normalizeHostProfile)
+  if (hosts.some((host): host is undefined => host === undefined)) return undefined
+  return { hosts: hosts.filter((host): host is HostProfile => host !== undefined) }
+}
+
+export function normalizeHostProfile(value: unknown): HostProfile | undefined {
+  if (!isRecord(value)) return undefined
+  if (!isBoundedString(value.id, 128) || !isBoundedString(value.name, 256) || !isBoundedString(value.host, 512)) return undefined
+  if (!isPort(value.port) || !isString(value.username, 256) || !isString(value.notes, 10_000)) return undefined
+  if (value.authMethod !== "password" && value.authMethod !== "privateKey" && value.authMethod !== "agent") return undefined
+  if (typeof value.favorite !== "boolean") return undefined
+  if (value.identityFile !== undefined && !isBoundedString(value.identityFile, 4_096)) return undefined
+  if (value.group !== undefined && !isBoundedString(value.group, 256)) return undefined
+  return {
+    id: value.id,
+    name: value.name,
+    host: value.host,
+    port: value.port,
+    username: value.username,
+    authMethod: value.authMethod,
+    ...(value.identityFile === undefined ? {} : { identityFile: value.identityFile }),
+    ...(value.group === undefined ? {} : { group: value.group }),
+    favorite: value.favorite,
+    notes: value.notes
+  }
+}
+
+function mapLoadResult<T, U>(result: LoadResult<T>, map: (value: T) => U): LoadResult<U> {
+  if (result.status === "blocked") return { status: "blocked", issue: { ...result.issue } }
+  if (result.status === "ok") return { status: "ok", value: map(result.value) }
+  if (result.status === "recovered") return { status: "recovered", value: map(result.value), source: "backup" }
+  return { status: "defaulted", value: map(result.value), reason: result.reason }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isBoundedString(value: unknown, maximumLength: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= maximumLength
+}
+
+function isString(value: unknown, maximumLength: number): value is string {
+  return typeof value === "string" && value.length <= maximumLength
+}
+
+function isPort(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65_535
 }
 
 export function parseOpenSSHConfig(text: string, homeDirectory = homedir()): HostProfile[] {

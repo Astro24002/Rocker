@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -9,6 +9,36 @@ const temporaryPaths: string[] = []
 afterEach(async () => Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true }))))
 
 describe("connection history", () => {
+  it("reports malformed top-level history as a defaulted load", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-history-"))
+    temporaryPaths.push(directory)
+    const path = join(directory, "history.json")
+    await writeFile(path, JSON.stringify({ items: "invalid" }), "utf8")
+
+    expect(await new HistoryStore(path).loadWithStatus()).toEqual({
+      status: "defaulted",
+      value: [],
+      reason: "corrupt"
+    })
+  })
+
+  it("serializes concurrent history additions without losing records", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-history-"))
+    temporaryPaths.push(directory)
+    const store = new HistoryStore(join(directory, "history.json"))
+    const items = Array.from({ length: 25 }, (_, index) => ({
+      id: `item-${index}`,
+      hostId: "host",
+      connectedAt: `2026-08-17T10:${String(index).padStart(2, "0")}:00.000Z`,
+      durationMs: index,
+      outcome: "connected" as const
+    }))
+
+    await Promise.all(items.map((item) => store.add(item)))
+
+    expect((await store.list()).map((item) => item.id)).toHaveLength(items.length)
+  })
+
   it("stores newest records first and clears them", async () => {
     const directory = await mkdtemp(join(tmpdir(), "rocker-history-"))
     temporaryPaths.push(directory)

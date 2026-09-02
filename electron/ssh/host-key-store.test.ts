@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -11,6 +11,19 @@ afterEach(async () => {
 })
 
 describe("JsonHostKeyStore", () => {
+  it("blocks malformed protected Host Key storage and exposes health without values", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-host-key-store-"))
+    temporaryPaths.push(directory)
+    const filePath = join(directory, "host-keys.json")
+    await writeFile(filePath, JSON.stringify({ fingerprints: "invalid" }), "utf8")
+
+    const store = new JsonHostKeyStore(filePath)
+    const health = await store.health()
+
+    expect(health).toMatchObject({ store: "hostKeys", status: "blocked", reason: "corrupt" })
+    expect(JSON.stringify(health)).not.toContain("fingerprint")
+  })
+
   it("serializes concurrent replacement confirmations against the stored fingerprint", async () => {
     const directory = await mkdtemp(join(tmpdir(), "rocker-host-key-store-"))
     temporaryPaths.push(directory)

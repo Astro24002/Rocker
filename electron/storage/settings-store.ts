@@ -1,4 +1,5 @@
 import { JsonStore } from "./json-store"
+import { StorageBlockedError, type LoadResult } from "./storage-result"
 import type { AppSettings } from "./types"
 
 export const defaultSettings: AppSettings = {
@@ -18,21 +19,33 @@ export class SettingsStore {
   private readonly store: JsonStore<AppSettings>
 
   public constructor(filePath: string) {
-    this.store = new JsonStore(filePath, defaultSettings)
+    this.store = new JsonStore({
+      filePath,
+      store: "settings",
+      defaultValue: defaultSettings,
+      recovery: "default",
+      normalize: normalizeSettings
+    })
+  }
+
+  public async loadWithStatus(options: { consumeHealth?: boolean } = {}): Promise<LoadResult<AppSettings>> {
+    return this.store.load(options)
   }
 
   public async get(): Promise<AppSettings> {
-    return normalizeSettings(await this.store.read())
+    const result = await this.loadWithStatus()
+    if (result.status === "blocked") throw new StorageBlockedError(result.issue)
+    return result.value
   }
 
   public async update(update: Partial<AppSettings>): Promise<AppSettings> {
-    const next = normalizeSettings({ ...await this.get(), ...update })
-    await this.store.write(next)
-    return next
+    return this.store.update((current) => normalizeSettings({ ...current, ...update }) ?? defaultSettings)
   }
 }
 
-function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
+export function normalizeSettings(value: unknown): AppSettings | undefined {
+  if (!isRecord(value) || !hasSettingsShape(value)) return undefined
+  const settings = value as Partial<AppSettings>
   return {
     locale: settings.locale === "zh-CN" ? "zh-CN" : "en",
     sidebarWidth: clamp(settings.sidebarWidth ?? defaultSettings.sidebarWidth, 180, 360, 220),
@@ -45,6 +58,24 @@ function normalizeSettings(settings: Partial<AppSettings>): AppSettings {
     confirmMultilinePaste: settings.confirmMultilinePaste !== false,
     bindAddress: settings.bindAddress === "::1" || settings.bindAddress === "0.0.0.0" ? settings.bindAddress : "127.0.0.1"
   }
+}
+
+const requiredSettingsKeys = [
+  "locale",
+  "sidebarWidth",
+  "terminalFont",
+  "terminalFontSize",
+  "connectionTimeout",
+  "autoReconnect",
+  "bindAddress"
+] as const
+
+function hasSettingsShape(value: Record<string, unknown>): boolean {
+  return requiredSettingsKeys.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function clamp(value: number, min: number, max: number, fallback: number): number {

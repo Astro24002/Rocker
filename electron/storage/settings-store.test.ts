@@ -9,6 +9,34 @@ const temporaryPaths: string[] = []
 afterEach(async () => Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true }))))
 
 describe("SettingsStore", () => {
+  it("reports corrupt top-level settings as a defaulted load", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-settings-"))
+    temporaryPaths.push(directory)
+    const settingsPath = join(directory, "settings.json")
+    await writeFile(settingsPath, JSON.stringify({ locale: "en" }), "utf8")
+
+    const result = await new SettingsStore(settingsPath).loadWithStatus()
+
+    expect(result).toEqual({
+      status: "defaulted",
+      value: expect.objectContaining({ locale: "en" }),
+      reason: "corrupt"
+    })
+  })
+
+  it("serializes concurrent partial updates without losing either setting", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-settings-"))
+    temporaryPaths.push(directory)
+    const store = new SettingsStore(join(directory, "settings.json"))
+
+    await Promise.all([
+      store.update({ terminalFontSize: 14 }),
+      store.update({ sidebarWidth: 280 })
+    ])
+
+    expect(await store.get()).toMatchObject({ terminalFontSize: 14, sidebarWidth: 280 })
+  })
+
   it("drops the obsolete scan interval while normalizing a legacy document", async () => {
     const directory = await mkdtemp(join(tmpdir(), "rocker-settings-"))
     temporaryPaths.push(directory)

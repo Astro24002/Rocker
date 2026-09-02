@@ -1,4 +1,9 @@
 import type { CredentialKind } from "./types"
+import type { StorageHealth } from "./storage-result"
+
+export interface CredentialHealthOptions {
+  consumeHealth?: boolean
+}
 
 export interface CredentialCipher {
   encrypt(value: string): string
@@ -9,6 +14,7 @@ export interface CredentialValueStore {
   get(key: string): Promise<string | undefined>
   set(key: string, value: string): Promise<void>
   delete(key: string): Promise<void>
+  health?(options?: CredentialHealthOptions): Promise<StorageHealth>
 }
 
 export class CredentialVault {
@@ -39,6 +45,13 @@ export class CredentialVault {
     } else {
       await this.values.delete(key)
     }
+  }
+
+  public async health(options: CredentialHealthOptions = {}): Promise<StorageHealth> {
+    if (this.values instanceof Map || this.values.health === undefined) {
+      return { store: "credentials", status: "ok" }
+    }
+    return this.values.health(options)
   }
 
   private key(hostId: string, kind: CredentialKind): string {
