@@ -55,6 +55,42 @@ interface RestoredWorkspace {
   restoreActiveSessionId?: string
 }
 
+type SettingsKey = keyof AppSettings
+type SettingsVersionSnapshot = Partial<Record<SettingsKey, number>>
+
+interface PendingSettingsWrite {
+  update: Partial<AppSettings>
+  versions: SettingsVersionSnapshot
+  mutationVersion: number
+  statusVersion: number
+}
+
+const settingsKeys: SettingsKey[] = [
+  "locale",
+  "sidebarWidth",
+  "terminalFont",
+  "terminalFontSize",
+  "scrollback",
+  "cursorStyle",
+  "cursorBlink",
+  "terminalBell",
+  "connectionTimeout",
+  "autoReconnect",
+  "reconnectMode",
+  "restorePreviousWorkspace",
+  "confirmMultilinePaste",
+  "bindAddress"
+]
+
+const terminalAppearanceKeys: SettingsKey[] = [
+  "terminalFont",
+  "terminalFontSize",
+  "scrollback",
+  "cursorStyle",
+  "cursorBlink",
+  "terminalBell"
+]
+
 const defaultSettings: AppSettings = {
   locale: "en",
   sidebarWidth: 220,
@@ -99,6 +135,12 @@ function Workspace() {
   const settingsRef = useRef(settings)
   const pendingAppearanceUpdate = useRef<Partial<AppSettings>>({})
   const settingsPersistTimer = useRef<number | undefined>(undefined)
+  const settingsFieldVersions = useRef<SettingsVersionSnapshot>({})
+  const dirtySettingsKeys = useRef(new Set<SettingsKey>())
+  const settingsMutationVersion = useRef(0)
+  const settingsWriteQueue = useRef<PendingSettingsWrite[]>([])
+  const settingsWriteInFlight = useRef<PendingSettingsWrite | undefined>(undefined)
+  const latestSettingsStatusVersion = useRef(0)
   const connectionIds = useRef(new Map<string, string>())
   const pendingOpens = useRef(new Map<string, PendingTerminalOpen>())
   const openingSessionIds = useRef(new Set<string>())
@@ -119,15 +161,68 @@ function Workspace() {
     settings.terminalBell
   ])
 
+  const pumpSettingsWrites = useCallback((): void => {
+    if (settingsWriteInFlight.current) return
+    const write = settingsWriteQueue.current.shift()
+    if (!write) return
+    settingsWriteInFlight.current = write
+    void bridge.settings.update(write.update)
+      .then((persisted) => {
+        if (!bootstrapMounted.current) return
+        const nextSettings = mergeSettingsResponse(
+          settingsRef.current,
+          persisted,
+          write.update,
+          write.versions,
+          settingsFieldVersions.current,
+          dirtySettingsKeys.current
+        )
+        settingsRef.current = nextSettings
+        setSettings(nextSettings)
+        for (const key of Object.keys(write.update) as SettingsKey[]) {
+          if (write.versions[key] === settingsFieldVersions.current[key]) dirtySettingsKeys.current.delete(key)
+        }
+        if (write.statusVersion === latestSettingsStatusVersion.current && write.mutationVersion === settingsMutationVersion.current) {
+          setSettingsPersistenceFailed(false)
+        }
+      })
+      .catch(() => {
+        if (bootstrapMounted.current && write.statusVersion === latestSettingsStatusVersion.current && write.mutationVersion === settingsMutationVersion.current) {
+          setSettingsPersistenceFailed(true)
+        }
+      })
+      .finally(() => {
+        if (settingsWriteInFlight.current === write) settingsWriteInFlight.current = undefined
+        pumpSettingsWrites()
+      })
+  }, [bridge])
+
+  const queueSettingsWrite = useCallback((update: Partial<AppSettings>): void => {
+    const write: PendingSettingsWrite = {
+      update: { ...update },
+      versions: { ...settingsFieldVersions.current },
+      mutationVersion: settingsMutationVersion.current,
+      statusVersion: ++latestSettingsStatusVersion.current
+    }
+    settingsWriteQueue.current.push(write)
+    pumpSettingsWrites()
+  }, [pumpSettingsWrites])
+
   useEffect(() => {
     bootstrapMounted.current = true
     retryGeneration.current += 1
     return () => {
       bootstrapMounted.current = false
       retryGeneration.current += 1
-      if (settingsPersistTimer.current !== undefined) window.clearTimeout(settingsPersistTimer.current)
+      if (settingsPersistTimer.current !== undefined) {
+        window.clearTimeout(settingsPersistTimer.current)
+        settingsPersistTimer.current = undefined
+      }
+      const pending = pendingAppearanceUpdate.current
+      pendingAppearanceUpdate.current = {}
+      if (Object.keys(pending).length > 0) queueSettingsWrite(pending)
     }
-  }, [])
+  }, [queueSettingsWrite])
 
   const markSessionState = useCallback((sessionId: string, state: TerminalStateEvent["state"], reason?: TerminalFailureReason): void => {
     setWorkspace((current) => {
@@ -275,13 +370,21 @@ function Workspace() {
         const availableHosts = snapshot.hosts.health.status === "blocked" ? [] : snapshot.hosts.value ?? []
         const loadedHistory = snapshot.history.health.status === "blocked" ? [] : snapshot.history.value ?? []
         const storedSettings = snapshot.settings.health.status === "blocked" ? defaultSettings : snapshot.settings.value ?? defaultSettings
+        const nextSettings = mergeSettingsSnapshot(
+          settingsRef.current,
+          storedSettings,
+          settingsFieldVersions.current,
+          settingsFieldVersions.current,
+          dirtySettingsKeys.current
+        )
         setHosts(availableHosts)
         setHistory(loadedHistory)
-        setSettings(storedSettings)
-        setLocale(storedSettings.locale)
-        setSidebarWidth(clampSidebarWidth(storedSettings.sidebarWidth))
+        settingsRef.current = nextSettings
+        setSettings(nextSettings)
+        setLocale(nextSettings.locale)
+        setSidebarWidth(clampSidebarWidth(nextSettings.sidebarWidth))
 
-        if (storedSettings.restorePreviousWorkspace && workspaceWritable.current && snapshot.workspace.value) {
+        if (nextSettings.restorePreviousWorkspace && workspaceWritable.current && snapshot.workspace.value) {
           const restored = restoreWorkspace(snapshot.workspace.value, availableHosts, snapshot.hosts.health.status !== "blocked")
           if (restored.restoreActiveSessionId) {
             if (snapshotCapabilities.sshAvailable) {
@@ -333,6 +436,8 @@ function Workspace() {
     if (selectedResources.length === 0) return
     const generation = retryGeneration.current
     const isActive = (): boolean => bootstrapMounted.current && retryGeneration.current === generation
+    const retrySettingsVersions = { ...settingsFieldVersions.current }
+    const retryStatusVersion = selectedResources.includes("settings") ? ++latestSettingsStatusVersion.current : undefined
     retryInFlight.current = true
     workspaceWritable.current = false
     dispatchBootstrap({ type: "retry-start", resources: selectedResources })
@@ -342,14 +447,25 @@ function Workspace() {
       if (!isActive()) return
       const mergedResources = { ...bootstrapState.resources, ...result }
       const mergedCapabilities = deriveBootstrapCapabilities(mergedResources)
-      let nextSettings = settings
+      let nextSettings = settingsRef.current
       if (result.settings) {
         const settingsBlocked = result.settings.health.status === "blocked"
-        nextSettings = settingsBlocked ? defaultSettings : result.settings.value ?? defaultSettings
-        setSettingsPersistenceFailed(settingsBlocked)
-        setSettings(nextSettings)
-        setLocale(nextSettings.locale)
-        setSidebarWidth(clampSidebarWidth(nextSettings.sidebarWidth))
+        if (settingsBlocked) {
+          if (retryStatusVersion === latestSettingsStatusVersion.current) setSettingsPersistenceFailed(true)
+        } else {
+          nextSettings = mergeSettingsSnapshot(
+            settingsRef.current,
+            result.settings.value ?? defaultSettings,
+            retrySettingsVersions,
+            settingsFieldVersions.current,
+            dirtySettingsKeys.current
+          )
+          settingsRef.current = nextSettings
+          setSettings(nextSettings)
+          setLocale(nextSettings.locale)
+          setSidebarWidth(clampSidebarWidth(nextSettings.sidebarWidth))
+          if (retryStatusVersion === latestSettingsStatusVersion.current) setSettingsPersistenceFailed(false)
+        }
       }
       if (result.history) setHistory(result.history.health.status === "blocked" ? [] : result.history.value ?? [])
       if (result.hosts) setHosts(result.hosts.health.status === "blocked" ? [] : result.hosts.value ?? [])
@@ -419,7 +535,7 @@ function Workspace() {
     } finally {
       retryInFlight.current = false
     }
-  }, [bootstrapState, bridge, hosts, openPendingSession, setLocale, settings, workspace])
+  }, [bootstrapState, bridge, hosts, openPendingSession, setLocale, workspace])
 
   const activeSession = workspace.sessions.find((session) => session.id === workspace.activeSessionId)
   const activeHost = activeSession ? hosts.find((host) => host.id === activeSession.hostId) : undefined
@@ -449,12 +565,30 @@ function Workspace() {
     }
   }, [activeSession?.id, activeSession?.state, bridge])
 
+  const applyLocalSettingsUpdate = (update: Partial<AppSettings>): AppSettings => {
+    if (Object.keys(update).length === 0) return settingsRef.current
+    const mutationVersion = ++settingsMutationVersion.current
+    for (const key of Object.keys(update) as SettingsKey[]) {
+      settingsFieldVersions.current[key] = mutationVersion
+      dirtySettingsKeys.current.add(key)
+    }
+    const nextSettings = { ...settingsRef.current, ...update }
+    settingsRef.current = nextSettings
+    setSettings(nextSettings)
+    if (Object.keys(pickTerminalAppearanceUpdate(update)).length > 0) {
+      const preferences = terminalPreferencesForSettings(nextSettings)
+      for (const controller of controllers.current.values()) controller.applyPreferences(preferences)
+    }
+    return nextSettings
+  }
+
   const changeSidebarWidth = (width: number): void => {
     if (!settingsMutationsAvailable) return
     const next = clampSidebarWidth(width)
     localStorage.setItem("rocker.sidebarWidth", String(next))
     setSidebarWidth(next)
-    void bridge.settings.update({ sidebarWidth: next }).then(setSettings).catch(() => undefined)
+    applyLocalSettingsUpdate({ sidebarWidth: next })
+    queueSettingsWrite({ sidebarWidth: next })
   }
 
   const updateSettings = (update: Partial<AppSettings>): void => {
@@ -462,21 +596,10 @@ function Workspace() {
     const nonAppearanceUpdate = omitTerminalAppearanceUpdate(update)
     if (!settingsMutationsAvailable && Object.keys(appearanceUpdate).length === 0) return
 
-    const acceptedUpdate = settingsMutationsAvailable ? update : appearanceUpdate
-    const nextSettings = { ...settingsRef.current, ...acceptedUpdate }
-    settingsRef.current = nextSettings
-    setSettings(nextSettings)
-    if (Object.keys(appearanceUpdate).length > 0) {
-      const preferences = terminalPreferencesForSettings(nextSettings)
-      for (const controller of controllers.current.values()) controller.applyPreferences(preferences)
-    }
-
+    const acceptedUpdate = settingsMutationsAvailable ? { ...nonAppearanceUpdate, ...appearanceUpdate } : appearanceUpdate
+    applyLocalSettingsUpdate(acceptedUpdate)
     if (!settingsMutationsAvailable) return
-    if (Object.keys(nonAppearanceUpdate).length > 0) {
-      void bridge.settings.update(nonAppearanceUpdate)
-        .then((persisted) => { setSettings((current) => ({ ...current, ...persisted })); setSettingsPersistenceFailed(false) })
-        .catch(() => setSettingsPersistenceFailed(true))
-    }
+    if (Object.keys(nonAppearanceUpdate).length > 0) queueSettingsWrite(nonAppearanceUpdate)
     if (Object.keys(appearanceUpdate).length === 0) return
 
     pendingAppearanceUpdate.current = { ...pendingAppearanceUpdate.current, ...appearanceUpdate }
@@ -486,9 +609,7 @@ function Workspace() {
       const pending = pendingAppearanceUpdate.current
       pendingAppearanceUpdate.current = {}
       if (Object.keys(pending).length === 0) return
-      void bridge.settings.update(pending)
-        .then((persisted) => { setSettings((current) => ({ ...current, ...persisted })); setSettingsPersistenceFailed(false) })
-        .catch(() => setSettingsPersistenceFailed(true))
+      queueSettingsWrite(pending)
     }, 300)
   }
 
@@ -731,7 +852,7 @@ function validDimensions(cols: number, rows: number): boolean {
 function terminalPreferencesForSettings(settings: AppSettings): TerminalPreferences {
   return {
     fontFamily: settings.terminalFont,
-    fontSize: settings.terminalFontSize,
+    fontSize: clampTerminalFontSize(settings.terminalFontSize),
     scrollback: settings.scrollback,
     cursorStyle: settings.cursorStyle,
     cursorBlink: settings.cursorBlink,
@@ -739,10 +860,15 @@ function terminalPreferencesForSettings(settings: AppSettings): TerminalPreferen
   }
 }
 
+function clampTerminalFontSize(value: number): number {
+  if (!Number.isFinite(value)) return defaultSettings.terminalFontSize
+  return Math.max(10, Math.min(24, value))
+}
+
 function pickTerminalAppearanceUpdate(update: Partial<AppSettings>): Partial<AppSettings> {
   const appearance: Partial<AppSettings> = {}
   if (update.terminalFont !== undefined) appearance.terminalFont = update.terminalFont
-  if (update.terminalFontSize !== undefined) appearance.terminalFontSize = update.terminalFontSize
+  if (update.terminalFontSize !== undefined) appearance.terminalFontSize = clampTerminalFontSize(update.terminalFontSize)
   if (update.scrollback !== undefined) appearance.scrollback = update.scrollback
   if (update.cursorStyle !== undefined) appearance.cursorStyle = update.cursorStyle
   if (update.cursorBlink !== undefined) appearance.cursorBlink = update.cursorBlink
@@ -759,6 +885,44 @@ function omitTerminalAppearanceUpdate(update: Partial<AppSettings>): Partial<App
   delete nonAppearance.cursorBlink
   delete nonAppearance.terminalBell
   return nonAppearance
+}
+
+function mergeSettingsResponse(
+  current: AppSettings,
+  persisted: AppSettings,
+  update: Partial<AppSettings>,
+  requestVersions: SettingsVersionSnapshot,
+  currentVersions: SettingsVersionSnapshot,
+  dirtyKeys: Set<SettingsKey>
+): AppSettings {
+  const requestedKeys = new Set(Object.keys(update) as SettingsKey[])
+  const next = { ...current } as Record<SettingsKey, AppSettings[SettingsKey]>
+  for (const key of settingsKeys) {
+    if (isTerminalAppearanceKey(key) && !requestedKeys.has(key)) continue
+    if (requestVersions[key] !== currentVersions[key]) continue
+    if (!requestedKeys.has(key) && dirtyKeys.has(key)) continue
+    next[key] = persisted[key]
+  }
+  return next as AppSettings
+}
+
+function mergeSettingsSnapshot(
+  current: AppSettings,
+  incoming: AppSettings,
+  snapshotVersions: SettingsVersionSnapshot,
+  currentVersions: SettingsVersionSnapshot,
+  dirtyKeys: Set<SettingsKey>
+): AppSettings {
+  const next = { ...current } as Record<SettingsKey, AppSettings[SettingsKey]>
+  for (const key of settingsKeys) {
+    if (snapshotVersions[key] !== currentVersions[key] || dirtyKeys.has(key)) continue
+    next[key] = incoming[key]
+  }
+  return next as AppSettings
+}
+
+function isTerminalAppearanceKey(key: SettingsKey): boolean {
+  return terminalAppearanceKeys.includes(key)
 }
 
 export function failureReasonFor(error: unknown): TerminalFailureReason {

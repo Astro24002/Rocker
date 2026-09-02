@@ -7,7 +7,7 @@ import type { TerminalSessionEvent } from "../../electron/ssh/types"
 import { clampSidebarWidth } from "../components/Sidebar"
 import type { TerminalWorkspaceState } from "../features/terminal/session-state"
 import App from "./App"
-import type { HostProfile, StoredWorkspaceWindow } from "./types"
+import type { AppSettings, HostProfile, StoredWorkspaceWindow } from "./types"
 
 const terminalHarness = vi.hoisted(() => ({
   controller: {
@@ -339,10 +339,189 @@ describe("desktop workspace shell", () => {
     expect(terminalHarness.controller.applyPreferences).toHaveBeenCalledWith(expect.objectContaining({ scrollback: 50000 }))
     expect(bridge.settings.update).not.toHaveBeenCalled()
   })
+
+  it("serializes delayed settings writes and preserves newer edits across full responses", async () => {
+    vi.useFakeTimers()
+    try {
+      const writes = [deferred<AppSettings>(), deferred<AppSettings>(), deferred<AppSettings>()]
+      let writeIndex = 0
+      bridge.settings.update.mockImplementation(() => writes[writeIndex++].promise)
+      bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+      render(<App />)
+
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+      fireEvent.change(screen.getByRole("combobox", { name: "Scrollback lines" }), { target: { value: "50000" } })
+      await act(async () => { vi.advanceTimersByTime(300) })
+      expect(bridge.settings.update).toHaveBeenCalledTimes(1)
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Cursor blink" }))
+      fireEvent.change(screen.getByRole("combobox", { name: "Connection timeout" }), { target: { value: "30" } })
+      await act(async () => { vi.advanceTimersByTime(300) })
+      expect(bridge.settings.update).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        writes[0].resolve(settingsSnapshot({ scrollback: 50000, cursorBlink: true, connectionTimeout: 15 }))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(bridge.settings.update).toHaveBeenCalledTimes(2)
+      expect(screen.getByRole("combobox", { name: "Scrollback lines" })).toHaveValue("50000")
+      expect(screen.getByRole("checkbox", { name: "Cursor blink" })).not.toBeChecked()
+      expect(screen.getByRole("combobox", { name: "Connection timeout" })).toHaveValue("30")
+
+      await act(async () => {
+        writes[1].resolve(settingsSnapshot({ scrollback: 10000, cursorBlink: true, connectionTimeout: 30 }))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(bridge.settings.update).toHaveBeenCalledTimes(3)
+
+      await act(async () => {
+        writes[2].resolve(settingsSnapshot({ scrollback: 10000, cursorBlink: false, connectionTimeout: 30 }))
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(screen.getByRole("combobox", { name: "Scrollback lines" })).toHaveValue("50000")
+      expect(screen.getByRole("checkbox", { name: "Cursor blink" })).not.toBeChecked()
+      expect(screen.getByRole("combobox", { name: "Connection timeout" })).toHaveValue("30")
+      expect(screen.queryByText("settings storage is unavailable")).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("ignores a stale settings write failure when a newer write is pending", async () => {
+    const writes = [deferred<AppSettings>(), deferred<AppSettings>()]
+    let writeIndex = 0
+    bridge.settings.update.mockImplementation(() => writes[writeIndex++].promise)
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    fireEvent.change(screen.getByRole("combobox", { name: "Connection timeout" }), { target: { value: "30" } })
+    fireEvent.click(screen.getByRole("checkbox", { name: "Automatic reconnect" }))
+
+    await act(async () => {
+      writes[0].reject(new Error("settings write failed"))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.queryByText("settings storage is unavailable")).not.toBeInTheDocument()
+
+    await act(async () => {
+      writes[1].resolve(settingsSnapshot({ connectionTimeout: 30, autoReconnect: false }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.queryByText("settings storage is unavailable")).not.toBeInTheDocument()
+  })
+
+  it("preserves temporary appearance edits when a settings retry remains blocked", async () => {
+    const retry = deferred<Partial<AppBootstrapSnapshot>>()
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id), {
+      settings: { health: blockedHealth("settings"), value: undefined }
+    }))
+    bridge.bootstrap.retry.mockImplementation(() => retry.promise)
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    fireEvent.change(screen.getByRole("combobox", { name: "Scrollback lines" }), { target: { value: "50000" } })
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+    await waitFor(() => expect(bridge.bootstrap.retry).toHaveBeenCalledWith(["settings"]))
+    fireEvent.change(screen.getByRole("combobox", { name: "Cursor style" }), { target: { value: "underline" } })
+
+    await act(async () => {
+      retry.resolve({ settings: { health: blockedHealth("settings"), value: undefined } })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByRole("combobox", { name: "Scrollback lines" })).toHaveValue("50000")
+    expect(screen.getByRole("combobox", { name: "Cursor style" })).toHaveValue("underline")
+    expect(terminalHarness.controller.applyPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ scrollback: 50000, cursorStyle: "underline" }))
+  })
+
+  it("flushes a pending appearance update when the workspace unmounts", async () => {
+    vi.useFakeTimers()
+    try {
+      bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+      const view = render(<App />)
+
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+      fireEvent.change(screen.getByRole("combobox", { name: "Scrollback lines" }), { target: { value: "50000" } })
+      expect(bridge.settings.update).not.toHaveBeenCalled()
+
+      view.unmount()
+
+      expect(bridge.settings.update).toHaveBeenCalledTimes(1)
+      expect(bridge.settings.update).toHaveBeenCalledWith({ scrollback: 50000 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("clamps terminal font size before applying it to live controllers", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    const fontSize = screen.getByRole("spinbutton", { name: "Font size" })
+
+    fireEvent.change(fontSize, { target: { value: "999" } })
+    expect(fontSize).toHaveValue(24)
+    expect(terminalHarness.controller.applyPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ fontSize: 24 }))
+
+    fireEvent.change(fontSize, { target: { value: "" } })
+    expect(fontSize).toHaveValue(10)
+    expect(terminalHarness.controller.applyPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ fontSize: 10 }))
+  })
 })
 
 function workspace(): TerminalWorkspaceState {
   return terminalHarness.latestWorkspace as TerminalWorkspaceState
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(error: unknown): void } {
+  let resolvePromise: (value: T) => void = () => undefined
+  let rejectPromise: (error: unknown) => void = () => undefined
+  const promise = new Promise<T>((resolve, reject) => {
+    resolvePromise = resolve
+    rejectPromise = reject
+  })
+  return { promise, resolve: resolvePromise, reject: rejectPromise }
+}
+
+function settingsSnapshot(overrides: Partial<AppSettings>): AppSettings {
+  return {
+    locale: "en",
+    sidebarWidth: 220,
+    terminalFont: "JetBrains Mono",
+    terminalFontSize: 13,
+    scrollback: 10000,
+    cursorStyle: "bar",
+    cursorBlink: true,
+    terminalBell: true,
+    connectionTimeout: 15,
+    autoReconnect: true,
+    reconnectMode: "limited",
+    restorePreviousWorkspace: true,
+    confirmMultilinePaste: true,
+    bindAddress: "127.0.0.1",
+    ...overrides
+  }
 }
 
 const host = {
@@ -417,8 +596,8 @@ function createBridge() {
     monitor: { sample: vi.fn(async (sessionId: string) => ({ sessionId, latencyMs: 1, cpuPercent: null, memoryPercent: null, diskPercent: null, loadAverage: null, receiveBytesPerSecond: null, transmitBytesPerSecond: null, sampledAt: "2026-08-19T12:00:00.000Z" })) },
     history: { list: vi.fn(async () => []), clear: vi.fn(async () => undefined) },
     settings: {
-      get: vi.fn(async () => ({ locale: "en" as const, sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, scrollback: 10000 as const, cursorStyle: "bar" as const, cursorBlink: true, terminalBell: true, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited" as const, restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1" as const })),
-      update: vi.fn(async (update: object) => ({ locale: "en" as const, sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, scrollback: 10000 as const, cursorStyle: "bar" as const, cursorBlink: true, terminalBell: true, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited" as const, restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1" as const, ...update }))
+      get: vi.fn(async (): Promise<AppSettings> => ({ locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, scrollback: 10000, cursorStyle: "bar", cursorBlink: true, terminalBell: true, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited", restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1" })),
+      update: vi.fn(async (update: object): Promise<AppSettings> => ({ locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, scrollback: 10000, cursorStyle: "bar", cursorBlink: true, terminalBell: true, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited", restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1", ...update }))
     },
     diagnostics: { export: vi.fn(async () => ({ canceled: true })) },
     events: {
