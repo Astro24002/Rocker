@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto"
 import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
+import { StorageBlockedError, type LoadResult, type StorageHealth, type StorageIssue } from "../storage/storage-result"
 import type { WorkspaceSnapshotStore } from "../storage/workspace-store"
-import type { StoredWorkspaceWindow } from "../storage/types"
+import type { StoredWorkspaceDocument, StoredWorkspaceWindow } from "../storage/types"
+import type { BootstrapResource } from "../ipc/bridge-contract"
 
 export interface WorkspaceWindowOptions {
   x?: number
@@ -35,12 +37,15 @@ export type WindowLifecycleEvent =
   | { kind: "window-closed"; webContentsId: number }
 
 export interface WorkspaceWindowManagerOptions {
-  snapshots: Pick<WorkspaceSnapshotStore, "load" | "saveWindow" | "removeWindow" | "updateWindowBounds">
+  snapshots: Pick<WorkspaceSnapshotStore, "load" | "saveWindow" | "removeWindow" | "updateWindowBounds"> & {
+    loadWithStatus?: (options?: { consumeHealth?: boolean; reload?: boolean }) => Promise<LoadResult<StoredWorkspaceDocument>>
+  }
   createWindow(options?: WorkspaceWindowOptions): WorkspaceWindow
   onWindowClosed?(ownerWebContentsId: number): Promise<void> | void
   onRendererReleased?(owner: RuntimeOwner): Promise<void> | void
   onLifecycle?(event: WindowLifecycleEvent): void
   preserveLastWindowWorkspace?: boolean
+  workspacePersistenceBlocked?: boolean
 }
 
 interface RendererGenerationRecord {
@@ -53,9 +58,12 @@ export class WorkspaceWindowManager {
   private readonly windows = new Map<number, WorkspaceWindow>()
   private readonly focusedWebContentsIds = new Set<number>()
   private readonly rendererGenerations = new Map<number, RendererGenerationRecord>()
+  private workspacePersistenceBlocked: boolean
   private quitting = false
 
-  public constructor(private readonly options: WorkspaceWindowManagerOptions) {}
+  public constructor(private readonly options: WorkspaceWindowManagerOptions) {
+    this.workspacePersistenceBlocked = options.workspacePersistenceBlocked === true
+  }
 
   public createNew(snapshot?: StoredWorkspaceWindow): WorkspaceWindow {
     const window = this.options.createWindow(snapshot?.bounds)
@@ -105,8 +113,13 @@ export class WorkspaceWindowManager {
   }
 
   public async restoreWindows(): Promise<WorkspaceWindow[]> {
-    const snapshot = await this.options.snapshots.load()
-    return snapshot.windows.map((window) => this.createNew(window))
+    const result = await this.loadSnapshotWithStatus({ consumeHealth: false })
+    if (result.status === "blocked") {
+      this.workspacePersistenceBlocked = true
+      return []
+    }
+    this.workspacePersistenceBlocked = false
+    return result.value.windows.map((window) => this.createNew(window))
   }
 
   public workspaceForWebContents(ownerWebContentsId: number): string | undefined {
@@ -144,19 +157,41 @@ export class WorkspaceWindowManager {
   }
 
   public async loadWorkspace(owner: RuntimeOwner): Promise<StoredWorkspaceWindow | undefined> {
+    const result = await this.loadWorkspaceWithStatus(owner)
+    if (result.health.status === "blocked") throw new StorageBlockedError(toStorageIssue(result.health))
+    return result.value
+  }
+
+  public async loadWorkspaceWithStatus(
+    owner: RuntimeOwner,
+    options: { consumeHealth?: boolean } = {}
+  ): Promise<BootstrapResource<StoredWorkspaceWindow | undefined>> {
     const window = this.windowForOwner(owner)
-    if (!window) return undefined
     const workspaceId = this.workspaceForWebContents(owner.webContentsId)
-    if (!workspaceId) return undefined
-    const snapshot = await this.options.snapshots.load()
-    if (!this.windowForOwner(owner)) return undefined
-    return snapshot.windows.find((window) => window.workspaceId === workspaceId)
+    if (!window || !workspaceId) return emptyWorkspaceResource()
+
+    const result = await this.loadSnapshotWithStatus({
+      consumeHealth: options.consumeHealth,
+      reload: options.consumeHealth === true
+    })
+    if (!this.windowForOwner(owner)) return emptyWorkspaceResource()
+    if (result.status === "blocked") {
+      this.workspacePersistenceBlocked = true
+      return { health: healthFromLoadResult(result) }
+    }
+
+    this.workspacePersistenceBlocked = false
+    return {
+      health: healthFromLoadResult(result),
+      value: result.value.windows.find((candidate) => candidate.workspaceId === workspaceId)
+    }
   }
 
   public saveWorkspace(
     owner: RuntimeOwner,
     snapshot: Omit<StoredWorkspaceWindow, "workspaceId" | "bounds" | "maximized">
   ): void {
+    if (this.workspacePersistenceBlocked) return
     const window = this.windowForOwner(owner)
     const workspaceId = this.workspaceForWebContents(owner.webContentsId)
     if (!workspaceId || !window || window.isDestroyed()) throw new Error("Workspace window was not found")
@@ -194,7 +229,7 @@ export class WorkspaceWindowManager {
     const removeWorkspace = !this.quitting && !preserveLastWindowWorkspace && workspaceId !== undefined
     this.removeWorkspaceForWindow(ownerWebContentsId)
     this.emitLifecycle({ kind: "window-closed", webContentsId: ownerWebContentsId })
-    if (removeWorkspace) this.options.snapshots.removeWindow(workspaceId)
+    if (removeWorkspace && !this.workspacePersistenceBlocked) this.options.snapshots.removeWindow(workspaceId)
     try {
       await this.options.onWindowClosed?.(ownerWebContentsId)
     } catch {
@@ -234,6 +269,7 @@ export class WorkspaceWindowManager {
   }
 
   private captureWindowBounds(ownerWebContentsId: number): void {
+    if (this.workspacePersistenceBlocked) return
     const workspaceId = this.workspaceForWebContents(ownerWebContentsId)
     const window = this.windowForWebContents(ownerWebContentsId)
     if (!workspaceId || !window || window.isDestroyed()) return
@@ -270,4 +306,58 @@ export class WorkspaceWindowManager {
     if (!window || window.isDestroyed()) return undefined
     return window
   }
+
+  private async loadSnapshotWithStatus(options: { consumeHealth?: boolean; reload?: boolean }): Promise<LoadResult<StoredWorkspaceDocument>> {
+    const loadWithStatus = this.options.snapshots.loadWithStatus
+    if (loadWithStatus) {
+      try {
+        return await loadWithStatus(options)
+      } catch (error) {
+        return { status: "blocked", issue: safeStorageIssue(error) }
+      }
+    }
+    try {
+      return { status: "ok", value: await this.options.snapshots.load() }
+    } catch (error) {
+      return { status: "blocked", issue: safeStorageIssue(error) }
+    }
+  }
+}
+
+function healthFromLoadResult(result: LoadResult<StoredWorkspaceDocument>): StorageHealth {
+  if (result.status === "blocked") {
+    return {
+      store: "workspace",
+      status: "blocked",
+      reason: result.issue.reason,
+      message: result.issue.message
+    }
+  }
+  if (result.status === "recovered") return { store: "workspace", status: "recovered", source: "backup" }
+  if (result.status === "defaulted") return { store: "workspace", status: "defaulted", reason: result.reason }
+  return { store: "workspace", status: "ok" }
+}
+
+function emptyWorkspaceResource(): BootstrapResource<StoredWorkspaceWindow | undefined> {
+  return { health: { store: "workspace", status: "ok" } }
+}
+
+function toStorageIssue(health: Extract<StorageHealth, { status: "blocked" }>): StorageIssue {
+  return {
+    store: "workspace",
+    reason: health.reason,
+    message: health.message
+  }
+}
+
+function safeStorageIssue(error: unknown): StorageIssue {
+  const reason = error instanceof StorageBlockedError ? error.issue.reason : "unavailable"
+  const message = reason === "permission"
+    ? "Stored data cannot be accessed due to permissions."
+    : reason === "corrupt"
+      ? "Stored data is corrupt."
+      : reason === "recovery-failed"
+        ? "Stored data recovery failed."
+        : "Stored data is unavailable."
+  return { store: "workspace", reason, message }
 }

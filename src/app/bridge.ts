@@ -1,4 +1,6 @@
 import type { RockerBridge } from "../../electron/ipc/bridge-contract"
+import type { AppBootstrapSnapshot, BootstrapResourceName } from "../../electron/ipc/bridge-contract"
+import type { StorageHealth, StorageKind } from "../../electron/storage/storage-result"
 import type { AppSettings, ForwardingInfo, HostProfile, StoredWorkspaceWindow } from "./types"
 
 const demoHosts: HostProfile[] = [
@@ -135,6 +137,16 @@ function createBrowserPreviewBridge(): RockerBridge {
         }
       }
     },
+    bootstrap: {
+      load: async () => createPreviewBootstrapSnapshot(),
+      retry: async (resources) => {
+        validatePreviewBootstrapResources(resources)
+        const snapshot = await createPreviewBootstrapSnapshot()
+        const result: Partial<AppBootstrapSnapshot> = {}
+        for (const resource of resources) result[resource] = snapshot[resource] as never
+        return result
+      }
+    },
     monitor: {
       sample: async (sessionId) => ({ sessionId, latencyMs: 18, cpuPercent: 12, memoryPercent: 41, diskPercent: 58, loadAverage: 0.42, receiveBytesPerSecond: 0, transmitBytesPerSecond: 0, sampledAt: new Date().toISOString() })
     },
@@ -161,6 +173,38 @@ function createBrowserPreviewBridge(): RockerBridge {
       },
       onSessionLaunch: () => () => undefined
     }
+  }
+}
+
+async function createPreviewBootstrapSnapshot(): Promise<AppBootstrapSnapshot> {
+  return {
+    settings: { health: previewHealth("settings"), value: { ...mockSettings } },
+    history: {
+      health: previewHealth("history"),
+      value: [
+        { id: "preview-history", hostId: "demo-g11", connectedAt: "2026-01-01T00:00:00.000Z", durationMs: 742_000, outcome: "connected" }
+      ]
+    },
+    workspace: { health: previewHealth("workspace"), value: mockWorkspace },
+    hosts: { health: previewHealth("hosts"), value: [...mockHosts] },
+    credentials: { health: previewHealth("credentials") },
+    hostKeys: { health: previewHealth("hostKeys") }
+  }
+}
+
+function previewHealth(store: StorageKind): StorageHealth {
+  return { store, status: "ok" }
+}
+
+function validatePreviewBootstrapResources(resources: BootstrapResourceName[]): void {
+  const known: BootstrapResourceName[] = ["settings", "history", "workspace", "hosts", "credentials", "hostKeys"]
+  if (!Array.isArray(resources) || resources.length === 0) throw new Error("Retry resources must be non-empty")
+  if (resources.length > known.length) throw new Error("Retry resources must include at most six resources")
+  const seen = new Set<string>()
+  for (const resource of resources) {
+    if (!known.includes(resource)) throw new Error("Retry resources must use known resource names")
+    if (seen.has(resource)) throw new Error("Retry resources must not contain duplicates")
+    seen.add(resource)
   }
 }
 

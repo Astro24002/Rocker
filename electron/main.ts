@@ -12,7 +12,7 @@ import { JsonCredentialValueStore } from "./storage/credential-store"
 import { HistoryStore } from "./storage/history-store"
 import { createHostStore } from "./storage/host-store"
 import { createSafeStorageCipher } from "./storage/safe-storage"
-import { SettingsStore } from "./storage/settings-store"
+import { defaultSettings, SettingsStore } from "./storage/settings-store"
 import type { AppSettings } from "./storage/types"
 import { WorkspaceSnapshotStore } from "./storage/workspace-store"
 import { SshConnectionManager, type ConnectionEvent, type HostKeyPromptRequest } from "./ssh/connection-manager"
@@ -74,9 +74,11 @@ async function startApplication(): Promise<void> {
     createSafeStorageCipher()
   )
   const settings = new SettingsStore(join(userDataPath, "settings.json"))
-  const initialSettings = await settings.get()
+  const initialSettingsResult = await loadInitialSettings(settings)
+  const initialSettings = initialSettingsResult.status === "blocked" ? defaultSettings : initialSettingsResult.value
   const hostKeys = new JsonHostKeyStore(join(userDataPath, "host-keys.json"))
   const snapshots = new WorkspaceSnapshotStore(join(userDataPath, "workspace.json"))
+  const initialWorkspaceResult = await loadInitialWorkspace(snapshots)
   let windows: WorkspaceWindowManager
   const connections = new SshConnectionManager({
     resolve: createConnectionResolver({ hosts, credentials, settings, hostKeys }),
@@ -96,6 +98,7 @@ async function startApplication(): Promise<void> {
     snapshots,
     createWindow: createNativeWindow,
     preserveLastWindowWorkspace: process.platform !== "darwin",
+    workspacePersistenceBlocked: initialWorkspaceResult.status === "blocked",
     onWindowClosed: async (ownerWebContentsId) => {
       await forwarding.releaseWebContents(ownerWebContentsId)
       await sessions.releaseWebContents(ownerWebContentsId)
@@ -111,6 +114,7 @@ async function startApplication(): Promise<void> {
   const dependencies: IpcDependencies = {
     hosts,
     credentials,
+    hostKeys,
     sessions,
     connections,
     ports: new PortService(connections),
@@ -135,7 +139,9 @@ async function startApplication(): Promise<void> {
   }
   registerIpcHandlers(dependencies)
 
-  const restored = initialSettings.restorePreviousWorkspace ? await windows.restoreWindows() : []
+  const restored = initialSettings.restorePreviousWorkspace && initialWorkspaceResult.status !== "blocked"
+    ? await windows.restoreWindows()
+    : []
   if (restored.length === 0) windows.createNew()
   powerMonitor.on("resume", () => sessions.retryAfterResume())
   app.on("activate", () => {
@@ -145,6 +151,38 @@ async function startApplication(): Promise<void> {
   if (pendingFocus) {
     pendingFocus = false
     windows.focusMostRecentOrCreate()
+  }
+}
+
+async function loadInitialSettings(settings: SettingsStore): Promise<Awaited<ReturnType<SettingsStore["loadWithStatus"]>>> {
+  try {
+    return await settings.loadWithStatus()
+  } catch {
+    return {
+      status: "blocked",
+      issue: {
+        store: "settings",
+        reason: "unavailable",
+        message: "Stored data is unavailable."
+      }
+    }
+  }
+}
+
+async function loadInitialWorkspace(
+  snapshots: WorkspaceSnapshotStore
+): Promise<Awaited<ReturnType<WorkspaceSnapshotStore["loadWithStatus"]>>> {
+  try {
+    return await snapshots.loadWithStatus()
+  } catch {
+    return {
+      status: "blocked",
+      issue: {
+        store: "workspace",
+        reason: "unavailable",
+        message: "Stored data is unavailable."
+      }
+    }
   }
 }
 

@@ -15,6 +15,12 @@ import type { HistoryStore } from "../storage/history-store"
 import type { HostStore } from "../storage/host-store"
 import type { SettingsStore } from "../storage/settings-store"
 import type {
+  LoadResult,
+  StorageFailureReason,
+  StorageHealth,
+  StorageKind
+} from "../storage/storage-result"
+import type {
   AppSettings,
   HostProfile,
   StoredTerminalLayout,
@@ -24,6 +30,9 @@ import type { SshConnectionManager } from "../ssh/connection-manager"
 import type { TerminalSessionManager } from "../ssh/terminal-session-manager"
 import type { WorkspaceWindowManager } from "../windows/workspace-window-manager"
 import {
+  type AppBootstrapSnapshot,
+  type BootstrapResource,
+  type BootstrapResourceName,
   ipcChannels,
   type HostSaveRequest,
   type SessionOpenRequest,
@@ -34,6 +43,7 @@ import { isValidSessionId, validateDimensions, validateTerminalData } from "./va
 export interface IpcDependencies {
   hosts: HostStore
   credentials: CredentialVault
+  hostKeys: BootstrapHealthStore
   sessions: TerminalSessionManager
   connections: SshConnectionManager
   ports: PortService
@@ -48,6 +58,19 @@ export interface IpcDependencies {
   windows: WorkspaceWindowManager
   createDuplicateWindow?(hostId: string): Promise<void>
 }
+
+interface BootstrapHealthStore {
+  health(options?: { consumeHealth?: boolean }): Promise<StorageHealth>
+}
+
+const bootstrapResourceNames: BootstrapResourceName[] = [
+  "settings",
+  "history",
+  "workspace",
+  "hosts",
+  "credentials",
+  "hostKeys"
+]
 
 export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   ipcMain.handle(ipcChannels.hostsList, () => dependencies.hosts.list())
@@ -183,6 +206,27 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   ipcMain.handle(ipcChannels.workspaceLoad, (event) => dependencies.windows.loadWorkspace(currentOwnerForWebContents(dependencies, event.sender.id)))
   ipcMain.handle(ipcChannels.workspaceSave, (event, value: unknown) => {
     dependencies.windows.saveWorkspace(currentOwnerForWebContents(dependencies, event.sender.id), normalizeWorkspaceSaveRequest(value))
+  })
+  ipcMain.handle(ipcChannels.bootstrapLoad, async (event): Promise<AppBootstrapSnapshot> => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    const snapshot = await loadBootstrapSnapshot(dependencies, owner)
+    assertCurrentOwner(dependencies, owner)
+    return snapshot
+  })
+  ipcMain.handle(ipcChannels.bootstrapRetry, async (event, value: unknown): Promise<Partial<AppBootstrapSnapshot>> => {
+    const resources = normalizeBootstrapRetryResources(value)
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    const selected = await Promise.allSettled(resources.map((resource) => loadBootstrapResource(dependencies, owner, resource)))
+    assertCurrentOwner(dependencies, owner)
+    const result: Partial<AppBootstrapSnapshot> = {}
+    for (let index = 0; index < resources.length; index += 1) {
+      const resource = resources[index]
+      const settled = selected[index]
+      result[resource] = settled.status === "fulfilled"
+        ? settled.value as never
+        : blockedResource(resourceStore(resource), settled.reason) as never
+    }
+    return result
   })
   ipcMain.handle(ipcChannels.monitorSample, (event, sessionId: unknown) => {
     const owner = currentOwnerForWebContents(dependencies, event.sender.id)
@@ -324,6 +368,179 @@ function normalizeSettingsUpdate(value: unknown): Partial<AppSettings> {
   if (typeof value.confirmMultilinePaste === "boolean") update.confirmMultilinePaste = value.confirmMultilinePaste
   if (value.bindAddress === "127.0.0.1" || value.bindAddress === "::1" || value.bindAddress === "0.0.0.0") update.bindAddress = value.bindAddress
   return update
+}
+
+async function loadBootstrapSnapshot(
+  dependencies: IpcDependencies,
+  owner: RuntimeOwner
+): Promise<AppBootstrapSnapshot> {
+  const settled = await Promise.allSettled([
+    loadBootstrapResource(dependencies, owner, "settings"),
+    loadBootstrapResource(dependencies, owner, "history"),
+    loadBootstrapResource(dependencies, owner, "workspace"),
+    loadBootstrapResource(dependencies, owner, "hosts"),
+    loadBootstrapResource(dependencies, owner, "credentials"),
+    loadBootstrapResource(dependencies, owner, "hostKeys")
+  ])
+  return {
+    settings: settledResource(settled[0], "settings") as BootstrapResource<AppSettings>,
+    history: settledResource(settled[1], "history") as BootstrapResource<import("../storage/types").ConnectionHistoryItem[]>,
+    workspace: settledResource(settled[2], "workspace") as BootstrapResource<import("../storage/types").StoredWorkspaceWindow | undefined>,
+    hosts: settledResource(settled[3], "hosts") as BootstrapResource<HostProfile[]>,
+    credentials: settledResource(settled[4], "credentials") as BootstrapResource<never>,
+    hostKeys: settledResource(settled[5], "hostKeys") as BootstrapResource<never>
+  }
+}
+
+function loadBootstrapResource(
+  dependencies: IpcDependencies,
+  owner: RuntimeOwner,
+  resource: BootstrapResourceName
+): Promise<BootstrapResource<unknown>> {
+  switch (resource) {
+    case "settings":
+      return loadValueResource("settings", () => dependencies.settings.loadWithStatus({ consumeHealth: true }))
+    case "history":
+      return loadValueResource("history", () => dependencies.history.loadWithStatus({ consumeHealth: true }))
+    case "workspace":
+      return loadWorkspaceResource(dependencies, owner)
+    case "hosts":
+      return loadValueResource("hosts", () => dependencies.hosts.loadWithStatus({ consumeHealth: true }))
+    case "credentials":
+      return loadHealthResource("credentials", () => dependencies.credentials.health({ consumeHealth: true }))
+    case "hostKeys":
+      return loadHealthResource("hostKeys", () => dependencies.hostKeys.health({ consumeHealth: true }))
+  }
+}
+
+async function loadWorkspaceResource(
+  dependencies: IpcDependencies,
+  owner: RuntimeOwner
+): Promise<BootstrapResource<unknown>> {
+  try {
+    const resource = await dependencies.windows.loadWorkspaceWithStatus(owner, { consumeHealth: true })
+    const health = sanitizeHealth("workspace", resource.health)
+    if (health.status === "blocked") return { health }
+    return { health, value: resource.value }
+  } catch (error) {
+    return blockedResource("workspace", error)
+  }
+}
+
+async function loadValueResource<T>(
+  store: StorageKind,
+  load: () => Promise<LoadResult<T>>
+): Promise<BootstrapResource<T>> {
+  try {
+    return resourceFromLoadResult(store, await load())
+  } catch (error) {
+    return blockedResource(store, error)
+  }
+}
+
+async function loadHealthResource(
+  store: StorageKind,
+  load: () => Promise<StorageHealth>
+): Promise<BootstrapResource<never>> {
+  try {
+    return { health: sanitizeHealth(store, await load()) }
+  } catch (error) {
+    return blockedResource(store, error)
+  }
+}
+
+function settledResource(
+  settled: PromiseSettledResult<BootstrapResource<unknown>>,
+  resource: BootstrapResourceName
+): BootstrapResource<unknown> {
+  return settled.status === "fulfilled"
+    ? settled.value
+    : blockedResource(resourceStore(resource), settled.reason)
+}
+
+function resourceFromLoadResult<T>(store: StorageKind, result: LoadResult<T>): BootstrapResource<T> {
+  if (result.status === "blocked") return blockedResource(store, result.issue)
+  if (result.status === "recovered") return { health: { store, status: "recovered", source: "backup" }, value: result.value }
+  if (result.status === "defaulted") return { health: { store, status: "defaulted", reason: result.reason }, value: result.value }
+  return { health: { store, status: "ok" }, value: result.value }
+}
+
+function blockedResource(store: StorageKind, error: unknown): BootstrapResource<never> {
+  const reason = storageFailureReason(error)
+  return {
+    health: {
+      store,
+      status: "blocked",
+      reason,
+      message: storageFailureMessage(reason)
+    }
+  }
+}
+
+function sanitizeHealth(store: StorageKind, health: StorageHealth): StorageHealth {
+  if (!health || typeof health !== "object") return blockedResource(store, undefined).health
+  if (health.status === "ok") return { store, status: "ok" }
+  if (health.status === "recovered") return { store, status: "recovered", source: "backup" }
+  if (health.status === "defaulted") {
+    return health.reason === "missing" || health.reason === "corrupt"
+      ? { store, status: "defaulted", reason: health.reason }
+      : blockedResource(store, undefined).health
+  }
+  if (health.status === "blocked") {
+    const reason = isStorageFailureReason(health.reason) ? health.reason : "unavailable"
+    return { store, status: "blocked", reason, message: storageFailureMessage(reason) }
+  }
+  return blockedResource(store, undefined).health
+}
+
+function storageFailureReason(error: unknown): StorageFailureReason {
+  if (isStorageIssue(error) && isStorageFailureReason(error.reason)) return error.reason
+  if (isRecord(error) && "issue" in error && isStorageIssue(error.issue) && isStorageFailureReason(error.issue.reason)) {
+    return error.issue.reason
+  }
+  return "unavailable"
+}
+
+function storageFailureMessage(reason: StorageFailureReason): string {
+  if (reason === "corrupt") return "Stored data is corrupt."
+  if (reason === "permission") return "Stored data cannot be accessed due to permissions."
+  if (reason === "recovery-failed") return "Stored data recovery failed."
+  return "Stored data is unavailable."
+}
+
+function isStorageIssue(value: unknown): value is { reason: string } {
+  return isRecord(value) && typeof value.reason === "string"
+}
+
+function isStorageFailureReason(value: unknown): value is StorageFailureReason {
+  return value === "corrupt" || value === "permission" || value === "unavailable" || value === "recovery-failed"
+}
+
+function resourceStore(resource: BootstrapResourceName): StorageKind {
+  return resource
+}
+
+function normalizeBootstrapRetryResources(value: unknown): BootstrapResourceName[] {
+  if (!Array.isArray(value) || value.length === 0) throw new Error("Retry resources must be non-empty")
+  if (value.length > bootstrapResourceNames.length) throw new Error("Retry resources must include at most six resources")
+  const resources: BootstrapResourceName[] = []
+  const seen = new Set<string>()
+  for (const candidate of value) {
+    if (typeof candidate !== "string" || !bootstrapResourceNames.includes(candidate as BootstrapResourceName)) {
+      throw new Error("Retry resources must use known resource names")
+    }
+    if (seen.has(candidate)) throw new Error("Retry resources must not contain duplicates")
+    seen.add(candidate)
+    resources.push(candidate as BootstrapResourceName)
+  }
+  return resources
+}
+
+function assertCurrentOwner(dependencies: IpcDependencies, owner: RuntimeOwner): void {
+  const currentOwner = dependencies.windows.currentOwnerForWebContents(owner.webContentsId)
+  if (!currentOwner || !sameRuntimeOwner(currentOwner, owner)) {
+    throw new Error("Renderer owner was replaced")
+  }
 }
 
 function currentOwnerForWebContents(dependencies: IpcDependencies, webContentsId: number): RuntimeOwner {

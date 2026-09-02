@@ -5,6 +5,7 @@ import {
   type WorkspaceWindowOptions
 } from "./workspace-window-manager"
 import type { RuntimeOwner } from "../runtime/owner"
+import type { LoadResult } from "../storage/storage-result"
 import type { StoredWorkspaceDocument, StoredWorkspaceWindow } from "../storage/types"
 
 const firstWorkspace = "11111111-1111-4111-8111-111111111111"
@@ -299,6 +300,75 @@ describe("WorkspaceWindowManager", () => {
 
     expect(windows.create).toHaveBeenCalledTimes(2)
     expect(created).toBe(windows.created[1])
+  })
+
+  it("returns only the workspace owned by the requesting window", async () => {
+    const first = createWorkspace(firstWorkspace)
+    const second = createWorkspace(secondWorkspace)
+    const store = {
+      ...createStore({ version: 1, windows: [first, second] }),
+      loadWithStatus: vi.fn(async () => ({
+        status: "ok" as const,
+        value: { version: 1 as const, windows: [first, second] }
+      }))
+    }
+    const windows = createWindowFactory()
+    const manager = new WorkspaceWindowManager({ snapshots: store, createWindow: windows.create })
+    const firstWindow = manager.createNew(first) as FakeWindow
+    const secondWindow = manager.createNew(second) as FakeWindow
+    firstWindow.webContents.emit("did-finish-load")
+    secondWindow.webContents.emit("did-finish-load")
+
+    const firstResult = await manager.loadWorkspaceWithStatus(manager.currentOwnerForWebContents(firstWindow.webContents.id)!)
+    const secondResult = await manager.loadWorkspaceWithStatus(manager.currentOwnerForWebContents(secondWindow.webContents.id)!)
+
+    expect(firstResult.value).toEqual(first)
+    expect(secondResult.value).toEqual(second)
+  })
+
+  it("returns no workspace data when its owner is replaced during load", async () => {
+    const saved = createWorkspace(firstWorkspace)
+    let resolveLoad!: (result: LoadResult<StoredWorkspaceDocument>) => void
+    const store = {
+      ...createStore({ version: 1, windows: [saved] }),
+      loadWithStatus: vi.fn(() => new Promise<LoadResult<StoredWorkspaceDocument>>((resolve) => { resolveLoad = resolve }))
+    }
+    const windows = createWindowFactory()
+    const manager = new WorkspaceWindowManager({ snapshots: store, createWindow: windows.create })
+    const window = manager.createNew(saved) as FakeWindow
+    window.webContents.emit("did-finish-load")
+    const owner = manager.currentOwnerForWebContents(window.webContents.id)!
+
+    const loading = manager.loadWorkspaceWithStatus(owner)
+    window.webContents.emit("did-start-loading")
+    window.webContents.emit("did-finish-load")
+    resolveLoad({ status: "ok", value: { version: 1, windows: [saved] } })
+
+    const result = await loading
+
+    expect(result).toEqual({ health: { store: "workspace", status: "ok" } })
+  })
+
+  it("does not persist a workspace after a blocked status load", async () => {
+    const store = {
+      ...createStore(),
+      loadWithStatus: vi.fn(async () => ({
+        status: "blocked" as const,
+        issue: { store: "workspace" as const, reason: "permission" as const, message: "Stored data cannot be accessed due to permissions." }
+      }))
+    }
+    const windows = createWindowFactory()
+    const manager = new WorkspaceWindowManager({ snapshots: store, createWindow: windows.create })
+    const window = manager.createNew() as FakeWindow
+    window.webContents.emit("did-finish-load")
+    const owner = manager.currentOwnerForWebContents(window.webContents.id)!
+
+    await expect(manager.loadWorkspaceWithStatus(owner)).resolves.toMatchObject({ health: { status: "blocked" } })
+    manager.saveWorkspace(owner, { sessions: [] })
+    window.emit("move")
+
+    expect(store.saveWindow).not.toHaveBeenCalled()
+    expect(store.updateWindowBounds).not.toHaveBeenCalled()
   })
 })
 

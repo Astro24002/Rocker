@@ -200,6 +200,125 @@ describe("registerIpcHandlers", () => {
       await rm(directory, { recursive: true, force: true })
     }
   })
+
+  it("returns all six bootstrap resources without protected values", async () => {
+    const harness = createHarness()
+    harness.settings.loadWithStatus.mockResolvedValue({
+      status: "ok",
+      value: { locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited", restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1" }
+    })
+    harness.history.loadWithStatus.mockResolvedValue({ status: "defaulted", value: [], reason: "missing" })
+    harness.hosts.loadWithStatus.mockResolvedValue({ status: "ok", value: [] })
+    harness.credentials.health.mockResolvedValue({ store: "credentials", status: "ok" })
+    harness.hostKeys.health.mockResolvedValue({ store: "hostKeys", status: "recovered", source: "backup" })
+    harness.windows.loadWorkspaceWithStatus.mockResolvedValue({
+      health: { store: "workspace", status: "ok" },
+      value: undefined
+    })
+    registerIpcHandlers(harness.dependencies)
+
+    const result = await invokeFrom(21, ipcChannels.bootstrapLoad)
+
+    expect(Object.keys(result as object)).toEqual(["settings", "history", "workspace", "hosts", "credentials", "hostKeys"])
+    expect(result).toMatchObject({
+      settings: { value: expect.objectContaining({ locale: "en" }), health: { store: "settings", status: "ok" } },
+      history: { value: [], health: { store: "history", status: "defaulted", reason: "missing" } },
+      workspace: { health: { store: "workspace", status: "ok" } },
+      hosts: { value: [], health: { store: "hosts", status: "ok" } },
+      credentials: { health: { store: "credentials", status: "ok" } },
+      hostKeys: { health: { store: "hostKeys", status: "recovered", source: "backup" } }
+    })
+    expect((result as { credentials: Record<string, unknown> }).credentials).not.toHaveProperty("value")
+    expect((result as { hostKeys: Record<string, unknown> }).hostKeys).not.toHaveProperty("value")
+    expect(harness.credentials.health).toHaveBeenCalledWith({ consumeHealth: true })
+    expect(harness.hostKeys.health).toHaveBeenCalledWith({ consumeHealth: true })
+  })
+
+  it("settles each bootstrap resource independently and bounds unexpected adapter errors", async () => {
+    const harness = createHarness()
+    harness.settings.loadWithStatus.mockResolvedValue({ status: "ok", value: { locale: "en" } })
+    harness.history.loadWithStatus.mockResolvedValue({ status: "ok", value: [] })
+    harness.hosts.loadWithStatus.mockRejectedValue(new Error("/private/user-data/hosts.json leaked"))
+    harness.credentials.health.mockRejectedValue(new Error("safeStorage secret leaked"))
+    harness.hostKeys.health.mockResolvedValue({ store: "hostKeys", status: "ok" })
+    harness.windows.loadWorkspaceWithStatus.mockResolvedValue({ health: { store: "workspace", status: "ok" }, value: undefined })
+    registerIpcHandlers(harness.dependencies)
+
+    const result = await invokeFrom(21, ipcChannels.bootstrapLoad) as {
+      settings: { value?: unknown }
+      history: { value?: unknown }
+      hosts: { health: Record<string, unknown> }
+      credentials: { health: Record<string, unknown> }
+      hostKeys: { health: Record<string, unknown> }
+    }
+
+    expect(result.settings.value).toEqual({ locale: "en" })
+    expect(result.history.value).toEqual([])
+    expect(result.hosts.health).toEqual({ store: "hosts", status: "blocked", reason: "unavailable", message: "Stored data is unavailable." })
+    expect(result.credentials.health).toEqual({ store: "credentials", status: "blocked", reason: "unavailable", message: "Stored data is unavailable." })
+    expect(JSON.stringify(result)).not.toContain("private/user-data")
+    expect(JSON.stringify(result)).not.toContain("safeStorage secret")
+  })
+
+  it("rejects bootstrap results when the renderer owner is replaced while loading", async () => {
+    const harness = createHarness()
+    let resolveSettings!: (result: unknown) => void
+    harness.settings.loadWithStatus.mockReturnValue(new Promise((resolve) => { resolveSettings = resolve }))
+    harness.windows.currentOwnerForWebContents
+      .mockReturnValueOnce(owner21)
+      .mockReturnValue(owner21Generation2)
+    registerIpcHandlers(harness.dependencies)
+
+    const loading = invokeFrom(21, ipcChannels.bootstrapLoad)
+    await flush()
+    resolveSettings({ status: "ok", value: {} })
+
+    await expect(loading).rejects.toThrow("Renderer owner was replaced")
+  })
+
+  it("retries only a validated selected subset of bootstrap resources", async () => {
+    const harness = createHarness()
+    harness.hosts.loadWithStatus.mockResolvedValue({ status: "recovered", value: [], source: "backup" })
+    registerIpcHandlers(harness.dependencies)
+
+    const result = await invokeFrom(21, ipcChannels.bootstrapRetry, ["hosts"])
+
+    expect(result).toEqual({ hosts: { value: [], health: { store: "hosts", status: "recovered", source: "backup" } } })
+    expect(harness.hosts.loadWithStatus).toHaveBeenCalledWith({ consumeHealth: true })
+    expect(harness.settings.loadWithStatus).not.toHaveBeenCalled()
+    expect(harness.history.loadWithStatus).not.toHaveBeenCalled()
+    expect(harness.windows.loadWorkspaceWithStatus).not.toHaveBeenCalled()
+    expect(harness.credentials.health).not.toHaveBeenCalled()
+    expect(harness.hostKeys.health).not.toHaveBeenCalled()
+  })
+
+  it("rechecks the owner before returning a bootstrap retry", async () => {
+    const harness = createHarness()
+    let resolveHosts!: (result: unknown) => void
+    harness.hosts.loadWithStatus.mockReturnValue(new Promise((resolve) => { resolveHosts = resolve }))
+    harness.windows.currentOwnerForWebContents
+      .mockReturnValueOnce(owner21)
+      .mockReturnValue(owner21Generation2)
+    registerIpcHandlers(harness.dependencies)
+
+    const retrying = invokeFrom(21, ipcChannels.bootstrapRetry, ["hosts"])
+    await flush()
+    resolveHosts({ status: "ok", value: [] })
+
+    await expect(retrying).rejects.toThrow("Renderer owner was replaced")
+  })
+
+  it.each([
+    [[], "non-empty"],
+    [["hosts", "hosts"], "duplicate"],
+    [["unknown"], "known"],
+    [["settings", "history", "workspace", "hosts", "credentials", "hostKeys", "settings"], "six"]
+  ])("rejects retry resources that are not a %s subset", async (resources, reason) => {
+    const harness = createHarness()
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.bootstrapRetry, resources)).rejects.toThrow(reason)
+  })
 })
 
 function invokeFrom(ownerWebContentsId: number, channel: string, ...args: unknown[]): Promise<unknown> {
@@ -235,9 +354,12 @@ function createHarness() {
     releaseOwner: vi.fn(),
     updateRetryPolicy: vi.fn()
   }
-  const settings = { get: vi.fn(), update: vi.fn() }
+  const settings = { get: vi.fn(), update: vi.fn(), loadWithStatus: vi.fn() }
+  const history = { add: vi.fn(), list: vi.fn(), clear: vi.fn(), loadWithStatus: vi.fn() }
+  const credentials = { get: vi.fn(), set: vi.fn(), clear: vi.fn(), health: vi.fn() }
+  const hostKeys = { health: vi.fn() }
   const diagnostics = { snapshot: vi.fn(() => [{ at: "2026-08-28T12:00:00.000Z", category: "session", action: "connected" }]) }
-  const hosts = { list: vi.fn(), save: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn() }
+  const hosts = { list: vi.fn(), save: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn(), loadWithStatus: vi.fn() }
   const currentOwnerForWebContents = vi.fn((id: number) => id === owner21.webContentsId ? owner21 : id === owner22.webContentsId ? owner22 : undefined)
   const windowForWebContents = vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined)
   const sendToOwner = vi.fn((targetOwner: RuntimeOwner, channel: string, ...args: unknown[]): boolean => {
@@ -254,17 +376,19 @@ function createHarness() {
     sendToOwner,
     workspaceForWebContents: vi.fn(),
     saveWorkspace: vi.fn(),
-    loadWorkspace: vi.fn()
+    loadWorkspace: vi.fn(),
+    loadWorkspaceWithStatus: vi.fn()
   }
   const dependencies = {
     hosts,
-    credentials: { get: vi.fn(), set: vi.fn(), clear: vi.fn() },
+    credentials,
+    hostKeys,
     sessions,
     connections,
     ports: { scan: vi.fn() },
     forwarding: { start: vi.fn(), stop: vi.fn(), list: vi.fn(), get: vi.fn(), resume: vi.fn(), ownerForForwarding: vi.fn(), releaseOwner: vi.fn() },
     monitoring: { sample: vi.fn(), clear: vi.fn() },
-    history: { add: vi.fn(), list: vi.fn(), clear: vi.fn() },
+    history,
     settings,
     diagnostics,
     diagnosticsAppVersion: "0.3.1",
@@ -283,6 +407,9 @@ function createHarness() {
     sessions,
     connections,
     settings,
+    history,
+    credentials,
+    hostKeys,
     diagnostics,
     ports: dependencies.ports,
     emitSession(event: unknown): void {

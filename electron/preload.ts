@@ -40,6 +40,10 @@ const bridge: RockerBridge = {
     load: () => ipcRenderer.invoke(ipcChannels.workspaceLoad),
     save: (snapshot) => ipcRenderer.invoke(ipcChannels.workspaceSave, snapshot)
   },
+  bootstrap: {
+    load: () => ipcRenderer.invoke(ipcChannels.bootstrapLoad),
+    retry: (resources) => ipcRenderer.invoke(ipcChannels.bootstrapRetry, resources)
+  },
   monitor: {
     sample: (sessionId) => ipcRenderer.invoke(ipcChannels.monitorSample, sessionId)
   },

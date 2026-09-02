@@ -9,6 +9,7 @@ import type {
 import type { HostMetrics } from "../monitoring/linux-metrics"
 import type { DiscoveredPort, ForwardingInfo, ForwardingSpec } from "../ports/types"
 import type { TerminalSessionEvent, TerminalSessionInfo } from "../ssh/types"
+import type { StorageHealth } from "../storage/storage-result"
 
 export interface DiagnosticsExportResult {
   canceled: boolean
@@ -40,6 +41,28 @@ export interface WorkspaceSaveRequest {
 
 export interface SessionLaunchRequest {
   hostId: string
+}
+
+export type BootstrapResourceName =
+  | "settings"
+  | "history"
+  | "workspace"
+  | "hosts"
+  | "credentials"
+  | "hostKeys"
+
+export interface BootstrapResource<T> {
+  health: StorageHealth
+  value?: T
+}
+
+export interface AppBootstrapSnapshot {
+  settings: BootstrapResource<AppSettings>
+  history: BootstrapResource<ConnectionHistoryItem[]>
+  workspace: BootstrapResource<StoredWorkspaceWindow | undefined>
+  hosts: BootstrapResource<HostProfile[]>
+  credentials: BootstrapResource<never>
+  hostKeys: BootstrapResource<never>
 }
 
 export interface RockerBridge {
@@ -90,6 +113,10 @@ export interface RockerBridge {
     get(): Promise<AppSettings>
     update(update: Partial<AppSettings>): Promise<AppSettings>
   }
+  bootstrap: {
+    load(): Promise<AppBootstrapSnapshot>
+    retry(resources: BootstrapResourceName[]): Promise<Partial<AppBootstrapSnapshot>>
+  }
   diagnostics: {
     export(): Promise<DiagnosticsExportResult>
   }
@@ -123,6 +150,8 @@ export const ipcChannels = {
   portsOpenAddress: "rocker:ports:open-address",
   workspaceLoad: "rocker:workspace:load",
   workspaceSave: "rocker:workspace:save",
+  bootstrapLoad: "rocker:bootstrap:load",
+  bootstrapRetry: "rocker:bootstrap:retry",
   monitorSample: "rocker:monitor:sample",
   historyList: "rocker:history:list",
   historyClear: "rocker:history:clear",
