@@ -1,9 +1,15 @@
 import { createHash } from "node:crypto"
+import type { StorageHealth } from "../storage/storage-result"
+
+export interface HostKeyHealthOptions {
+  consumeHealth?: boolean
+}
 
 export interface HostKeyStore {
   get(host: string, port: number): Promise<string | undefined>
   trust(host: string, port: number, fingerprint: string): Promise<void>
   replace?(host: string, port: number, expectedFingerprint: string, replacementFingerprint: string): Promise<void>
+  health?(options?: HostKeyHealthOptions): Promise<StorageHealth>
 }
 
 export type HostKeyInspection =

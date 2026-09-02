@@ -10,13 +10,8 @@ const defaultDocument: StoredHostDocument = { hosts: [] }
 export class HostStore {
   private readonly store: JsonStore<StoredHostDocument>
 
-  public constructor(filePath: string)
-  public constructor(store: JsonStore<StoredHostDocument>)
-  public constructor(store: JsonStore<unknown>)
-  public constructor(filePathOrStore: string | JsonStore<StoredHostDocument> | JsonStore<unknown>) {
-    this.store = typeof filePathOrStore === "string"
-      ? createJsonStore(filePathOrStore)
-      : filePathOrStore as JsonStore<StoredHostDocument>
+  public constructor(filePath: string) {
+    this.store = createJsonStore(filePath)
   }
 
   public async loadWithStatus(options: { consumeHealth?: boolean } = {}): Promise<LoadResult<HostProfile[]>> {

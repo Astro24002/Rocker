@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -120,6 +120,55 @@ describe("WorkspaceSnapshotStore", () => {
       status: "defaulted",
       value: { version: 1, windows: [] },
       reason: "corrupt"
+    })
+  })
+
+  it("reloads a repaired backup after a cached defaulted result", async () => {
+    const filePath = await temporaryFilePath()
+    await writeFile(filePath, "{not json", "utf8")
+    const store = new WorkspaceSnapshotStore(filePath)
+    const cached = await store.loadWithStatus()
+    expect(cached).toMatchObject({ status: "defaulted", reason: "corrupt" })
+
+    const repaired: StoredWorkspaceWindow = {
+      workspaceId,
+      maximized: false,
+      sessions: [{ sessionId, hostId: "host-a", label: "G11", cols: 120, rows: 40 }]
+    }
+    await writeFile(`${filePath}.bak`, JSON.stringify({ version: 1, windows: [repaired] }), "utf8")
+
+    expect(await store.loadWithStatus({ reload: true })).toEqual({
+      status: "recovered",
+      value: { version: 1, windows: [repaired] },
+      source: "backup"
+    })
+  })
+
+  it("reloads a repaired primary after an existing document write is blocked", async () => {
+    const filePath = await temporaryFilePath()
+    const store = new WorkspaceSnapshotStore(filePath, 0)
+    const original: StoredWorkspaceWindow = {
+      workspaceId,
+      maximized: false,
+      sessions: [{ sessionId, hostId: "host-a", label: "G11", cols: 120, rows: 40 }]
+    }
+    store.saveWindow(original)
+    await store.flush()
+
+    await rm(filePath, { recursive: true, force: true })
+    await mkdir(filePath)
+    store.saveWindow({
+      ...original,
+      workspaceId: secondSessionId
+    })
+    await expect(store.flush()).rejects.toThrow()
+
+    await rm(filePath, { recursive: true, force: true })
+    await writeFile(filePath, JSON.stringify({ version: 1, windows: [original] }), "utf8")
+
+    expect(await store.loadWithStatus({ reload: true })).toEqual({
+      status: "ok",
+      value: { version: 1, windows: [original] }
     })
   })
 

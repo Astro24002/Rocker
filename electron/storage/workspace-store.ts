@@ -40,12 +40,13 @@ export class WorkspaceSnapshotStore {
     return structuredClone(result.value)
   }
 
-  public async loadWithStatus(options: { consumeHealth?: boolean } = {}): Promise<LoadResult<StoredWorkspaceDocument>> {
-    const result = await this.ensureLoaded()
+  public async loadWithStatus(options: { consumeHealth?: boolean; reload?: boolean } = {}): Promise<LoadResult<StoredWorkspaceDocument>> {
+    const result = await this.ensureLoaded(options.reload === true)
     if (result.status === "blocked") return cloneLoadResult(result)
     const current = structuredClone(this.document ?? result.value)
-    if (options.consumeHealth && result.status !== "ok") {
-      await this.store.load({ consumeHealth: true })
+    if (options.consumeHealth && result.status !== "ok" && options.reload !== true) {
+      const consumed = await this.store.load({ consumeHealth: true })
+      if (consumed.status === "blocked") return cloneLoadResult(consumed)
     }
     return withValue(result, current)
   }
@@ -112,7 +113,7 @@ export class WorkspaceSnapshotStore {
   }
 
   private async writeNow(): Promise<void> {
-    const loaded = await this.ensureLoaded()
+    const loaded = await this.ensureLoaded(false, false)
     if (loaded.status === "blocked") throw new StorageBlockedError(loaded.issue)
     if (!this.dirty) return
     const document = structuredClone(this.document!)
@@ -122,21 +123,28 @@ export class WorkspaceSnapshotStore {
     await nextWrite
   }
 
-  private async ensureLoaded(): Promise<LoadResult<StoredWorkspaceDocument>> {
-    if (this.document) return loadResultFromHealth(this.store.health(), this.document)
-    if (!this.loading) this.loading = this.readDocument()
-    const result = await this.loading
+  private async ensureLoaded(reload = false, schedulePendingWrite = true): Promise<LoadResult<StoredWorkspaceDocument>> {
+    if (!reload && this.document) return loadResultFromHealth(this.store.health(), this.document)
+    if (reload) this.loading = undefined
+    if (!this.loading) this.loading = this.readDocument(reload)
+    const loading = this.loading
+    const result = await loading
     if (result.status === "blocked") {
-      this.loading = undefined
+      if (this.loading === loading) this.loading = undefined
       return result
     }
     this.document = structuredClone(result.value)
     for (const mutation of this.pendingMutations.splice(0)) mutation(this.document)
+    if (schedulePendingWrite && this.dirty) this.scheduleWrite()
     return withValue(result, this.document)
   }
 
-  private async readDocument(): Promise<LoadResult<StoredWorkspaceDocument>> {
-    return this.store.load()
+  private async readDocument(reload: boolean): Promise<LoadResult<StoredWorkspaceDocument>> {
+    if (!reload) return this.store.load()
+    const first = await this.store.load({ consumeHealth: true })
+    if (first.status !== "defaulted" || first.reason !== "corrupt") return first
+    const refreshed = await this.store.load()
+    return refreshed
   }
 }
 

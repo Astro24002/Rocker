@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { JsonHostKeyStore } from "./host-key-store"
+import type { HostKeyStore } from "./host-keys"
 
 const temporaryPaths: string[] = []
 
@@ -17,7 +18,8 @@ describe("JsonHostKeyStore", () => {
     const filePath = join(directory, "host-keys.json")
     await writeFile(filePath, JSON.stringify({ fingerprints: "invalid" }), "utf8")
 
-    const store = new JsonHostKeyStore(filePath)
+    const store: HostKeyStore = new JsonHostKeyStore(filePath)
+    if (!store.health) throw new Error("Host Key store health API is missing")
     const health = await store.health()
 
     expect(health).toMatchObject({ store: "hostKeys", status: "blocked", reason: "corrupt" })

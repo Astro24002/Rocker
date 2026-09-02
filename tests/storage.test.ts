@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest"
 import { CredentialVault, type CredentialCipher } from "../electron/storage/credentials"
 import { JsonCredentialValueStore } from "../electron/storage/credential-store"
 import { HostStore } from "../electron/storage/host-store"
-import { JsonStore } from "../electron/storage/json-store"
 import { StorageBlockedError } from "../electron/storage/storage-result"
 import type { HostProfile } from "../electron/storage/types"
 
@@ -55,7 +54,7 @@ describe("local host storage", () => {
     const directory = await mkdtemp(join(tmpdir(), "rocker-storage-"))
     temporaryPaths.push(directory)
     const filePath = join(directory, "rocker.json")
-    const store = new HostStore(new JsonStore(filePath))
+    const store = new HostStore(filePath)
     const profile: HostProfile = {
       id: "host-1",
       name: "Production",

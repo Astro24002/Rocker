@@ -54,6 +54,8 @@ The same matrix passed after each adapter mutation path was moved to
 
 ## Verification
 
+Pre-review verification:
+
 ```text
 npx vitest run electron/storage/json-store.test.ts \
   electron/storage/settings-store.test.ts \
@@ -71,8 +73,41 @@ PASS: 50 files, 321 passed, 1 skipped
 
 `git diff --check` also passes. Existing user image changes were not touched.
 
+## Review Fixes
+
+The independent review found that a cached Workspace document prevented a
+repaired primary or backup from being observed on retry, and that a failed
+write left an in-memory document ahead of a blocked JsonStore health state.
+`loadWithStatus({ reload: true })` now performs a fresh queued load, consumes
+stale non-blocked health, rechecks corrupt-default results, and replaces the
+cached document only after a valid load. Regression tests cover repaired
+backup recovery and repaired-primary recovery after a blocked write.
+
+The public `HostKeyStore` interface now declares optional health-only status,
+and HostStore accepts only a file path so callers cannot inject a legacy
+identity JsonStore that bypasses the Hosts blocked policy. Tests use the
+policy-configured path constructor.
+
+Post-review verification:
+
+```text
+npx vitest run electron/storage/workspace-store.test.ts \
+  electron/ssh/host-key-store.test.ts tests/storage.test.ts \
+  tests/history-store.test.ts electron/storage/settings-store.test.ts
+PASS: 5 files, 23 tests
+
+npm test
+PASS: 50 files, 334 passed, 1 skipped
+
+npm run typecheck
+BLOCKED by unrelated uncommitted Task 3 changes in the shared worktree:
+electron/main.ts, electron/preload.ts, electron/ipc/register.test.ts,
+src/app/bridge.ts, and electron/windows/workspace-window-manager.test.ts.
+```
+
 ## Concerns
 
 Workspace window bootstrap still owns the compatibility `load()` call and may
 be migrated to owner-scoped status loading by Task 3. The adapter now exposes
-the status needed for that migration without returning protected values.
+the status and explicit reload path needed for that migration without
+returning protected values.
