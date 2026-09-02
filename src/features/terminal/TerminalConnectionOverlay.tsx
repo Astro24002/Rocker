@@ -7,10 +7,11 @@ interface TerminalConnectionOverlayProps {
   session?: WorkspaceSession
   onCancel(): void
   onReconnectNow(): void
+  reconnectDisabled?: boolean
   onClose?(): void
 }
 
-export function TerminalConnectionOverlay({ session, onCancel, onReconnectNow, onClose = onCancel }: TerminalConnectionOverlayProps) {
+export function TerminalConnectionOverlay({ session, onCancel, onReconnectNow, reconnectDisabled = false, onClose = onCancel }: TerminalConnectionOverlayProps) {
   const { t } = useI18n()
   if (!session || session.state === "idle" || session.state === "connected" || session.state === "closing") return null
 
@@ -27,7 +28,7 @@ export function TerminalConnectionOverlay({ session, onCancel, onReconnectNow, o
       <div className="terminal-connection-copy"><strong>{t(presentation.titleKey as Parameters<typeof t>[0])}</strong>{detail && <span>{detail}</span>}{attempt && <span>{attempt}</span>}</div>
       <div className="terminal-connection-actions">
         {presentation.showCancel && <button aria-label={cancelLabel} className="terminal-overlay-button" type="button" onClick={onCancel}><X size={13} /><span>{cancelLabel}</span></button>}
-        {presentation.showRetry && <button aria-label={isRetrying ? t("terminal.reconnectNow") : t("terminal.reconnect")} className="terminal-overlay-button terminal-overlay-primary" type="button" onClick={onReconnectNow}><RotateCw size={13} /><span>{isRetrying ? t("terminal.reconnectNow") : t("terminal.reconnect")}</span></button>}
+        {presentation.showRetry && <button aria-label={isRetrying ? t("terminal.reconnectNow") : t("terminal.reconnect")} disabled={reconnectDisabled} className="terminal-overlay-button terminal-overlay-primary" type="button" onClick={() => { if (!reconnectDisabled) onReconnectNow() }}><RotateCw size={13} /><span>{isRetrying ? t("terminal.reconnectNow") : t("terminal.reconnect")}</span></button>}
         {presentation.showClose && <button aria-label={t("terminal.closeSession")} className="terminal-overlay-button" type="button" onClick={onClose}><X size={13} /><span>{t("terminal.closeSession")}</span></button>}
       </div>
     </section>

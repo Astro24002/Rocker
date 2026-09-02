@@ -18,6 +18,30 @@ const settings: AppSettings = {
 }
 
 describe("SettingsView", () => {
+  it("keeps diagnostics available while disabling setting mutations", () => {
+    const onUpdate = vi.fn()
+    const onLocaleChange = vi.fn()
+    const onExportDiagnostics = vi.fn(async () => ({ canceled: true }))
+    render(<I18nProvider><SettingsView
+      locale="en"
+      settings={settings}
+      disabled
+      onLocaleChange={onLocaleChange}
+      onUpdate={onUpdate}
+      onExportDiagnostics={onExportDiagnostics}
+    /></I18nProvider>)
+
+    expect(screen.getByRole("combobox", { name: "Terminal font" })).toBeDisabled()
+    expect(screen.getByRole("checkbox", { name: "Automatic reconnect" })).toBeDisabled()
+    fireEvent.change(screen.getByRole("combobox", { name: "Terminal font" }), { target: { value: "Consolas" } })
+    fireEvent.click(screen.getByRole("button", { name: "简体中文" }))
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(onLocaleChange).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }))
+    expect(onExportDiagnostics).toHaveBeenCalledTimes(1)
+  })
+
   it("exposes controlled reconnect, restoration, and multi-line paste preferences", () => {
     const onUpdate = vi.fn()
     render(<I18nProvider><SettingsView locale="en" settings={settings} onLocaleChange={vi.fn()} onUpdate={onUpdate} onExportDiagnostics={vi.fn(async () => ({ canceled: true }))} /></I18nProvider>)

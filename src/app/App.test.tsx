@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { RockerBridge } from "../../electron/ipc/bridge-contract"
+import type { AppBootstrapSnapshot, BootstrapHostProfile, RockerBridge } from "../../electron/ipc/bridge-contract"
+import type { StorageHealth } from "../../electron/storage/storage-result"
 import type { TerminalSessionEvent } from "../../electron/ssh/types"
 import { clampSidebarWidth } from "../components/Sidebar"
 import type { TerminalWorkspaceState } from "../features/terminal/session-state"
@@ -59,6 +60,97 @@ beforeEach(() => {
 })
 
 describe("desktop workspace shell", () => {
+  it("loads renderer data through one bootstrap request", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
+    render(<App />)
+
+    await waitFor(() => expect(bridge.bootstrap.load).toHaveBeenCalledTimes(1))
+    expect(bridge.hosts.list).not.toHaveBeenCalled()
+    expect(bridge.history.list).not.toHaveBeenCalled()
+    expect(bridge.settings.get).not.toHaveBeenCalled()
+    expect(bridge.workspace.load).not.toHaveBeenCalled()
+  })
+
+  it("never saves workspace after bootstrap rejection", async () => {
+    bridge.bootstrap.load.mockRejectedValue(new Error("bootstrap unavailable"))
+    render(<App />)
+
+    await waitFor(() => expect(bridge.bootstrap.load).toHaveBeenCalledTimes(1))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(bridge.workspace.save).not.toHaveBeenCalled()
+  })
+
+  it("offers a full bootstrap retry after a rejected load", async () => {
+    bridge.bootstrap.load.mockRejectedValue(new Error("bootstrap unavailable"))
+    bridge.bootstrap.retry.mockResolvedValue(bootstrapSnapshot([], undefined))
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }))
+    await waitFor(() => expect(bridge.bootstrap.retry).toHaveBeenCalledWith(["settings", "history", "workspace", "hosts", "credentials", "hostKeys"]))
+  })
+
+  it("retries only failed bootstrap resources", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], undefined, { hosts: { health: blockedHealth("hosts"), value: [] } }))
+    bridge.bootstrap.retry.mockResolvedValue({ hosts: { health: okHealth("hosts"), value: [bootstrapHost(host)] } })
+    render(<App />)
+
+    const retry = await screen.findByRole("button", { name: "Retry" })
+    fireEvent.click(retry)
+    await waitFor(() => expect(bridge.bootstrap.retry).toHaveBeenCalledWith(["hosts"]))
+    expect(bridge.bootstrap.load).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps the workspace save gate closed while a retry is rejected", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], undefined, { hosts: { health: blockedHealth("hosts"), value: [] } }))
+    bridge.bootstrap.retry.mockRejectedValue(new Error("retry unavailable"))
+    render(<App />)
+
+    await waitFor(() => expect(bridge.workspace.save).toHaveBeenCalled())
+    bridge.workspace.save.mockClear()
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }))
+    await waitFor(() => expect(bridge.bootstrap.retry).toHaveBeenCalledWith(["hosts"]))
+    expect(bridge.workspace.save).not.toHaveBeenCalled()
+  })
+
+  it("disables security actions while keeping local navigation and settings available", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined, {
+      hosts: { health: blockedHealth("hosts"), value: [bootstrapHost(host)] }, credentials: { health: blockedHealth("credentials") }, hostKeys: { health: blockedHealth("hostKeys") }
+    }))
+    render(<App />)
+
+    const addButtons = await screen.findAllByRole("button", { name: "Add host" })
+    expect(addButtons.length).toBeGreaterThan(0)
+    addButtons.forEach((button) => expect(button).toBeDisabled())
+    expect(screen.getByRole("button", { name: "Import SSH config" })).toBeDisabled()
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+    expect(screen.getAllByRole("button", { name: "Export diagnostics" }).some((button) => !button.hasAttribute("disabled"))).toBe(true)
+    fireEvent.click(screen.getByRole("button", { name: "Local Terminal" }))
+    expect(screen.getByText("No active sessions")).toBeInTheDocument()
+  })
+
+  it("resumes a queued workspace session after security resources recover", async () => {
+    const storedWorkspace = workspaceSnapshot(host.id)
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], storedWorkspace, {
+      hosts: { health: blockedHealth("hosts"), value: [] },
+      credentials: { health: blockedHealth("credentials") },
+      hostKeys: { health: blockedHealth("hostKeys") }
+    }))
+    bridge.bootstrap.retry.mockResolvedValue({
+      hosts: { health: okHealth("hosts"), value: [bootstrapHost(host)] },
+      credentials: { health: okHealth("credentials") },
+      hostKeys: { health: okHealth("hostKeys") }
+    })
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    expect(bridge.sessions.open).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }))
+
+    await waitFor(() => expect(bridge.sessions.beginRestore).toHaveBeenCalledWith(storedWorkspace.activeSessionId))
+    await waitFor(() => expect(bridge.sessions.open).toHaveBeenCalledWith(expect.objectContaining({ hostId: host.id })))
+  })
+
   it("uses the modern professional tool shell", () => {
     render(<App />)
 
@@ -75,10 +167,11 @@ describe("desktop workspace shell", () => {
     expect(screen.getByRole("button", { name: "History" })).toBeInTheDocument()
   })
 
-  it("switches locale without reloading", () => {
+  it("switches locale without reloading", async () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "简体中文" })).toBeEnabled())
     fireEvent.click(screen.getByRole("button", { name: "简体中文" }))
 
     expect(screen.getByRole("button", { name: "主机" })).toBeInTheDocument()
@@ -89,8 +182,8 @@ describe("desktop workspace shell", () => {
     await waitFor(() => expect(bridge.events.onSessionEvent).toHaveBeenCalledTimes(1))
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "简体中文" })).toBeEnabled())
     fireEvent.click(screen.getByRole("button", { name: "简体中文" }))
-
     await waitFor(() => expect(screen.getByRole("button", { name: "主机" })).toBeInTheDocument())
     expect(bridge.events.onSessionEvent).toHaveBeenCalledTimes(1)
   })
@@ -102,8 +195,7 @@ describe("desktop workspace shell", () => {
   })
 
   it("routes output packets to a controller without putting bytes in workspace state", async () => {
-    bridge.hosts.list.mockResolvedValue([host])
-    bridge.workspace.load.mockResolvedValue(workspaceSnapshot(host.id))
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
     render(<App />)
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(1))
@@ -121,12 +213,11 @@ describe("desktop workspace shell", () => {
   })
 
   it("keeps a missing restored host closable without opening a network session", async () => {
-    bridge.workspace.load.mockResolvedValue({
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], {
       workspaceId: "11111111-1111-4111-8111-111111111111",
       maximized: false,
       sessions: [{ sessionId: "22222222-2222-4222-8222-222222222222", hostId: "missing", label: "Old host", cols: 120, rows: 40 }]
-    })
-    bridge.hosts.list.mockResolvedValue([])
+    }))
     render(<App />)
 
     await waitFor(() => expect(workspace().sessions[0]).toMatchObject({ state: "error", reason: "configuration" }))
@@ -135,8 +226,7 @@ describe("desktop workspace shell", () => {
   })
 
   it("keeps terminal recovery independent from a failed monitor sample", async () => {
-    bridge.hosts.list.mockResolvedValue([host])
-    bridge.workspace.load.mockResolvedValue(workspaceSnapshot(host.id))
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
     bridge.monitor.sample.mockRejectedValue(new Error("monitor unavailable"))
     render(<App />)
 
@@ -156,8 +246,7 @@ describe("desktop workspace shell", () => {
   })
 
   it("routes terminal recovery actions through the bridge and closes only explicitly", async () => {
-    bridge.hosts.list.mockResolvedValue([host])
-    bridge.workspace.load.mockResolvedValue(workspaceSnapshot(host.id))
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
     render(<App />)
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(1))
@@ -185,8 +274,7 @@ describe("desktop workspace shell", () => {
   it("submits hydrated workspace metadata without a renderer-side debounce", async () => {
     vi.useFakeTimers()
     try {
-      bridge.hosts.list.mockResolvedValue([host])
-      bridge.workspace.load.mockResolvedValue(workspaceSnapshot(host.id))
+      bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
       render(<App />)
 
       await act(async () => {
@@ -259,6 +347,10 @@ function createBridge() {
       load: vi.fn(async (): Promise<StoredWorkspaceWindow | undefined> => undefined),
       save: vi.fn(async () => undefined)
     },
+    bootstrap: {
+      load: vi.fn(async () => bootstrapSnapshot([], undefined)),
+      retry: vi.fn(async () => ({}))
+    },
     monitor: { sample: vi.fn(async (sessionId: string) => ({ sessionId, latencyMs: 1, cpuPercent: null, memoryPercent: null, diskPercent: null, loadAverage: null, receiveBytesPerSecond: null, transmitBytesPerSecond: null, sampledAt: "2026-08-19T12:00:00.000Z" })) },
     history: { list: vi.fn(async () => []), clear: vi.fn(async () => undefined) },
     settings: {
@@ -274,4 +366,33 @@ function createBridge() {
       onSessionLaunch: vi.fn(() => vi.fn())
     }
   }
+}
+
+function bootstrapSnapshot(hosts: HostProfile[], workspace: StoredWorkspaceWindow | undefined, overrides: Partial<AppBootstrapSnapshot> = {}): AppBootstrapSnapshot {
+  return {
+    settings: { health: okHealth("settings"), value: {
+      locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13,
+      connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited", restorePreviousWorkspace: true,
+      confirmMultilinePaste: true, bindAddress: "127.0.0.1"
+    } },
+    history: { health: okHealth("history"), value: [] },
+    workspace: { health: okHealth("workspace"), value: workspace },
+    hosts: { health: okHealth("hosts"), value: hosts.map(bootstrapHost) },
+    credentials: { health: okHealth("credentials") },
+    hostKeys: { health: okHealth("hostKeys") },
+    ...overrides
+  }
+}
+
+function bootstrapHost(profile: HostProfile): BootstrapHostProfile {
+  const { identityFile: _identityFile, ...safeProfile } = profile
+  return { ...safeProfile, hasIdentityFile: Boolean(profile.identityFile) }
+}
+
+function okHealth(store: StorageHealth["store"]): StorageHealth {
+  return { store, status: "ok" }
+}
+
+function blockedHealth(store: StorageHealth["store"]): StorageHealth {
+  return { store, status: "blocked", reason: "corrupt", message: "safe blocked" }
 }

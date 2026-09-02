@@ -7,6 +7,7 @@ import { filterHosts } from "./host-state"
 
 interface HostListProps {
   hosts: HostProfile[]
+  disabled?: boolean
   onConnect(host: HostProfile): void
   onAdd(): void
   onEdit(host: HostProfile): void
@@ -14,7 +15,7 @@ interface HostListProps {
   onFavorite(host: HostProfile): void
 }
 
-export function HostList({ hosts, onConnect, onAdd, onEdit, onImport, onFavorite }: HostListProps) {
+export function HostList({ hosts, disabled = false, onConnect, onAdd, onEdit, onImport, onFavorite }: HostListProps) {
   const { t } = useI18n()
   const [query, setQuery] = useState("")
   const [group, setGroup] = useState("all")
@@ -30,8 +31,8 @@ export function HostList({ hosts, onConnect, onAdd, onEdit, onImport, onFavorite
           <p>{t("hosts.subtitle")}</p>
         </div>
         <div className="header-actions">
-          <button className="secondary-command" type="button" onClick={onImport}><Import size={15} />{t("hosts.import")}</button>
-          <button className="primary-command" type="button" onClick={onAdd}><Plus size={15} />{t("hosts.add")}</button>
+          <button className="secondary-command" type="button" disabled={disabled} onClick={() => { if (!disabled) onImport() }}><Import size={15} />{t("hosts.import")}</button>
+          <button className="primary-command" type="button" disabled={disabled} onClick={() => { if (!disabled) onAdd() }}><Plus size={15} />{t("hosts.add")}</button>
         </div>
       </header>
 
@@ -53,14 +54,14 @@ export function HostList({ hosts, onConnect, onAdd, onEdit, onImport, onFavorite
               <div className="empty-symbol"><Server size={24} strokeWidth={1.5} /></div>
               <h2>{t("hosts.emptyTitle")}</h2>
               <p>{t("hosts.emptyBody")}</p>
-              <button className="primary-command" type="button" onClick={onAdd}><Plus size={15} />{t("hosts.add")}</button>
+              <button className="primary-command" type="button" disabled={disabled} onClick={() => { if (!disabled) onAdd() }}><Plus size={15} />{t("hosts.add")}</button>
             </div>
           ) : (
             <div className="host-table" role="list">
               <div className="host-table-heading"><span>Host</span><span>Address</span><span>User</span><span>Group</span><span /></div>
               {filtered.map((host) => (
-                <div key={host.id} className="host-row" role="listitem" onDoubleClick={() => onConnect(host)}>
-                  <button className="host-identity" type="button" onClick={() => onConnect(host)}>
+                <div key={host.id} className="host-row" role="listitem" onDoubleClick={() => { if (!disabled) onConnect(host) }}>
+                  <button className="host-identity" type="button" disabled={disabled} onClick={() => { if (!disabled) onConnect(host) }}>
                     <span className="host-avatar"><Server size={15} /></span>
                     <span><strong>{host.name}</strong><small>SSH · {host.port}</small></span>
                   </button>
@@ -68,8 +69,8 @@ export function HostList({ hosts, onConnect, onAdd, onEdit, onImport, onFavorite
                   <span>{host.username}</span>
                   <span>{host.group || "—"}</span>
                   <div className="host-row-actions">
-                    <IconButton label="Favorite" className={host.favorite ? "is-favorite" : ""} onClick={() => onFavorite(host)}><Star size={14} fill={host.favorite ? "currentColor" : "none"} /></IconButton>
-                    <IconButton label={t("common.more")} onClick={() => onEdit(host)}><Ellipsis size={15} /></IconButton>
+                    <IconButton label="Favorite" disabled={disabled} className={host.favorite ? "is-favorite" : ""} onClick={() => { if (!disabled) onFavorite(host) }}><Star size={14} fill={host.favorite ? "currentColor" : "none"} /></IconButton>
+                    <IconButton label={t("common.more")} disabled={disabled} onClick={() => { if (!disabled) onEdit(host) }}><Ellipsis size={15} /></IconButton>
                   </div>
                 </div>
               ))}

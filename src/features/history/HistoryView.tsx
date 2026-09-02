@@ -7,11 +7,13 @@ import { useI18n } from "../../i18n"
 interface HistoryViewProps {
   items: ConnectionHistoryItem[]
   hosts: HostProfile[]
+  disabled?: boolean
+  reconnectDisabled?: boolean
   onReconnect(host: HostProfile): void
   onClear(): void
 }
 
-export function HistoryView({ items, hosts, onReconnect, onClear }: HistoryViewProps) {
+export function HistoryView({ items, hosts, disabled = false, reconnectDisabled = false, onReconnect, onClear }: HistoryViewProps) {
   const { t } = useI18n()
   const [query, setQuery] = useState("")
   const rows = useMemo(() => items.map((item) => ({ item, host: hosts.find((host) => host.id === item.hostId) }))
@@ -21,7 +23,7 @@ export function HistoryView({ items, hosts, onReconnect, onClear }: HistoryViewP
     <section className="history-view">
       <header className="view-header">
         <div><span className="view-eyebrow">Rocker / {t("workspace.personal")}</span><h1>{t("history.title")}</h1><p>Recent connections are stored on this device.</p></div>
-        <IconButton label="Clear history" onClick={onClear}><Trash2 size={16} /></IconButton>
+        <IconButton label="Clear history" disabled={disabled} onClick={() => { if (!disabled) onClear() }}><Trash2 size={16} /></IconButton>
       </header>
       <div className="history-content">
         <label className="search-field"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("common.search")} /></label>
@@ -33,7 +35,7 @@ export function HistoryView({ items, hosts, onReconnect, onClear }: HistoryViewP
               <span>{new Date(item.connectedAt).toLocaleString()}</span>
               <span>{formatDuration(item.durationMs)}</span>
               <span className="history-outcome" data-outcome={item.outcome}>{item.outcome}</span>
-              <IconButton label="Reconnect" disabled={!host} onClick={() => host && onReconnect(host)}><RotateCcw size={14} /></IconButton>
+              <IconButton label="Reconnect" disabled={!host || reconnectDisabled} onClick={() => { if (host && !reconnectDisabled) onReconnect(host) }}><RotateCcw size={14} /></IconButton>
             </div>
           ))}
         </div>

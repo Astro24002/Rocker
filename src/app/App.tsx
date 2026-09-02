@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
 import { ComingSoonView } from "../components/ComingSoonView"
+import { RecoveryBanner } from "../components/RecoveryBanner"
 import { Sidebar, clampSidebarWidth, type NavKey } from "../components/Sidebar"
 import { WindowChrome } from "../components/WindowChrome"
 import { HostEditor } from "../features/hosts/HostEditor"
@@ -24,7 +25,9 @@ import {
 import { TerminalWorkspace } from "../features/terminal/TerminalWorkspace"
 import { type TerminalController } from "../features/terminal/terminal-controller"
 import { I18nProvider, useI18n } from "../i18n"
+import { bootstrapReducer, createBootstrapState, deriveBootstrapCapabilities, retryableBootstrapResources } from "./bootstrap-state"
 import { getRockerBridge } from "./bridge"
+import type { BootstrapResourceName } from "../../electron/ipc/bridge-contract"
 import type {
   AppSettings,
   ConnectionHistoryItem,
@@ -79,7 +82,7 @@ function Workspace() {
   const [history, setHistory] = useState<ConnectionHistoryItem[]>([])
   const [editor, setEditor] = useState<{ open: boolean; profile?: HostProfile }>({ open: false })
   const [workspace, setWorkspace] = useState<TerminalWorkspaceState>(createTerminalWorkspaceState)
-  const [workspaceHydrated, setWorkspaceHydrated] = useState(false)
+  const [bootstrapState, dispatchBootstrap] = useReducer(bootstrapReducer, undefined, createBootstrapState)
   const [monitor, setMonitor] = useState(createMonitorState)
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -92,6 +95,21 @@ function Workspace() {
   const pendingOpens = useRef(new Map<string, PendingTerminalOpen>())
   const openingSessionIds = useRef(new Set<string>())
   const restoreAdmission = useRef<RestoreAdmission | undefined>(undefined)
+  const workspaceWritable = useRef(false)
+  const bootstrapMounted = useRef(true)
+  const retryInFlight = useRef(false)
+  const retryGeneration = useRef(0)
+  const capabilities = useMemo(() => deriveBootstrapCapabilities(bootstrapState), [bootstrapState])
+  const settingsMutationsAvailable = capabilities.settingsWritable
+
+  useEffect(() => {
+    bootstrapMounted.current = true
+    retryGeneration.current += 1
+    return () => {
+      bootstrapMounted.current = false
+      retryGeneration.current += 1
+    }
+  }, [])
 
   const markSessionState = useCallback((sessionId: string, state: TerminalStateEvent["state"], reason?: TerminalFailureReason): void => {
     setWorkspace((current) => {
@@ -115,9 +133,9 @@ function Workspace() {
     void bridge.sessions.completeRestore().catch(() => undefined)
   }, [bridge])
 
-  const openPendingSession = useCallback(async (sessionId: string, dimensions: TerminalDimensions): Promise<void> => {
+  const openPendingSession = useCallback(async (sessionId: string, dimensions: TerminalDimensions, bypassCapabilityCheck = false): Promise<void> => {
     const pending = pendingOpens.current.get(sessionId)
-    if (!pending || openingSessionIds.current.has(sessionId)) return
+    if (!pending || openingSessionIds.current.has(sessionId) || (!capabilities.sshAvailable && !bypassCapabilityCheck)) return
 
     pendingOpens.current.delete(sessionId)
     openingSessionIds.current.add(sessionId)
@@ -142,7 +160,7 @@ function Workspace() {
     } finally {
       openingSessionIds.current.delete(sessionId)
     }
-  }, [bridge, markSessionState, releaseRestoreAdmission])
+  }, [bridge, capabilities.sshAvailable, markSessionState, releaseRestoreAdmission])
 
   const handleTerminalResize = useCallback((sessionId: string, channelGeneration: number, dimensions: TerminalDimensions): void => {
     setWorkspace((current) => {
@@ -196,11 +214,12 @@ function Workspace() {
   }, [])
 
   const queueSessionOpen = useCallback((host: HostProfile, label: string, options: Pick<PendingTerminalOpen, "forceNewConnection"> = {}): void => {
+    if (!capabilities.sshAvailable) return
     const sessionId = crypto.randomUUID()
     pendingOpens.current.set(sessionId, { hostId: host.id, forceNewConnection: options.forceNewConnection })
     setWorkspace((current) => openSession(current, { id: sessionId, hostId: host.id, label }))
     setActiveNav("terminal")
-  }, [])
+  }, [capabilities.sshAvailable])
 
   useEffect(() => {
     const unsubscribeSession = bridge.events.onSessionEvent(handleSessionEvent)
@@ -209,38 +228,41 @@ function Workspace() {
 
   useEffect(() => {
     const unsubscribeLaunch = bridge.events.onSessionLaunch(({ hostId }) => {
+      if (!capabilities.sshAvailable) return
       void bridge.hosts.list().then((availableHosts) => {
         const host = availableHosts.find((candidate) => candidate.id === hostId)
         if (host) queueSessionOpen(host, host.name, { forceNewConnection: true })
       }).catch(() => undefined)
     })
     return unsubscribeLaunch
-  }, [bridge, queueSessionOpen])
+  }, [bridge, capabilities.sshAvailable, queueSessionOpen])
 
   useEffect(() => {
     let cancelled = false
 
     const initialize = async (): Promise<void> => {
+      dispatchBootstrap({ type: "load-start" })
       try {
-        const [availableHosts, loadedHistory, storedSettings] = await Promise.all([
-          bridge.hosts.list(),
-          bridge.history.list(),
-          bridge.settings.get()
-        ])
+        const snapshot = await bridge.bootstrap.load()
         if (cancelled) return
 
+        workspaceWritable.current = isWorkspaceWritable(snapshot.workspace.health.status)
+        dispatchBootstrap({ type: "load-success", snapshot })
+        const snapshotCapabilities = deriveBootstrapCapabilities(snapshot)
+
+        const availableHosts = snapshot.hosts.health.status === "blocked" ? [] : snapshot.hosts.value ?? []
+        const loadedHistory = snapshot.history.health.status === "blocked" ? [] : snapshot.history.value ?? []
+        const storedSettings = snapshot.settings.health.status === "blocked" ? defaultSettings : snapshot.settings.value ?? defaultSettings
         setHosts(availableHosts)
         setHistory(loadedHistory)
         setSettings(storedSettings)
         setLocale(storedSettings.locale)
         setSidebarWidth(clampSidebarWidth(storedSettings.sidebarWidth))
 
-        if (storedSettings.restorePreviousWorkspace) {
-          const snapshot = await bridge.workspace.load()
-          if (cancelled) return
-          if (snapshot) {
-            const restored = restoreWorkspace(snapshot, availableHosts)
-            if (restored.restoreActiveSessionId) {
+        if (storedSettings.restorePreviousWorkspace && workspaceWritable.current && snapshot.workspace.value) {
+          const restored = restoreWorkspace(snapshot.workspace.value, availableHosts, snapshot.hosts.health.status !== "blocked")
+          if (restored.restoreActiveSessionId) {
+            if (snapshotCapabilities.sshAvailable) {
               try {
                 await bridge.sessions.beginRestore(restored.restoreActiveSessionId)
               } catch {
@@ -251,30 +273,129 @@ function Workspace() {
                 return
               }
               restoreAdmission.current = { pendingSessionIds: new Set(restored.pending.map((entry) => entry.sessionId)) }
-              for (const pending of restored.pending) {
-                pendingOpens.current.set(pending.sessionId, {
-                  hostId: pending.hostId,
-                  restorePriority: pending.restorePriority
-                })
-              }
             }
-            setWorkspace(restored.workspace)
-            if (restored.workspace.sessions.length > 0) setActiveNav("terminal")
+            for (const pending of restored.pending) {
+              pendingOpens.current.set(pending.sessionId, {
+                hostId: pending.hostId,
+                restorePriority: pending.restorePriority
+              })
+            }
           }
+          if (cancelled) {
+            if (restoreAdmission.current) void bridge.sessions.completeRestore().catch(() => undefined)
+            return
+          }
+          setWorkspace(restored.workspace)
+          if (restored.workspace.sessions.length > 0) setActiveNav("terminal")
         }
-      } finally {
-        if (!cancelled) setWorkspaceHydrated(true)
+      } catch {
+        if (!cancelled) {
+          workspaceWritable.current = false
+          dispatchBootstrap({ type: "load-error" })
+        }
       }
     }
 
-    void initialize().catch(() => undefined)
+    void initialize()
     return () => { cancelled = true }
   }, [bridge])
 
   useEffect(() => {
-    if (!workspaceHydrated) return
+    if (!workspaceWritable.current) return
     void bridge.workspace.save(serializeWorkspace(workspace)).catch(() => undefined)
-  }, [bridge, workspace, workspaceHydrated])
+  }, [bridge, bootstrapState.phase, workspace])
+
+  const retryBootstrap = useCallback(async (resources: BootstrapResourceName[]): Promise<void> => {
+    if (resources.length === 0 || retryInFlight.current) return
+    const selectedResources = retryableBootstrapResources(bootstrapState)
+    if (selectedResources.length === 0) return
+    const generation = retryGeneration.current
+    const isActive = (): boolean => bootstrapMounted.current && retryGeneration.current === generation
+    retryInFlight.current = true
+    workspaceWritable.current = false
+    dispatchBootstrap({ type: "retry-start", resources: selectedResources })
+
+    try {
+      const result = await bridge.bootstrap.retry(selectedResources)
+      if (!isActive()) return
+      const mergedResources = { ...bootstrapState.resources, ...result }
+      const mergedCapabilities = deriveBootstrapCapabilities(mergedResources)
+      let nextSettings = settings
+      if (result.settings) {
+        nextSettings = result.settings.health.status === "blocked" ? defaultSettings : result.settings.value ?? defaultSettings
+        setSettings(nextSettings)
+        setLocale(nextSettings.locale)
+        setSidebarWidth(clampSidebarWidth(nextSettings.sidebarWidth))
+      }
+      if (result.history) setHistory(result.history.health.status === "blocked" ? [] : result.history.value ?? [])
+      if (result.hosts) setHosts(result.hosts.health.status === "blocked" ? [] : result.hosts.value ?? [])
+
+      let restoredWorkspace: TerminalWorkspaceState | undefined
+      if (result.workspace) {
+        const workspaceCanWrite = mergedCapabilities.workspaceWritable
+        workspaceWritable.current = workspaceCanWrite
+        if (workspaceCanWrite && result.workspace.value && nextSettings.restorePreviousWorkspace) {
+          const availableHosts = result.hosts?.health.status === "blocked"
+            ? []
+            : result.hosts?.value ?? hosts
+          const hostsKnown = mergedResources.hosts?.health.status !== undefined && mergedResources.hosts.health.status !== "blocked"
+          const restored = restoreWorkspace(result.workspace.value, availableHosts, hostsKnown)
+          restoredWorkspace = restored.workspace
+          for (const pending of restored.pending) {
+            pendingOpens.current.set(pending.sessionId, { hostId: pending.hostId, restorePriority: pending.restorePriority })
+          }
+          if (mergedCapabilities.sshAvailable && restored.restoreActiveSessionId) {
+            try {
+              await bridge.sessions.beginRestore(restored.restoreActiveSessionId)
+              if (!isActive()) {
+                void bridge.sessions.completeRestore().catch(() => undefined)
+                return
+              }
+              restoreAdmission.current = { pendingSessionIds: new Set(restored.pending.map((entry) => entry.sessionId)) }
+            } catch {
+              if (!isActive()) return
+              // Individual session opens still retain their ordering if admission is unavailable.
+            }
+          }
+          setWorkspace(restored.workspace)
+          if (restored.workspace.sessions.length > 0) setActiveNav("terminal")
+        }
+      }
+      const restoreSource = restoredWorkspace ?? workspace
+      const pendingRestoreEntries = [...pendingOpens.current.entries()]
+      if (mergedCapabilities.sshAvailable && pendingRestoreEntries.length > 0) {
+        if (!restoreAdmission.current) {
+          const activePendingSessionId = restoreSource.activeSessionId && pendingRestoreEntries.some(([sessionId]) => sessionId === restoreSource.activeSessionId)
+            ? restoreSource.activeSessionId
+            : pendingRestoreEntries[0][0]
+          try {
+            await bridge.sessions.beginRestore(activePendingSessionId)
+            if (!isActive()) {
+              void bridge.sessions.completeRestore().catch(() => undefined)
+              return
+            }
+            restoreAdmission.current = { pendingSessionIds: new Set(pendingRestoreEntries.map(([sessionId]) => sessionId)) }
+          } catch {
+            if (!isActive()) return
+            // Individual session opens still retain their ordering if admission is unavailable.
+          }
+        }
+        for (const [sessionId] of pendingRestoreEntries) {
+          const session = restoreSource.sessions.find((candidate) => candidate.id === sessionId)
+          void openPendingSession(sessionId, session?.dimensions ?? { cols: 120, rows: 40 }, true)
+        }
+      }
+      if (selectedResources.includes("workspace") && !result.workspace) workspaceWritable.current = false
+      else workspaceWritable.current = mergedCapabilities.workspaceWritable
+      dispatchBootstrap({ type: "retry-success", resources: result })
+    } catch {
+      if (!isActive()) return
+      if (selectedResources.includes("workspace")) workspaceWritable.current = false
+      dispatchBootstrap({ type: "retry-error", resources: selectedResources })
+    } finally {
+      retryInFlight.current = false
+    }
+  }, [bootstrapState, bridge, hosts, openPendingSession, setLocale, settings, workspace])
 
   const activeSession = workspace.sessions.find((session) => session.id === workspace.activeSessionId)
   const activeHost = activeSession ? hosts.find((host) => host.id === activeSession.hostId) : undefined
@@ -305,6 +426,7 @@ function Workspace() {
   }, [activeSession?.id, activeSession?.state, bridge])
 
   const changeSidebarWidth = (width: number): void => {
+    if (!settingsMutationsAvailable) return
     const next = clampSidebarWidth(width)
     localStorage.setItem("rocker.sidebarWidth", String(next))
     setSidebarWidth(next)
@@ -312,13 +434,18 @@ function Workspace() {
   }
 
   const updateSettings = (update: Partial<AppSettings>): void => {
+    if (!settingsMutationsAvailable) return
     setSettings((current) => ({ ...current, ...update }))
     void bridge.settings.update(update).then(setSettings).catch(() => undefined)
   }
 
-  const connectHost = (host: HostProfile): void => queueSessionOpen(host, host.name)
+  const connectHost = (host: HostProfile): void => {
+    if (!capabilities.sshAvailable) return
+    queueSessionOpen(host, host.name)
+  }
 
   const duplicateSession = (session: WorkspaceSession, forceNewConnection = false, split = false): void => {
+    if (!capabilities.sshAvailable) return
     const host = hosts.find((candidate) => candidate.id === session.hostId)
     if (!host) return
     const sessionId = crypto.randomUUID()
@@ -358,12 +485,14 @@ function Workspace() {
   }
 
   const saveHost = async (profile: HostProfile, credentials: { password?: string; passphrase?: string }): Promise<void> => {
+    if (!capabilities.hostMutationsAvailable) return
     await bridge.hosts.save({ profile, credentials })
     setHosts((current) => upsertHost(current, profile))
     setEditor({ open: false })
   }
 
   const favoriteHost = async (host: HostProfile): Promise<void> => {
+    if (!capabilities.hostMutationsAvailable) return
     const updated = { ...host, favorite: !host.favorite }
     await bridge.hosts.save({ profile: updated })
     setHosts((current) => toggleFavorite(current, host.id))
@@ -372,10 +501,14 @@ function Workspace() {
   const hostList = (
     <HostList
       hosts={hosts}
+      disabled={!capabilities.hostMutationsAvailable}
       onConnect={connectHost}
       onAdd={() => setEditor({ open: true })}
       onEdit={(profile) => setEditor({ open: true, profile })}
-      onImport={() => void bridge.hosts.importSshConfig().then(() => bridge.hosts.list()).then(setHosts).catch(() => undefined)}
+      onImport={() => {
+        if (!capabilities.hostMutationsAvailable) return
+        void bridge.hosts.importSshConfig().then(() => bridge.hosts.list()).then(setHosts).catch(() => undefined)
+      }}
       onFavorite={(host) => void favoriteHost(host)}
     />
   )
@@ -393,12 +526,16 @@ function Workspace() {
           onNavigate={setActiveNav}
           onSessionActivate={(sessionId) => setWorkspace((current) => activateSession(current, sessionId))}
           onSessionDuplicate={(session) => duplicateSession(session)}
-          onSessionDuplicateWindow={(session) => void bridge.sessions.duplicateInNewWindow(session.hostId)}
+          onSessionDuplicateWindow={(session) => {
+            if (capabilities.sshAvailable) void bridge.sessions.duplicateInNewWindow(session.hostId)
+          }}
           onSessionRename={renameTerminalSession}
           onSessionSplit={(session) => duplicateSession(session, false, true)}
           onSessionClose={closeTerminalSession}
         />
         <main className="workspace">
+          <RecoveryBanner state={bootstrapState} onRetry={retryBootstrap} onExportDiagnostics={() => bridge.diagnostics.export()} />
+          <div className="workspace-stage">
           {workspace.sessions.length > 0 && (
             <div className="terminal-workspace-host" hidden={activeNav !== "terminal"}>
               <TerminalWorkspace
@@ -407,7 +544,8 @@ function Workspace() {
                 overlay={<TerminalConnectionOverlay
                   session={activeSession}
                   onCancel={() => { if (activeSession) void bridge.sessions.cancelReconnect(activeSession.id).catch(() => undefined) }}
-                  onReconnectNow={() => { if (activeSession) void bridge.sessions.reconnect(activeSession.id).catch(() => undefined) }}
+                  reconnectDisabled={!capabilities.sshAvailable}
+                  onReconnectNow={() => { if (activeSession && capabilities.sshAvailable) void bridge.sessions.reconnect(activeSession.id).catch(() => undefined) }}
                   onClose={() => { if (activeSession) closeTerminalSession(activeSession) }}
                 />}
                 monitor={monitor}
@@ -425,18 +563,26 @@ function Workspace() {
             </div>
           )}
           {activeNav === "settings" ? (
-            <SettingsView locale={locale} settings={settings} onLocaleChange={(next) => { setLocale(next); updateSettings({ locale: next }) }} onUpdate={updateSettings} onExportDiagnostics={() => bridge.diagnostics.export()} />
+            <SettingsView locale={locale} settings={settings} disabled={!settingsMutationsAvailable} onLocaleChange={(next) => {
+              if (!settingsMutationsAvailable) return
+              setLocale(next)
+              updateSettings({ locale: next })
+            }} onUpdate={updateSettings} onExportDiagnostics={() => bridge.diagnostics.export()} />
           ) : activeNav === "terminal" ? (
             workspace.sessions.length === 0 ? hostList : null
           ) : activeNav === "hosts" ? (
             hostList
           ) : activeNav === "history" ? (
-            <HistoryView items={history} hosts={hosts} onReconnect={connectHost} onClear={() => void bridge.history.clear().then(() => setHistory([])).catch(() => undefined)} />
+            <HistoryView items={history} hosts={hosts} disabled={!capabilities.historyWritable} reconnectDisabled={!capabilities.sshAvailable} onReconnect={connectHost} onClear={() => {
+              if (!capabilities.historyWritable) return
+              void bridge.history.clear().then(() => setHistory([])).catch(() => undefined)
+            }} />
           ) : activeNav === "ports" ? (
             <PortsView bridge={bridge} connectionId={activeConnectionId} session={activeSession} username={activeHost?.username} bindAddress={settings.bindAddress} />
           ) : (
             <ComingSoonView feature={activeNav} />
           )}
+          </div>
         </main>
         <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={(profile, credentials) => void saveHost(profile, credentials)} />
       </div>
@@ -444,7 +590,7 @@ function Workspace() {
   )
 }
 
-function restoreWorkspace(snapshot: StoredWorkspaceWindow, hosts: HostProfile[]): RestoredWorkspace {
+function restoreWorkspace(snapshot: StoredWorkspaceWindow, hosts: HostProfile[], hostsKnown = true): RestoredWorkspace {
   const availableHostIds = new Set(hosts.map((host) => host.id))
   const seenSessionIds = new Set<string>()
   const restorableSessionIds: string[] = []
@@ -459,7 +605,7 @@ function restoreWorkspace(snapshot: StoredWorkspaceWindow, hosts: HostProfile[])
       label: stored.label,
       dimensions: validDimensions(stored.cols, stored.rows) ? { cols: stored.cols, rows: stored.rows } : undefined
     })
-    const isAvailable = availableHostIds.has(stored.hostId)
+    const isAvailable = !hostsKnown || availableHostIds.has(stored.hostId)
     workspace = applyTerminalState(workspace, {
       kind: "state",
       sessionId: stored.sessionId,
@@ -516,6 +662,10 @@ function serializeWorkspace(workspace: TerminalWorkspaceState): {
 
 function canUseConnection(state: WorkspaceSession["state"]): boolean {
   return state === "connected" || state === "reconnecting"
+}
+
+function isWorkspaceWritable(status: string): boolean {
+  return status === "ok" || status === "recovered" || status === "defaulted"
 }
 
 function sameDimensions(left: TerminalDimensions | undefined, right: TerminalDimensions): boolean {
