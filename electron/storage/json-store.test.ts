@@ -136,6 +136,51 @@ describe("JsonStore", () => {
     expect(store.health()).toEqual({ store: "settings", status: "ok" })
   })
 
+  it("keeps a blocked health result until valid data is loaded", async () => {
+    const filePath = await temporaryFilePath()
+    await writeFile(filePath, "{primary is corrupt", "utf8")
+    let quarantineBlocked = true
+    renameMock.mockImplementation(async (source, destination) => {
+      if (quarantineBlocked && source === filePath && typeof destination === "string" && destination.endsWith(".corrupt")) {
+        throw withCode("EACCES")
+      }
+      return defaultRename(source, destination)
+    })
+    const store = createCounterStore(filePath)
+
+    expect(await store.load()).toMatchObject({ status: "blocked", issue: { reason: "permission" } })
+    quarantineBlocked = false
+    expect(await store.load()).toMatchObject({ status: "blocked", issue: { reason: "permission" } })
+
+    await writeFile(filePath, JSON.stringify({ count: 23 }), "utf8")
+    expect(await store.load()).toEqual({ status: "ok", value: { count: 23 } })
+    expect(store.health()).toEqual({ store: "settings", status: "ok" })
+  })
+
+  it("preserves an explicit null legacy default value", async () => {
+    const filePath = await temporaryFilePath()
+    const store = new JsonStore<null>(filePath, null)
+
+    expect(await store.read()).toBeNull()
+  })
+
+  it("does not replace an existing blocked issue with a later protected corrupt result", async () => {
+    const filePath = await temporaryFilePath()
+    await writeFile(filePath, "{primary is corrupt", "utf8")
+    let quarantineBlocked = true
+    renameMock.mockImplementation(async (source, destination) => {
+      if (quarantineBlocked && source === filePath && typeof destination === "string" && destination.endsWith(".corrupt")) {
+        throw withCode("EACCES")
+      }
+      return defaultRename(source, destination)
+    })
+    const store = createCounterStore(filePath, "blocked")
+
+    expect(await store.load()).toMatchObject({ status: "blocked", issue: { reason: "permission" } })
+    quarantineBlocked = false
+    expect(await store.load()).toMatchObject({ status: "blocked", issue: { reason: "permission" } })
+  })
+
   it("adds a suffix when a quarantine timestamp collides", async () => {
     const filePath = await temporaryFilePath()
     const stem = basename(filePath, ".json")

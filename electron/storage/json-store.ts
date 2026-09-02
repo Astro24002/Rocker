@@ -53,7 +53,7 @@ export class JsonStore<T> {
       this.filePath = resolve(optionsOrFilePath)
       this.backupPath = `${this.filePath}.bak`
       this.store = "settings"
-      this.defaultValue = cloneValue(legacyDefaultValue ?? ({} as T))
+      this.defaultValue = cloneValue(legacyDefaultValue === undefined ? ({} as T) : legacyDefaultValue)
       this.recovery = "default"
       this.normalize = (value) => value as T
       this.sensitive = false
@@ -114,15 +114,20 @@ export class JsonStore<T> {
   }
 
   private async loadUnlocked(consumeHealth: boolean): Promise<LoadResult<T>> {
+    const blockedHealth = this.latchedHealth?.status === "blocked" ? {
+      store: this.latchedHealth.store,
+      reason: this.latchedHealth.reason,
+      message: this.latchedHealth.message
+    } satisfies StorageIssue : undefined
     const primary = await this.readDocument(this.filePath)
     if (primary.kind === "valid") return this.finishLoad({ status: "ok", value: primary.value }, consumeHealth)
     if (primary.kind === "error") {
-      return this.block(this.issueFromError(primary.error, "unavailable"))
+      return this.block(blockedHealth ?? this.issueFromError(primary.error, "unavailable"))
     }
 
     if (primary.kind === "corrupt") {
       const quarantineIssue = await this.quarantinePrimary()
-      if (quarantineIssue) return this.block(quarantineIssue)
+      if (quarantineIssue) return this.block(blockedHealth ?? quarantineIssue)
     }
 
     const backup = await this.readDocument(this.backupPath)
@@ -134,11 +139,12 @@ export class JsonStore<T> {
       }
       return this.finishLoad({ status: "recovered", value: backup.value, source: "backup" }, consumeHealth)
     }
-    if (backup.kind === "error") return this.block(this.issueFromError(backup.error, "unavailable"))
+    if (backup.kind === "error") return this.block(blockedHealth ?? this.issueFromError(backup.error, "unavailable"))
 
     const hasQuarantine = await this.hasMatchingQuarantine()
-    if ("kind" in hasQuarantine) return this.block(this.issueFromError(hasQuarantine.error, "unavailable"))
+    if ("kind" in hasQuarantine) return this.block(blockedHealth ?? this.issueFromError(hasQuarantine.error, "unavailable"))
     const corrupt = primary.kind === "corrupt" || backup.kind === "corrupt" || hasQuarantine.exists
+    if (blockedHealth) return this.block(blockedHealth)
     if (corrupt && this.recovery === "blocked") {
       return this.block(this.issue("corrupt"))
     }
