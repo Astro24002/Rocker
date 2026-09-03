@@ -20,6 +20,13 @@ describe("terminal layout", () => {
     expect(visibleSessionIds(layout)).toEqual(["a", "b", "c"])
   })
 
+  it("preserves traversal order after successive splits", () => {
+    const afterFirstSplit = insertHorizontalSplit({ kind: "leaf", sessionId: "a" }, "a", "new-a")
+    const afterSecondSplit = insertHorizontalSplit(afterFirstSplit, "b", "new-b")
+
+    expect(visibleSessionIds(afterSecondSplit)).toEqual(["a", "new-a", "b", "new-b"])
+  })
+
   it("replaces the selected leaf with a horizontal split", () => {
     const layout: TerminalLayout = { kind: "leaf", sessionId: "a" }
 

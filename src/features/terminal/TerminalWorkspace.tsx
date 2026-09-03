@@ -29,10 +29,17 @@ interface TerminalWorkspaceProps {
 }
 
 export function TerminalWorkspace(props: TerminalWorkspaceProps) {
-  const visibleIds = new Set(props.workspace.layout
+  const visibleSessionOrder = [...new Set(props.workspace.layout
     ? visibleSessionIds(props.workspace.layout)
-    : props.workspace.activeSessionId ? [props.workspace.activeSessionId] : props.workspace.sessions.slice(0, 1).map((session) => session.id))
-  const visibleCount = [...visibleIds].filter((id) => props.workspace.sessions.some((session) => session.id === id)).length
+    : props.workspace.activeSessionId ? [props.workspace.activeSessionId] : props.workspace.sessions.slice(0, 1).map((session) => session.id))]
+  const visibleIds = new Set(visibleSessionOrder)
+  const visibleCount = visibleSessionOrder.filter((id) => props.workspace.sessions.some((session) => session.id === id)).length
+  const orderedSessions = [
+    ...visibleSessionOrder
+      .map((sessionId) => props.workspace.sessions.find((session) => session.id === sessionId))
+      .filter((session): session is TerminalWorkspaceState["sessions"][number] => session !== undefined),
+    ...props.workspace.sessions.filter((session) => !visibleIds.has(session.id))
+  ]
 
   return (
     <section className="terminal-workspace" data-monitor-expanded={props.monitor.expanded}>
@@ -43,7 +50,7 @@ export function TerminalWorkspace(props: TerminalWorkspaceProps) {
         data-split={visibleCount > 1}
         style={visibleCount > 1 ? { gridTemplateRows: `repeat(${visibleCount}, minmax(0, 1fr))` } : undefined}
       >
-        {props.workspace.sessions.map((session) => (
+        {orderedSessions.map((session) => (
           <TerminalView
             key={session.id}
             session={session}

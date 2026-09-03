@@ -427,6 +427,31 @@ describe("desktop workspace shell", () => {
     expect(surface.focus).toHaveBeenCalledTimes(1)
   })
 
+  it("clears a Sidebar session menu when the palette opens and never restores it", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const session = workspace().sessions[0]
+    const sessionButton = screen.getByRole("button", { name: session.label })
+    fireEvent.contextMenu(sessionButton)
+    expect(screen.getByRole("menu", { name: `Session actions for ${session.label}` })).toBeInTheDocument()
+
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true, shiftKey: true })))
+    const query = await screen.findByRole("searchbox", { name: "Search commands" })
+    expect(query).toHaveFocus()
+    expect(screen.queryByRole("menu", { name: `Session actions for ${session.label}` })).not.toBeInTheDocument()
+    fireEvent.contextMenu(sessionButton)
+    expect(screen.queryByRole("menu", { name: `Session actions for ${session.label}` })).not.toBeInTheDocument()
+
+    fireEvent.change(query, { target: { value: "settings" } })
+    fireEvent.keyDown(query, { key: "ArrowDown" })
+    expect(query).toHaveFocus()
+    fireEvent.keyDown(query, { key: "Escape" })
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Command Palette" })).not.toBeInTheDocument())
+    expect(screen.queryByRole("menu", { name: `Session actions for ${session.label}` })).not.toBeInTheDocument()
+  })
+
   it("preserves the current leaf when splitting a connected hidden session", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshotWithTwoSessionsAndLayout(host.id)))
     render(<App />)

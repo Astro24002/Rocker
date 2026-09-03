@@ -15,6 +15,7 @@ interface SidebarProps {
   activeNav: WorkspaceNavKey
   sessions?: WorkspaceSession[]
   activeSessionId?: string
+  commandPaletteOpen?: boolean
   onWidthChange(width: number): void
   onNavigate(nav: WorkspaceNavKey): void
   onSessionActivate?(id: string): void
@@ -34,7 +35,7 @@ export function clampSidebarWidth(width: number): number {
   return Math.max(180, Math.min(360, Math.round(width)))
 }
 
-export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWidthChange, onNavigate, onSessionActivate, onSessionCommand, commandContext }: SidebarProps) {
+export function Sidebar({ width, activeNav, sessions = [], activeSessionId, commandPaletteOpen = false, onWidthChange, onNavigate, onSessionActivate, onSessionCommand, commandContext }: SidebarProps) {
   const { t } = useI18n()
   const [menuSessionId, setMenuSessionId] = useState<string>()
 
@@ -44,6 +45,10 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWi
     window.addEventListener("click", close)
     return () => window.removeEventListener("click", close)
   }, [menuSessionId])
+
+  useEffect(() => {
+    if (commandPaletteOpen) setMenuSessionId(undefined)
+  }, [commandPaletteOpen])
 
   const startResize = (event: React.PointerEvent<HTMLDivElement>): void => {
     event.preventDefault()
@@ -96,7 +101,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWi
           <div className="sidebar-session-list">
             {sessions.map((session) => (
               <div key={session.id} className="sidebar-session-row">
-                <button data-active={session.id === activeSessionId} type="button" onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setMenuSessionId(session.id) }} onClick={() => {
+                <button data-active={session.id === activeSessionId} type="button" onContextMenu={(event) => { event.preventDefault(); if (commandPaletteOpen) return; event.stopPropagation(); setMenuSessionId(session.id) }} onClick={() => {
                   onSessionActivate?.(session.id)
                   onNavigate("terminal")
                 }}>

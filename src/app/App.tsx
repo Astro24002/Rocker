@@ -964,6 +964,7 @@ function Workspace() {
           activeNav={activeNav}
           sessions={workspace.sessions}
           activeSessionId={workspace.activeSessionId}
+          commandPaletteOpen={paletteOpen}
           onWidthChange={changeSidebarWidth}
           onNavigate={setActiveNav}
           onSessionActivate={activateExistingSession}

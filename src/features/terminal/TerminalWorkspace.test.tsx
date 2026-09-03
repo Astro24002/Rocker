@@ -72,6 +72,62 @@ describe("TerminalWorkspace layout", () => {
     expect(screen.getByTestId("terminal-surface-c")).toHaveAttribute("data-visible", "false")
     expect(screen.getByTestId("terminal-surface-a")).toHaveAttribute("data-search-handler", "true")
   })
+
+  it("renders visible surfaces in split-tree order before hidden sessions", () => {
+    const splitWorkspace: TerminalWorkspaceState = {
+      activeSessionId: "new-b",
+      layout: {
+        kind: "split",
+        direction: "horizontal",
+        ratio: 0.5,
+        first: {
+          kind: "split",
+          direction: "horizontal",
+          ratio: 0.5,
+          first: { kind: "leaf", sessionId: "a" },
+          second: { kind: "leaf", sessionId: "new-a" }
+        },
+        second: {
+          kind: "split",
+          direction: "horizontal",
+          ratio: 0.5,
+          first: { kind: "leaf", sessionId: "b" },
+          second: { kind: "leaf", sessionId: "new-b" }
+        }
+      },
+      sessions: [
+        { id: "a", hostId: "host-a", label: "A", state: "connected", channelGeneration: 1 },
+        { id: "b", hostId: "host-b", label: "B", state: "connected", channelGeneration: 2 },
+        { id: "new-b", hostId: "host-b", label: "New B", state: "connected", channelGeneration: 3 },
+        { id: "new-a", hostId: "host-a", label: "New A", state: "connected", channelGeneration: 4 },
+        { id: "hidden", hostId: "host-c", label: "Hidden", state: "idle", channelGeneration: 0 }
+      ]
+    }
+
+    const { container } = render(<I18nProvider><TerminalWorkspace
+      workspace={splitWorkspace}
+      monitor={createMonitorState()}
+      onMonitorToggle={vi.fn()}
+      preferences={preferences}
+      confirmMultilinePaste
+      onInput={vi.fn()}
+      onResize={vi.fn()}
+      onAck={vi.fn()}
+      onController={vi.fn()}
+      onSearchController={vi.fn()}
+    /></I18nProvider>)
+
+    const stack = container.querySelector(".terminal-stack")
+    expect(stack).not.toBeNull()
+    expect(Array.from(stack!.children).map((child) => child.getAttribute("data-testid"))).toEqual([
+      "terminal-surface-a",
+      "terminal-surface-new-a",
+      "terminal-surface-b",
+      "terminal-surface-new-b",
+      "terminal-surface-hidden"
+    ])
+    expect(screen.getByTestId("terminal-surface-hidden")).toHaveAttribute("data-visible", "false")
+  })
 })
 
 const workspace: TerminalWorkspaceState = {

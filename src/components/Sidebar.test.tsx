@@ -37,6 +37,21 @@ describe("Sidebar session actions", () => {
     expect(screen.getByRole("menuitem", { name: "Close" })).toBeInTheDocument()
   })
 
+  it("clears its row menu when the command palette opens", () => {
+    const { rerender } = render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onWidthChange={vi.fn()} onNavigate={vi.fn()} commandPaletteOpen={false} /></I18nProvider>)
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    expect(screen.getByRole("menu", { name: "Session actions for G11" })).toBeInTheDocument()
+
+    rerender(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onWidthChange={vi.fn()} onNavigate={vi.fn()} commandPaletteOpen /></I18nProvider>)
+    expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
+
+    rerender(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onWidthChange={vi.fn()} onNavigate={vi.fn()} commandPaletteOpen={false} /></I18nProvider>)
+    expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
+  })
+
   it("keeps the session menu in the typed command order and dispatches one id", () => {
     const onSessionCommand = vi.fn()
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state: "disconnected" }]} onWidthChange={vi.fn()} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
