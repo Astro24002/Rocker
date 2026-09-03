@@ -178,6 +178,7 @@ export const en = {
   "terminal.localPortInUseDetail": "A local port is already in use.",
   "terminal.reconnectCancelledDetail": "Automatic reconnect was cancelled. The terminal buffer is preserved.",
   "terminal.closeSession": "Close session",
+  "terminal.contextMenu": "Terminal actions",
   "terminal.multilinePasteConfirmation": "Paste multiple lines into the terminal?",
   "terminal.search": "Search terminal",
   "terminal.searchInput": "Search terminal output",

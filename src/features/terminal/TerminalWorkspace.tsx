@@ -25,6 +25,7 @@ interface TerminalWorkspaceProps {
   onController(sessionId: string, controller: TerminalController | undefined): void
   onSearchController?(sessionId: string, controller: TerminalSearchController | undefined): void
   onCommandSurface?(sessionId: string, surface: TerminalCommandSurface | undefined): void
+  onContextMenu?(sessionId: string, event: MouseEvent): void
 }
 
 export function TerminalWorkspace(props: TerminalWorkspaceProps) {
@@ -56,6 +57,7 @@ export function TerminalWorkspace(props: TerminalWorkspaceProps) {
             onController={props.onController}
             onSearchController={props.onSearchController}
             onCommandSurface={props.onCommandSurface}
+            onContextMenu={(event) => props.onContextMenu?.(session.id, event)}
           />
         ))}
       </div>

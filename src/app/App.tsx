@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { ComingSoonView } from "../components/ComingSoonView"
 import { IconButton } from "../components/IconButton"
 import { RecoveryBanner } from "../components/RecoveryBanner"
-import { Sidebar, clampSidebarWidth, type WorkspaceNavKey } from "../components/Sidebar"
+import { Sidebar, clampSidebarWidth, type SessionCommandId, type WorkspaceNavKey } from "../components/Sidebar"
 import { WindowChrome } from "../components/WindowChrome"
 import { HostEditor } from "../features/hosts/HostEditor"
 import { HostList } from "../features/hosts/HostList"
@@ -16,6 +16,7 @@ import { CommandPalette, type CommandPaletteFocusRequest } from "../features/com
 import { executeCommand, isCommandEnabled, type CommandActions, type CommandContext, type CommandId, type TerminalCommandSurface } from "../features/commands/command-registry"
 import { matchGlobalShortcut, shouldIgnoreGlobalShortcutTarget } from "../features/commands/command-shortcuts"
 import { TerminalConnectionOverlay } from "../features/terminal/TerminalConnectionOverlay"
+import { TerminalContextMenu } from "../features/terminal/TerminalContextMenu"
 import { TerminalSearchOverlay } from "../features/terminal/TerminalSearchOverlay"
 import { insertHorizontalSplit, removeSessionFromLayout, visibleSessionIds, type TerminalLayout } from "../features/terminal/layout"
 import {
@@ -28,6 +29,7 @@ import {
   type TerminalWorkspaceState,
   type WorkspaceSession
 } from "../features/terminal/session-state"
+import { recentSessionIds, recordSessionFocus, removeRecentSession, type RecentSessionState } from "../features/sessions/recent-sessions"
 import { TerminalWorkspace } from "../features/terminal/TerminalWorkspace"
 import { type TerminalController, type TerminalPreferences } from "../features/terminal/terminal-controller"
 import type { TerminalSearchController } from "../features/terminal/terminal-search"
@@ -135,6 +137,8 @@ function Workspace() {
   const [settingsPersistenceFailed, setSettingsPersistenceFailed] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [recentSessionState, setRecentSessionState] = useState<RecentSessionState>({})
+  const [terminalContextMenu, setTerminalContextMenu] = useState<{ sessionId: string; x: number; y: number }>()
   const [, setCommandContextVersion] = useState(0)
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const stored = Number(localStorage.getItem("rocker.sidebarWidth") ?? defaultSettings.sidebarWidth)
@@ -155,6 +159,7 @@ function Workspace() {
   const settingsWriteInFlight = useRef<PendingSettingsWrite | undefined>(undefined)
   const latestSettingsStatusVersion = useRef(0)
   const activeSessionIdRef = useRef<string | undefined>(undefined)
+  const workspaceRef = useRef(workspace)
   const activeNavigationRef = useRef<WorkspaceNavKey>("hosts")
   const workspaceStageRef = useRef<HTMLDivElement>(null)
   const focusRestoreTimer = useRef<number | undefined>(undefined)
@@ -578,6 +583,7 @@ function Workspace() {
   const activeSearchController = activeSession ? searchControllers.current.get(activeSession.id) : undefined
   const activeTerminalSurface = activeSession ? terminalSurfaces.current.get(activeSession.id) : undefined
   activeSessionIdRef.current = workspace.activeSessionId
+  workspaceRef.current = workspace
   activeNavigationRef.current = activeNav
 
   useEffect(() => {
@@ -655,6 +661,14 @@ function Workspace() {
     queueSessionOpen(host, host.name)
   }
 
+  const activateExistingSession = useCallback((sessionOrId: WorkspaceSession | string): void => {
+    const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId.id
+    if (!workspaceRef.current.sessions.some((session) => session.id === sessionId)) return
+    setWorkspace((current) => activateSession(current, sessionId))
+    setRecentSessionState((current) => recordSessionFocus(current, sessionId))
+    setActiveNav("terminal")
+  }, [])
+
   const duplicateSession = (session: WorkspaceSession, forceNewConnection = false, split = false): void => {
     if (!capabilities.sshAvailable) return
     const host = hosts.find((candidate) => candidate.id === session.hostId)
@@ -692,6 +706,7 @@ function Workspace() {
     controllers.current.delete(session.id)
     searchControllers.current.delete(session.id)
     terminalSurfaces.current.delete(session.id)
+    setRecentSessionState((current) => removeRecentSession(current, session.id))
     void bridge.sessions.close(session.id).catch(() => undefined)
     setWorkspace((current) => closeSession(current, session.id))
     if (workspace.sessions.length <= 1) setActiveNav("hosts")
@@ -763,10 +778,7 @@ function Workspace() {
       resetFont: () => updateSettings({ terminalFontSize: defaultSettings.terminalFontSize })
     },
     session: {
-      activate: (session) => {
-        setWorkspace((current) => activateSession(current, session.id))
-        setActiveNav("terminal")
-      },
+      activate: activateExistingSession,
       reconnect: (session) => capabilities.sshAvailable ? bridge.sessions.reconnect(session.id) : undefined,
       rename: renameTerminalSession,
       duplicate: (session) => duplicateSession(session),
@@ -779,6 +791,11 @@ function Workspace() {
     },
     palette: { open: () => setPaletteOpen(true) }
   }
+  const recentSessionCommands = recentSessionIds(recentSessionState, workspace.sessions).flatMap((sessionId) => {
+    const session = workspace.sessions.find((candidate) => candidate.id === sessionId)
+    const lastFocusedAt = recentSessionState[sessionId]
+    return session && lastFocusedAt !== undefined ? [{ id: session.id, label: session.label, session, lastFocusedAt }] : []
+  })
   const commandContext: CommandContext = {
     activeSession,
     connectionState: activeSession?.state,
@@ -789,16 +806,58 @@ function Workspace() {
     activeNavigation: activeNav,
     settingsAvailable: true,
     settingsPersistenceAvailable: settingsMutationsAvailable,
-    recentSessions: [],
+    recentSessions: recentSessionCommands,
     actions: commandActions
   }
   commandContextRef.current = commandContext
+
+  const invokeSessionCommand = (commandId: SessionCommandId, session: WorkspaceSession): void => {
+    const context = commandContextRef.current
+    if (!context) return
+    const surface = terminalSurfaces.current.get(session.id)
+    const sessionContext: CommandContext = {
+      ...context,
+      activeSession: session,
+      connectionState: session.state,
+      terminalBufferAvailable: surface !== undefined,
+      terminal: surface,
+      selection: { hasSelection: surface?.hasSelection() ?? false },
+      clipboard: { canPaste: session.state === "connected" }
+    }
+    if (!isCommandEnabled(commandId, sessionContext)) return
+    void executeCommand(commandId, sessionContext)
+  }
 
   const invokeCommand = (commandId: CommandId): void => {
     const context = commandContextRef.current
     if (!context || !isCommandEnabled(commandId, context)) return
     void executeCommand(commandId, context)
   }
+
+  const closeTerminalContextMenu = useCallback((): void => setTerminalContextMenu(undefined), [])
+  const openTerminalContextMenu = useCallback((sessionId: string, event: MouseEvent): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!workspaceRef.current.sessions.some((session) => session.id === sessionId)) return
+    if (workspaceRef.current.activeSessionId !== sessionId) activateExistingSession(sessionId)
+    setTerminalContextMenu({ sessionId, x: event.clientX, y: event.clientY })
+  }, [activateExistingSession])
+
+  const terminalMenuSession = terminalContextMenu
+    ? workspace.sessions.find((session) => session.id === terminalContextMenu.sessionId)
+    : undefined
+  const terminalMenuSurface = terminalMenuSession ? terminalSurfaces.current.get(terminalMenuSession.id) : undefined
+  const terminalMenuContext: CommandContext = terminalMenuSession
+    ? {
+        ...commandContext,
+        activeSession: terminalMenuSession,
+        connectionState: terminalMenuSession.state,
+        terminalBufferAvailable: terminalMenuSurface !== undefined,
+        terminal: terminalMenuSurface,
+        selection: { hasSelection: terminalMenuSurface?.hasSelection() ?? false },
+        clipboard: { canPaste: terminalMenuSession.state === "connected" }
+      }
+    : commandContext
 
   useEffect(() => {
     const listener = (event: KeyboardEvent): void => {
@@ -857,14 +916,8 @@ function Workspace() {
           activeSessionId={workspace.activeSessionId}
           onWidthChange={changeSidebarWidth}
           onNavigate={setActiveNav}
-          onSessionActivate={(sessionId) => setWorkspace((current) => activateSession(current, sessionId))}
-          onSessionDuplicate={(session) => duplicateSession(session)}
-          onSessionDuplicateWindow={(session) => {
-            if (capabilities.sshAvailable) void bridge.sessions.duplicateInNewWindow(session.hostId)
-          }}
-          onSessionRename={renameTerminalSession}
-          onSessionSplit={(session) => duplicateSession(session, false, true)}
-          onSessionClose={closeTerminalSession}
+          onSessionActivate={activateExistingSession}
+          onSessionCommand={invokeSessionCommand}
         />
         <main className="workspace">
           <RecoveryBanner state={bootstrapState} onRetry={retryBootstrap} onExportDiagnostics={() => bridge.diagnostics.export()} />
@@ -904,6 +957,7 @@ function Workspace() {
                 onController={handleTerminalController}
                 onSearchController={handleSearchController}
                 onCommandSurface={handleTerminalCommandSurface}
+                onContextMenu={openTerminalContextMenu}
               />
             </div>
           )}
@@ -933,6 +987,7 @@ function Workspace() {
         </main>
         <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={(profile, credentials) => void saveHost(profile, credentials)} />
         <CommandPalette open={paletteOpen} context={commandContext} onClose={() => setPaletteOpen(false)} onRestoreFocus={restorePaletteFocus} />
+        {terminalContextMenu && terminalMenuSession && <TerminalContextMenu open x={terminalContextMenu.x} y={terminalContextMenu.y} context={terminalMenuContext} onClose={closeTerminalContextMenu} onRestoreFocus={restorePaletteFocus} />}
       </div>
     </div>
   )

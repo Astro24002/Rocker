@@ -242,6 +242,44 @@ describe("desktop workspace shell", () => {
     expect(surface.focus).not.toHaveBeenCalled()
   })
 
+  it("records successful existing-session activation, removes closed recency, and never persists it", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshotWithTwoSessions(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(2))
+    fireEvent.click(screen.getByRole("button", { name: "G11 copy" }))
+    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    expect(screen.getByText("Recent Sessions")).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: "G11 copy" })).toBeInTheDocument()
+
+    fireEvent.keyDown(screen.getByRole("searchbox", { name: "Search commands" }), { key: "Escape" })
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11 copy" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Close" }))
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    expect(screen.queryByRole("option", { name: "G11 copy" })).not.toBeInTheDocument()
+    for (const [payload] of bridge.workspace.save.mock.calls as unknown as Array<[Record<string, unknown>]>) expect(payload).not.toHaveProperty("recentSessions")
+  })
+
+  it("selects a recent session through the existing activation path and closes the palette", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshotWithTwoSessions(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(2))
+    const firstSessionId = workspace().sessions[0].id
+    const secondSession = workspace().sessions[1]
+    fireEvent.click(screen.getByRole("button", { name: secondSession.label }))
+    fireEvent.click(screen.getByRole("button", { name: workspace().sessions[0].label }))
+    expect(workspace().activeSessionId).toBe(firstSessionId)
+
+    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    fireEvent.click(screen.getByRole("option", { name: secondSession.label }))
+
+    await waitFor(() => expect(workspace().activeSessionId).toBe(secondSession.id))
+    expect(screen.queryByRole("dialog", { name: "Command Palette" })).not.toBeInTheDocument()
+  })
+
   it("loads renderer data through one bootstrap request", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
     render(<App />)

@@ -1,12 +1,14 @@
-import { Clock3, Columns2, Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, Search, Server, Settings, SquareTerminal, X } from "lucide-react"
+import { Clock3, Columns2, Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, RotateCw, Search, Server, Settings, SquareTerminal, X } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useI18n } from "../i18n"
+import type { CommandId } from "../features/commands/command-registry"
 import { IconButton } from "./IconButton"
 import { NavItem } from "./NavItem"
 import type { WorkspaceSession } from "../features/terminal/session-state"
 
 export type NavKey = "hosts" | "sftp" | "ports" | "snippets" | "history" | "settings"
 export type WorkspaceNavKey = NavKey | "terminal" | "local-terminal"
+export type SessionCommandId = Extract<CommandId, `session.${string}`>
 
 interface SidebarProps {
   width: number
@@ -16,11 +18,7 @@ interface SidebarProps {
   onWidthChange(width: number): void
   onNavigate(nav: WorkspaceNavKey): void
   onSessionActivate?(id: string): void
-  onSessionDuplicate?(session: WorkspaceSession): void
-  onSessionDuplicateWindow?(session: WorkspaceSession): void
-  onSessionRename?(session: WorkspaceSession): void
-  onSessionSplit?(session: WorkspaceSession): void
-  onSessionClose?(session: WorkspaceSession): void
+  onSessionCommand?(commandId: SessionCommandId, session: WorkspaceSession): void
 }
 
 const navItems: Array<{ key: NavKey; icon: typeof Server }> = [
@@ -35,7 +33,7 @@ export function clampSidebarWidth(width: number): number {
   return Math.max(180, Math.min(360, Math.round(width)))
 }
 
-export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWidthChange, onNavigate, onSessionActivate, onSessionDuplicate, onSessionDuplicateWindow, onSessionRename, onSessionSplit, onSessionClose }: SidebarProps) {
+export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWidthChange, onNavigate, onSessionActivate, onSessionCommand }: SidebarProps) {
   const { t } = useI18n()
   const [menuSessionId, setMenuSessionId] = useState<string>()
 
@@ -105,14 +103,12 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWi
                   <span>{session.label}</span>
                 </button>
                 {menuSessionId === session.id && <div className="session-menu" role="menu" aria-label={`Session actions for ${session.label}`} onClick={(event) => event.stopPropagation()}>
-                  <span className="session-menu-label">{t("sidebar.menuSession")}</span>
-                  <button role="menuitem" type="button" onClick={() => { onSessionDuplicate?.(session); setMenuSessionId(undefined) }}><Copy aria-hidden="true" size={14} /><span>{t("sidebar.duplicate")}</span></button>
-                  <button role="menuitem" type="button" onClick={() => { onSessionDuplicateWindow?.(session); setMenuSessionId(undefined) }}><ExternalLink aria-hidden="true" size={14} /><span>{t("sidebar.duplicateWindow")}</span></button>
-                  <button role="menuitem" type="button" onClick={() => { onSessionRename?.(session); setMenuSessionId(undefined) }}><Pencil aria-hidden="true" size={14} /><span>{t("sidebar.rename")}</span></button>
-                  <span className="session-menu-label session-menu-label-spaced">{t("sidebar.menuLayout")}</span>
-                  <button role="menuitem" type="button" onClick={() => { onSessionSplit?.(session); setMenuSessionId(undefined) }}><Columns2 aria-hidden="true" size={14} /><span>{t("sidebar.splitHorizontal")}</span></button>
-                  <span className="session-menu-separator" />
-                  <button className="session-menu-danger" role="menuitem" type="button" onClick={() => { onSessionClose?.(session); setMenuSessionId(undefined) }}><X aria-hidden="true" size={14} /><span>{t("sidebar.close")}</span></button>
+                  <button disabled={!canReconnect(session)} data-command-id="session.reconnect" role="menuitem" type="button" onClick={() => dispatchSessionCommand("session.reconnect", session, onSessionCommand, setMenuSessionId)}><RotateCw aria-hidden="true" size={14} /><span>{t("commands.reconnect")}</span></button>
+                  <button data-command-id="session.rename" role="menuitem" type="button" onClick={() => dispatchSessionCommand("session.rename", session, onSessionCommand, setMenuSessionId)}><Pencil aria-hidden="true" size={14} /><span>{t("sidebar.rename")}</span></button>
+                  <button data-command-id="session.duplicate" role="menuitem" type="button" onClick={() => dispatchSessionCommand("session.duplicate", session, onSessionCommand, setMenuSessionId)}><Copy aria-hidden="true" size={14} /><span>{t("sidebar.duplicate")}</span></button>
+                  <button data-command-id="session.duplicate-window" role="menuitem" type="button" onClick={() => dispatchSessionCommand("session.duplicate-window", session, onSessionCommand, setMenuSessionId)}><ExternalLink aria-hidden="true" size={14} /><span>{t("sidebar.duplicateWindow")}</span></button>
+                  <button data-command-id="session.split-horizontal" role="menuitem" type="button" onClick={() => dispatchSessionCommand("session.split-horizontal", session, onSessionCommand, setMenuSessionId)}><Columns2 aria-hidden="true" size={14} /><span>{t("sidebar.splitHorizontal")}</span></button>
+                  <button className="session-menu-danger" data-command-id="session.close" role="menuitem" type="button" onClick={() => dispatchSessionCommand("session.close", session, onSessionCommand, setMenuSessionId)}><X aria-hidden="true" size={14} /><span>{t("sidebar.close")}</span></button>
                 </div>}
               </div>
             ))}
@@ -131,4 +127,13 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWi
       />
     </aside>
   )
+}
+
+function canReconnect(session: WorkspaceSession): boolean {
+  return session.state === "disconnected" || session.state === "error"
+}
+
+function dispatchSessionCommand(commandId: SessionCommandId, session: WorkspaceSession, onSessionCommand: SidebarProps["onSessionCommand"], setMenuSessionId: (sessionId: string | undefined) => void): void {
+  onSessionCommand?.(commandId, session)
+  setMenuSessionId(undefined)
 }

@@ -296,6 +296,61 @@
   background: rgba(219, 109, 114, 0.12);
 }
 
+.terminal-context-menu {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  width: min(216px, calc(100vw - 16px));
+  flex-direction: column;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #1a2027;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.025);
+  outline: 0;
+}
+
+.terminal-context-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.terminal-context-menu button:hover {
+  color: var(--text-primary);
+  background: var(--workspace-hover);
+}
+
+.terminal-context-menu button:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.58;
+}
+
+.terminal-context-menu button svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.terminal-context-menu button:hover svg {
+  color: currentColor;
+}
+
+.terminal-context-menu-status {
+  margin: 5px 8px 2px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  color: var(--warning);
+  font-size: 10px;
+}
+
 .sidebar-session-list button:hover,
 .sidebar-session-list button[data-active="true"] {
   color: var(--text-primary);

@@ -180,6 +180,7 @@ export const zhCN = {
   "terminal.localPortInUseDetail": "本地端口已被占用。",
   "terminal.reconnectCancelledDetail": "自动重连已取消，终端缓冲区已保留。",
   "terminal.closeSession": "关闭会话",
+  "terminal.contextMenu": "终端操作",
   "terminal.multilinePasteConfirmation": "要将多行内容粘贴到终端吗？",
   "terminal.search": "搜索终端",
   "terminal.searchInput": "搜索终端输出",

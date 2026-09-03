@@ -22,6 +22,7 @@ export interface TerminalViewProps {
   onController(sessionId: string, controller: TerminalController | undefined): void
   onSearchController?(sessionId: string, controller: TerminalSearchController | undefined): void
   onCommandSurface?(sessionId: string, surface: TerminalCommandSurface | undefined): void
+  onContextMenu?(event: MouseEvent): void
 }
 
 export function TerminalView(props: TerminalViewProps) {
@@ -213,6 +214,10 @@ export function TerminalView(props: TerminalViewProps) {
       data-testid="terminal-surface"
       data-visible={props.visible}
       onClick={() => controllerRef.current?.focus()}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        props.onContextMenu?.(event.nativeEvent)
+      }}
       onKeyDown={handleKeyDown}
       onPasteCapture={handlePaste}
       ref={containerRef}

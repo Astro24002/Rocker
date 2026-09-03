@@ -220,6 +220,18 @@ describe("TerminalView", () => {
     expect(onCommandSurface).toHaveBeenLastCalledWith(session.id, undefined)
   })
 
+  it("forwards the terminal context menu event without sending shell input", () => {
+    const onContextMenu = vi.fn()
+    const onInput = vi.fn()
+    render(<TerminalView {...createProps({ onContextMenu, onInput })} />)
+
+    fireEvent.contextMenu(screen.getByTestId("terminal-surface"), { clientX: 120, clientY: 80 })
+
+    expect(onContextMenu).toHaveBeenCalledTimes(1)
+    expect(onContextMenu).toHaveBeenCalledWith(expect.objectContaining({ clientX: 120, clientY: 80 }))
+    expect(onInput).not.toHaveBeenCalled()
+  })
+
   it("creates one per-session search controller and disposes it with the xterm", () => {
     const onSearchController = vi.fn()
     const { unmount } = render(<TerminalView {...createProps({ onSearchController })} />)

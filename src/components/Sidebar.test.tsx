@@ -32,9 +32,40 @@ describe("Sidebar session actions", () => {
 
     fireEvent.contextMenu(sessionButton)
     expect(screen.getByRole("menu", { name: "Session actions for G11" })).toBeInTheDocument()
+    expect(screen.getByRole("menuitem", { name: "Reconnect" })).toBeInTheDocument()
     expect(screen.getByRole("menuitem", { name: "Duplicate" })).toBeInTheDocument()
     expect(screen.getByRole("menuitem", { name: "Close" })).toBeInTheDocument()
-    expect(screen.getByText("Session")).toBeInTheDocument()
-    expect(screen.getByText("Layout")).toBeInTheDocument()
+  })
+
+  it("keeps the session menu in the typed command order and dispatches one id", () => {
+    const onSessionCommand = vi.fn()
+    render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state: "disconnected" }]} onWidthChange={vi.fn()} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    const menu = screen.getByRole("menu", { name: "Session actions for G11" })
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Reconnect",
+      "Rename",
+      "Duplicate",
+      "Duplicate in a new window",
+      "Split horizontally",
+      "Close"
+    ])
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }))
+    expect(onSessionCommand).toHaveBeenCalledTimes(1)
+    expect(onSessionCommand).toHaveBeenCalledWith("session.duplicate", expect.objectContaining({ id: session.id }))
+    expect(menu).not.toBeInTheDocument()
+  })
+
+  it("only enables Reconnect for disconnected or error sessions", () => {
+    const { rerender } = render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onWidthChange={vi.fn()} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    expect(screen.getByRole("menuitem", { name: "Reconnect" })).toBeDisabled()
+
+    rerender(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state: "error" }]} onWidthChange={vi.fn()} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    expect(screen.getByRole("menuitem", { name: "Reconnect" })).toBeEnabled()
   })
 })
