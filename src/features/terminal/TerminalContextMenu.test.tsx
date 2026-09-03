@@ -74,6 +74,19 @@ describe("TerminalContextMenu", () => {
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(onRestoreFocus).toHaveBeenCalledTimes(1)
   })
+
+  it("does not dismiss when another modal already handled Escape", () => {
+    const onClose = vi.fn()
+    const onRestoreFocus = vi.fn()
+    renderMenu({ context: createContext("connected", true), onClose, onRestoreFocus })
+
+    const event = new KeyboardEvent("keydown", { cancelable: true, key: "Escape" })
+    event.preventDefault()
+    window.dispatchEvent(event)
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onRestoreFocus).not.toHaveBeenCalled()
+  })
 })
 
 const connectedSession = {

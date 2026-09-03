@@ -770,6 +770,15 @@ function Workspace() {
     })
   }, [focusCurrentTerminal, restoreCurrentFocus, scheduleFocusRestore])
 
+  const openCommandPalette = useCallback((): void => {
+    if (focusRestoreTimer.current !== undefined) {
+      window.clearTimeout(focusRestoreTimer.current)
+      focusRestoreTimer.current = undefined
+    }
+    setTerminalContextMenu(undefined)
+    setPaletteOpen(true)
+  }, [])
+
   const commandActions: CommandActions = {
     terminal: {
       search: () => {
@@ -796,7 +805,7 @@ function Workspace() {
     navigation: {
       navigate: (destination) => setActiveNav(destination)
     },
-    palette: { open: () => setPaletteOpen(true) }
+    palette: { open: openCommandPalette }
   }
   const recentSessionCommands = recentSessionIds(recentSessionState, workspace.sessions).flatMap((sessionId) => {
     const session = workspace.sessions.find((candidate) => candidate.id === sessionId)
@@ -843,6 +852,7 @@ function Workspace() {
 
   const closeTerminalContextMenu = useCallback((): void => setTerminalContextMenu(undefined), [])
   const openTerminalContextMenu = useCallback((sessionId: string, event: MouseEvent): void => {
+    if (paletteOpen) return
     event.preventDefault()
     event.stopPropagation()
     if (focusRestoreTimer.current !== undefined) {
@@ -852,7 +862,7 @@ function Workspace() {
     if (!workspaceRef.current.sessions.some((session) => session.id === sessionId)) return
     if (workspaceRef.current.activeSessionId !== sessionId) activateExistingSession(sessionId)
     setTerminalContextMenu({ sessionId, x: event.clientX, y: event.clientY })
-  }, [activateExistingSession])
+  }, [activateExistingSession, paletteOpen])
 
   const terminalMenuSession = terminalContextMenu
     ? workspace.sessions.find((session) => session.id === terminalContextMenu.sessionId)
@@ -967,7 +977,7 @@ function Workspace() {
             <IconButton disabled={!isCommandEnabled("terminal.search", commandContext)} label={t("terminal.search")} onClick={() => invokeCommand("terminal.search")}>
               <Search size={15} />
             </IconButton>
-            <IconButton label={t("commands.openPalette")} onClick={() => invokeCommand("palette.open")}>
+            <IconButton data-command-palette-trigger="true" label={t("commands.openPalette")} onClick={() => invokeCommand("palette.open")}>
               <Command size={15} />
             </IconButton>
           </div>
@@ -1028,7 +1038,7 @@ function Workspace() {
         </main>
         <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={(profile, credentials) => void saveHost(profile, credentials)} />
         <CommandPalette open={paletteOpen} context={commandContext} onClose={() => setPaletteOpen(false)} onRestoreFocus={restorePaletteFocus} />
-        {terminalContextMenu && terminalMenuSession && <TerminalContextMenu open x={terminalContextMenu.x} y={terminalContextMenu.y} context={terminalMenuContext} onClose={closeTerminalContextMenu} onRestoreFocus={(request) => {
+        {!paletteOpen && terminalContextMenu && terminalMenuSession && <TerminalContextMenu open x={terminalContextMenu.x} y={terminalContextMenu.y} context={terminalMenuContext} onClose={closeTerminalContextMenu} onRestoreFocus={(request) => {
           if (request === "terminal.focus") return
           restorePaletteFocus(request)
         }} />}

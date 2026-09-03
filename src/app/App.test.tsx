@@ -316,11 +316,18 @@ describe("desktop workspace shell", () => {
     expect(screen.getByRole("menu", { name: "Terminal actions" })).toBeInTheDocument()
 
     act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true, shiftKey: true })))
-    await waitFor(() => expect(screen.getByRole("dialog", { name: "Command Palette" })).toBeInTheDocument())
-    fireEvent.click(screen.getByRole("option", { name: firstSession.label }))
+    const query = await screen.findByRole("searchbox", { name: "Search commands" })
+    expect(screen.queryByRole("menu", { name: "Terminal actions" })).not.toBeInTheDocument()
+    fireEvent.keyDown(query, { key: "ArrowDown" })
+    fireEvent.keyDown(query, { key: "Enter" })
     await waitFor(() => expect(workspace().activeSessionId).toBe(firstSession.id))
 
+    expect(screen.queryByRole("menu", { name: "Terminal actions" })).not.toBeInTheDocument()
+
+    fireEvent.contextMenu(document.querySelector(`.terminal-surface[data-session-id="${secondSession.id}"]`)!)
     expect(screen.getByRole("menu", { name: "Terminal actions" })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: firstSession.label }))
+    expect(workspace().activeSessionId).toBe(firstSession.id)
     firstSurface.focus.mockClear()
     secondSurface.focus.mockClear()
     fireEvent.click(screen.getByRole("menuitem", { name: "Focus terminal" }))
@@ -328,11 +335,13 @@ describe("desktop workspace shell", () => {
     expect(firstSurface.focus).not.toHaveBeenCalled()
   })
 
-  it("keeps command palette focus while a terminal context menu remains open", async () => {
+  it("makes the command palette authoritative over a terminal context menu for keyboard actions", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
     render(<App />)
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const sessionId = workspace().activeSessionId!
+    const surface = terminalHarness.surfaces.get(sessionId)!
     const terminal = document.querySelector(".terminal-surface")
     expect(terminal).not.toBeNull()
     fireEvent.contextMenu(terminal!)
@@ -340,11 +349,16 @@ describe("desktop workspace shell", () => {
 
     act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true, shiftKey: true })))
     const query = await screen.findByRole("searchbox", { name: "Search commands" })
+    expect(screen.queryByRole("menu", { name: "Terminal actions" })).not.toBeInTheDocument()
     expect(query).toHaveFocus()
+    expect(surface.focus).not.toHaveBeenCalled()
 
     fireEvent.change(query, { target: { value: "settings" } })
+    fireEvent.keyDown(query, { key: "ArrowDown" })
+    expect(query).toHaveFocus()
     fireEvent.keyDown(query, { key: "Enter" })
     await waitFor(() => expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument())
+    expect(screen.queryByRole("menu", { name: "Terminal actions" })).not.toBeInTheDocument()
   })
 
   it("opens Search for the terminal-menu session after a keyboard recent-session switch", async () => {
@@ -363,14 +377,54 @@ describe("desktop workspace shell", () => {
     expect(screen.getByRole("menu", { name: "Terminal actions" })).toBeInTheDocument()
 
     act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true, shiftKey: true })))
-    await screen.findByRole("dialog", { name: "Command Palette" })
-    fireEvent.click(screen.getByRole("option", { name: firstSession.label }))
+    const query = await screen.findByRole("searchbox", { name: "Search commands" })
+    expect(screen.queryByRole("menu", { name: "Terminal actions" })).not.toBeInTheDocument()
+    fireEvent.keyDown(query, { key: "ArrowDown" })
+    fireEvent.keyDown(query, { key: "Enter" })
     await waitFor(() => expect(workspace().activeSessionId).toBe(firstSession.id))
 
+    expect(screen.queryByRole("menu", { name: "Terminal actions" })).not.toBeInTheDocument()
+    fireEvent.contextMenu(document.querySelector(`.terminal-surface[data-session-id="${secondSession.id}"]`)!)
+    expect(screen.getByRole("menu", { name: "Terminal actions" })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: firstSession.label }))
+    expect(workspace().activeSessionId).toBe(firstSession.id)
     fireEvent.click(screen.getByRole("menuitem", { name: "Search terminal" }))
     const search = await screen.findByRole("search", { name: "Search terminal" })
     expect(search).toHaveAttribute("data-session-id", secondSession.id)
     expect(screen.getByRole("searchbox", { name: "Search terminal output" })).toHaveFocus()
+  })
+
+  it("handles pointer clicks and Escape only in the command palette after menu dismissal", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const sessionId = workspace().activeSessionId!
+    const surface = terminalHarness.surfaces.get(sessionId)!
+    const terminal = document.querySelector(`.terminal-surface[data-session-id="${sessionId}"]`)
+    expect(terminal).not.toBeNull()
+    fireEvent.contextMenu(terminal!)
+    expect(screen.getByRole("menu", { name: "Terminal actions" })).toBeInTheDocument()
+    surface.focus.mockClear()
+
+    const paletteTrigger = screen.getByRole("button", { name: "Open command palette" })
+    fireEvent.pointerDown(paletteTrigger)
+    fireEvent.click(paletteTrigger)
+    const query = await screen.findByRole("searchbox", { name: "Search commands" })
+    expect(screen.queryByRole("menu", { name: "Terminal actions" })).not.toBeInTheDocument()
+    expect(query).toHaveFocus()
+
+    fireEvent.contextMenu(terminal!)
+    expect(screen.queryByRole("menu", { name: "Terminal actions" })).not.toBeInTheDocument()
+
+    fireEvent.click(query)
+    expect(screen.getByRole("dialog", { name: "Command Palette" })).toBeInTheDocument()
+    expect(query).toHaveFocus()
+
+    fireEvent.keyDown(query, { key: "Escape" })
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Command Palette" })).not.toBeInTheDocument())
+    expect(screen.queryByRole("menu", { name: "Terminal actions" })).not.toBeInTheDocument()
+    expect(surface.focus).toHaveBeenCalledTimes(1)
   })
 
   it("preserves the current leaf when splitting a connected hidden session", async () => {

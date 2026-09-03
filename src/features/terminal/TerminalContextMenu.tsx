@@ -44,12 +44,13 @@ export function TerminalContextMenu({ open, x, y, context, onClose, onRestoreFoc
 
     const closeOnOutsidePointer = (event: PointerEvent): void => {
       if (!menuRef.current?.contains(event.target as Node)) {
+        if (event.target instanceof Element && event.target.closest("[data-command-palette-trigger]")) return
         onCloseRef.current()
         onRestoreFocusRef.current?.()
       }
     }
     const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return
+      if (event.key !== "Escape" || event.defaultPrevented) return
       event.preventDefault()
       onCloseRef.current()
       onRestoreFocusRef.current?.()
