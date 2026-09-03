@@ -52,6 +52,28 @@ describe("TerminalContextMenu", () => {
 
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
+
+  it("restores focus after an outside pointer dismissal", () => {
+    const onClose = vi.fn()
+    const onRestoreFocus = vi.fn()
+    renderMenu({ context: createContext("connected", true), onClose, onRestoreFocus })
+
+    fireEvent.pointerDown(document.body)
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onRestoreFocus).toHaveBeenCalledTimes(1)
+  })
+
+  it("restores focus after Escape dismissal", () => {
+    const onClose = vi.fn()
+    const onRestoreFocus = vi.fn()
+    renderMenu({ context: createContext("connected", true), onClose, onRestoreFocus })
+
+    fireEvent.keyDown(window, { key: "Escape" })
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onRestoreFocus).toHaveBeenCalledTimes(1)
+  })
 })
 
 const connectedSession = {

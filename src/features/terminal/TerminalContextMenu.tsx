@@ -38,7 +38,10 @@ export function TerminalContextMenu({ open, x, y, context, onClose, onRestoreFoc
     menuRef.current?.focus()
 
     const closeOnOutsidePointer = (event: PointerEvent): void => {
-      if (!menuRef.current?.contains(event.target as Node)) onClose()
+      if (!menuRef.current?.contains(event.target as Node)) {
+        onClose()
+        onRestoreFocus?.()
+      }
     }
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return

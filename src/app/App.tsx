@@ -838,6 +838,10 @@ function Workspace() {
   const openTerminalContextMenu = useCallback((sessionId: string, event: MouseEvent): void => {
     event.preventDefault()
     event.stopPropagation()
+    if (focusRestoreTimer.current !== undefined) {
+      window.clearTimeout(focusRestoreTimer.current)
+      focusRestoreTimer.current = undefined
+    }
     if (!workspaceRef.current.sessions.some((session) => session.id === sessionId)) return
     if (workspaceRef.current.activeSessionId !== sessionId) activateExistingSession(sessionId)
     setTerminalContextMenu({ sessionId, x: event.clientX, y: event.clientY })
@@ -847,6 +851,24 @@ function Workspace() {
     ? workspace.sessions.find((session) => session.id === terminalContextMenu.sessionId)
     : undefined
   const terminalMenuSurface = terminalMenuSession ? terminalSurfaces.current.get(terminalMenuSession.id) : undefined
+  const terminalMenuActions: CommandActions | undefined = terminalMenuSession
+    ? {
+        ...commandContext.actions,
+        terminal: {
+          ...commandContext.actions.terminal,
+          search: () => {
+            activateExistingSession(terminalMenuSession)
+            setActiveNav("terminal")
+            setSearchOpen(true)
+          },
+          copy: () => terminalSurfaces.current.get(terminalMenuSession.id)?.copy(),
+          paste: () => terminalSurfaces.current.get(terminalMenuSession.id)?.paste(),
+          selectAll: () => terminalSurfaces.current.get(terminalMenuSession.id)?.selectAll(),
+          clear: () => terminalSurfaces.current.get(terminalMenuSession.id)?.clear(),
+          focus: () => terminalSurfaces.current.get(terminalMenuSession.id)?.focus()
+        }
+      }
+    : undefined
   const terminalMenuContext: CommandContext = terminalMenuSession
     ? {
         ...commandContext,
@@ -855,9 +877,17 @@ function Workspace() {
         terminalBufferAvailable: terminalMenuSurface !== undefined,
         terminal: terminalMenuSurface,
         selection: { hasSelection: terminalMenuSurface?.hasSelection() ?? false },
-        clipboard: { canPaste: terminalMenuSession.state === "connected" }
+        clipboard: { canPaste: terminalMenuSession.state === "connected" },
+        actions: terminalMenuActions!
       }
     : commandContext
+
+  useEffect(() => {
+    if (!terminalContextMenu) return
+    if (activeNav === "terminal" && terminalMenuSession && terminalMenuSurface) return
+    setTerminalContextMenu(undefined)
+    restorePaletteFocus()
+  }, [activeNav, restorePaletteFocus, terminalContextMenu, terminalMenuSession, terminalMenuSurface])
 
   useEffect(() => {
     const listener = (event: KeyboardEvent): void => {
@@ -918,6 +948,7 @@ function Workspace() {
           onNavigate={setActiveNav}
           onSessionActivate={activateExistingSession}
           onSessionCommand={invokeSessionCommand}
+          commandContext={commandContext}
         />
         <main className="workspace">
           <RecoveryBanner state={bootstrapState} onRetry={retryBootstrap} onExportDiagnostics={() => bridge.diagnostics.export()} />
@@ -987,7 +1018,10 @@ function Workspace() {
         </main>
         <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={(profile, credentials) => void saveHost(profile, credentials)} />
         <CommandPalette open={paletteOpen} context={commandContext} onClose={() => setPaletteOpen(false)} onRestoreFocus={restorePaletteFocus} />
-        {terminalContextMenu && terminalMenuSession && <TerminalContextMenu open x={terminalContextMenu.x} y={terminalContextMenu.y} context={terminalMenuContext} onClose={closeTerminalContextMenu} onRestoreFocus={restorePaletteFocus} />}
+        {terminalContextMenu && terminalMenuSession && <TerminalContextMenu open x={terminalContextMenu.x} y={terminalContextMenu.y} context={terminalMenuContext} onClose={closeTerminalContextMenu} onRestoreFocus={(request) => {
+          if (request === "terminal.focus") return
+          restorePaletteFocus(request)
+        }} />}
       </div>
     </div>
   )

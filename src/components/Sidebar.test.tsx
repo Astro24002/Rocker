@@ -68,4 +68,50 @@ describe("Sidebar session actions", () => {
     fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
     expect(screen.getByRole("menuitem", { name: "Reconnect" })).toBeEnabled()
   })
+
+  it.each([
+    ["idle", { reconnect: false, rename: true, duplicate: false, duplicateWindow: false, split: false, close: true }],
+    ["restoring", { reconnect: false, rename: true, duplicate: false, duplicateWindow: false, split: false, close: true }],
+    ["connecting", { reconnect: false, rename: true, duplicate: false, duplicateWindow: false, split: false, close: true }],
+    ["connected", { reconnect: false, rename: true, duplicate: true, duplicateWindow: true, split: true, close: true }],
+    ["reconnecting", { reconnect: false, rename: true, duplicate: false, duplicateWindow: false, split: false, close: true }],
+    ["disconnected", { reconnect: true, rename: true, duplicate: true, duplicateWindow: false, split: false, close: true }],
+    ["error", { reconnect: true, rename: true, duplicate: true, duplicateWindow: false, split: false, close: true }],
+    ["closing", { reconnect: false, rename: false, duplicate: false, duplicateWindow: false, split: false, close: false }]
+  ] as const)("derives every session action guard from the registry for %s sessions", (state, expected) => {
+    render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state }]} onWidthChange={vi.fn()} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    const enabledByLabel = {
+      reconnect: "Reconnect",
+      rename: "Rename",
+      duplicate: "Duplicate",
+      duplicateWindow: "Duplicate in a new window",
+      split: "Split horizontally",
+      close: "Close"
+    } as const
+    for (const [key, label] of Object.entries(enabledByLabel) as Array<[keyof typeof expected, string]>) {
+      const item = screen.getByRole("menuitem", { name: label })
+      if (expected[key]) expect(item).toBeEnabled()
+      else expect(item).toBeDisabled()
+    }
+  })
+
+  it("does not dispatch disabled session commands", () => {
+    const onSessionCommand = vi.fn()
+    render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state: "connecting" }]} onWidthChange={vi.fn()} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }))
+    expect(onSessionCommand).not.toHaveBeenCalled()
+  })
+
+  it("does not dispatch rename or close for a closing session", () => {
+    const onSessionCommand = vi.fn()
+    render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state: "closing" }]} onWidthChange={vi.fn()} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }))
+    expect(onSessionCommand).not.toHaveBeenCalled()
+  })
 })
