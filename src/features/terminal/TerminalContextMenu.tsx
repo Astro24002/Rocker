@@ -30,7 +30,12 @@ const terminalMenuCommands: ReadonlyArray<{ id: Extract<CommandId, `terminal.${s
 export function TerminalContextMenu({ open, x, y, context, onClose, onRestoreFocus }: TerminalContextMenuProps) {
   const { t } = useI18n()
   const menuRef = useRef<HTMLDivElement>(null)
+  const onCloseRef = useRef(onClose)
+  const onRestoreFocusRef = useRef(onRestoreFocus)
   const [status, setStatus] = useState<"failed" | "disabled">()
+
+  onCloseRef.current = onClose
+  onRestoreFocusRef.current = onRestoreFocus
 
   useEffect(() => {
     if (!open) return
@@ -39,15 +44,15 @@ export function TerminalContextMenu({ open, x, y, context, onClose, onRestoreFoc
 
     const closeOnOutsidePointer = (event: PointerEvent): void => {
       if (!menuRef.current?.contains(event.target as Node)) {
-        onClose()
-        onRestoreFocus?.()
+        onCloseRef.current()
+        onRestoreFocusRef.current?.()
       }
     }
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape") return
       event.preventDefault()
-      onClose()
-      onRestoreFocus?.()
+      onCloseRef.current()
+      onRestoreFocusRef.current?.()
     }
     window.addEventListener("pointerdown", closeOnOutsidePointer)
     window.addEventListener("keydown", closeOnEscape)
@@ -55,7 +60,7 @@ export function TerminalContextMenu({ open, x, y, context, onClose, onRestoreFoc
       window.removeEventListener("pointerdown", closeOnOutsidePointer)
       window.removeEventListener("keydown", closeOnEscape)
     }
-  }, [onClose, onRestoreFocus, open])
+  }, [open])
 
   if (!open) return null
 

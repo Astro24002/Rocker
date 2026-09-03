@@ -159,6 +159,7 @@ function Workspace() {
   const settingsWriteInFlight = useRef<PendingSettingsWrite | undefined>(undefined)
   const latestSettingsStatusVersion = useRef(0)
   const activeSessionIdRef = useRef<string | undefined>(undefined)
+  const pendingSearchSessionId = useRef<string | undefined>(undefined)
   const workspaceRef = useRef(workspace)
   const activeNavigationRef = useRef<WorkspaceNavKey>("hosts")
   const workspaceStageRef = useRef<HTMLDivElement>(null)
@@ -669,6 +670,15 @@ function Workspace() {
     setActiveNav("terminal")
   }, [])
 
+  const openSearchForSession = useCallback((sessionOrId: WorkspaceSession | string): void => {
+    const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId.id
+    if (!workspaceRef.current.sessions.some((session) => session.id === sessionId)) return
+    pendingSearchSessionId.current = workspaceRef.current.activeSessionId === sessionId ? undefined : sessionId
+    activateExistingSession(sessionId)
+    setActiveNav("terminal")
+    setSearchOpen(true)
+  }, [activateExistingSession])
+
   const duplicateSession = (session: WorkspaceSession, forceNewConnection = false, split = false): void => {
     if (!capabilities.sshAvailable) return
     const host = hosts.find((candidate) => candidate.id === session.hostId)
@@ -682,9 +692,7 @@ function Workspace() {
         label: `${session.label}${split ? " split" : " copy"}`
       })
       if (!split) return opened
-      const layout = current.layout && visibleSessionIds(current.layout).includes(session.id)
-        ? current.layout
-        : { kind: "leaf" as const, sessionId: session.id }
+      const layout = current.layout ?? { kind: "leaf" as const, sessionId: current.activeSessionId ?? session.id }
       return { ...opened, layout: insertHorizontalSplit(layout, session.id, sessionId) }
     })
     setActiveNav("terminal")
@@ -765,8 +773,7 @@ function Workspace() {
   const commandActions: CommandActions = {
     terminal: {
       search: () => {
-        setActiveNav("terminal")
-        setSearchOpen(true)
+        if (activeSession) openSearchForSession(activeSession)
       },
       copy: () => activeTerminalSurface?.copy(),
       paste: () => activeTerminalSurface?.paste(),
@@ -857,9 +864,7 @@ function Workspace() {
         terminal: {
           ...commandContext.actions.terminal,
           search: () => {
-            activateExistingSession(terminalMenuSession)
-            setActiveNav("terminal")
-            setSearchOpen(true)
+            openSearchForSession(terminalMenuSession)
           },
           copy: () => terminalSurfaces.current.get(terminalMenuSession.id)?.copy(),
           paste: () => terminalSurfaces.current.get(terminalMenuSession.id)?.paste(),
@@ -903,6 +908,11 @@ function Workspace() {
   }, [bridge])
 
   useEffect(() => {
+    if (pendingSearchSessionId.current === activeSession?.id) {
+      pendingSearchSessionId.current = undefined
+      return
+    }
+    pendingSearchSessionId.current = undefined
     setSearchOpen(false)
   }, [activeSession?.id])
 

@@ -5,6 +5,7 @@ import type { AppBootstrapSnapshot, BootstrapHostProfile, RockerBridge } from ".
 import type { StorageHealth } from "../../electron/storage/storage-result"
 import type { TerminalSessionEvent } from "../../electron/ssh/types"
 import { clampSidebarWidth } from "../components/Sidebar"
+import { visibleSessionIds } from "../features/terminal/layout"
 import type { TerminalWorkspaceState } from "../features/terminal/session-state"
 import App from "./App"
 import type { AppSettings, HostProfile, StoredWorkspaceWindow } from "./types"
@@ -325,6 +326,78 @@ describe("desktop workspace shell", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Focus terminal" }))
     await waitFor(() => expect(secondSurface.focus).toHaveBeenCalledTimes(1))
     expect(firstSurface.focus).not.toHaveBeenCalled()
+  })
+
+  it("keeps command palette focus while a terminal context menu remains open", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const terminal = document.querySelector(".terminal-surface")
+    expect(terminal).not.toBeNull()
+    fireEvent.contextMenu(terminal!)
+    expect(screen.getByRole("menu", { name: "Terminal actions" })).toBeInTheDocument()
+
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true, shiftKey: true })))
+    const query = await screen.findByRole("searchbox", { name: "Search commands" })
+    expect(query).toHaveFocus()
+
+    fireEvent.change(query, { target: { value: "settings" } })
+    fireEvent.keyDown(query, { key: "Enter" })
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument())
+  })
+
+  it("opens Search for the terminal-menu session after a keyboard recent-session switch", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshotWithTwoSessions(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(2))
+    const firstSession = workspace().sessions[0]
+    const secondSession = workspace().sessions[1]
+    fireEvent.click(screen.getByRole("button", { name: firstSession.label }))
+    fireEvent.click(screen.getByRole("button", { name: secondSession.label }))
+
+    const secondTerminal = document.querySelector(`.terminal-surface[data-session-id="${secondSession.id}"]`)
+    expect(secondTerminal).not.toBeNull()
+    fireEvent.contextMenu(secondTerminal!)
+    expect(screen.getByRole("menu", { name: "Terminal actions" })).toBeInTheDocument()
+
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true, shiftKey: true })))
+    await screen.findByRole("dialog", { name: "Command Palette" })
+    fireEvent.click(screen.getByRole("option", { name: firstSession.label }))
+    await waitFor(() => expect(workspace().activeSessionId).toBe(firstSession.id))
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Search terminal" }))
+    const search = await screen.findByRole("search", { name: "Search terminal" })
+    expect(search).toHaveAttribute("data-session-id", secondSession.id)
+    expect(screen.getByRole("searchbox", { name: "Search terminal output" })).toHaveFocus()
+  })
+
+  it("preserves the current leaf when splitting a connected hidden session", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshotWithTwoSessionsAndLayout(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(2))
+    await waitFor(() => expect(workspace().sessions.every((session) => session.state === "connected")).toBe(true))
+    const firstSession = workspace().sessions[0]
+    const secondSession = workspace().sessions[1]
+    fireEvent.contextMenu(screen.getByRole("button", { name: secondSession.label }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Split horizontally" }))
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(3))
+    const newSession = workspace().sessions.find((session) => session.id !== firstSession.id && session.id !== secondSession.id)
+    expect(newSession).toBeDefined()
+    expect(workspace().activeSessionId).toBe(newSession!.id)
+    expect(visibleSessionIds(workspace().layout)).toEqual([firstSession.id, secondSession.id, newSession!.id])
+    expect(workspace().layout).toMatchObject({
+      kind: "split",
+      first: { kind: "leaf", sessionId: firstSession.id },
+      second: {
+        kind: "split",
+        first: { kind: "leaf", sessionId: secondSession.id },
+        second: { kind: "leaf", sessionId: newSession!.id }
+      }
+    })
   })
 
   it("closes the terminal menu and restores stage focus when keyboard navigation hides its host", async () => {
@@ -837,6 +910,13 @@ function workspaceSnapshotWithTwoSessions(hostId: string) {
       { sessionId: "22222222-2222-4222-8222-222222222222", hostId, label: "G11", cols: 120, rows: 40 },
       { sessionId: "33333333-3333-4333-8333-333333333333", hostId, label: "G11 copy", cols: 120, rows: 40 }
     ]
+  }
+}
+
+function workspaceSnapshotWithTwoSessionsAndLayout(hostId: string) {
+  return {
+    ...workspaceSnapshotWithTwoSessions(hostId),
+    layout: { kind: "leaf" as const, sessionId: "22222222-2222-4222-8222-222222222222" }
   }
 }
 
