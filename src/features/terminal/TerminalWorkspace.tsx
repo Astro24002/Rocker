@@ -1,5 +1,6 @@
 import type { TerminalDimensions } from "../../../electron/ssh/types"
 import type { ReactNode } from "react"
+import type { TerminalCommandSurface } from "../commands/command-registry"
 import type { MonitorState } from "../monitoring/monitor-state"
 import { MonitorSummary } from "../monitoring/MonitorSummary"
 import { visibleSessionIds } from "./layout"
@@ -23,6 +24,7 @@ interface TerminalWorkspaceProps {
   onAck(sessionId: string, channelGeneration: number, sequence: number): void
   onController(sessionId: string, controller: TerminalController | undefined): void
   onSearchController?(sessionId: string, controller: TerminalSearchController | undefined): void
+  onCommandSurface?(sessionId: string, surface: TerminalCommandSurface | undefined): void
 }
 
 export function TerminalWorkspace(props: TerminalWorkspaceProps) {
@@ -53,6 +55,7 @@ export function TerminalWorkspace(props: TerminalWorkspaceProps) {
             onAck={(channelGeneration, sequence) => props.onAck(session.id, channelGeneration, sequence)}
             onController={props.onController}
             onSearchController={props.onSearchController}
+            onCommandSurface={props.onCommandSurface}
           />
         ))}
       </div>

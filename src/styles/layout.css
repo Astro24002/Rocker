@@ -97,8 +97,27 @@
 }
 
 .workspace-stage {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   flex: 1;
+}
+
+.workspace-stage > :not(.workspace-command-affordances) {
+  min-height: 0;
+  flex: 1;
+}
+
+.workspace-command-affordances {
+  display: flex;
+  min-height: 38px;
+  flex: 0 0 38px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.012);
 }
 
 .hosts-view,

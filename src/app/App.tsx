@@ -1,5 +1,7 @@
+import { Command, Search } from "lucide-react"
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
 import { ComingSoonView } from "../components/ComingSoonView"
+import { IconButton } from "../components/IconButton"
 import { RecoveryBanner } from "../components/RecoveryBanner"
 import { Sidebar, clampSidebarWidth, type NavKey } from "../components/Sidebar"
 import { WindowChrome } from "../components/WindowChrome"
@@ -10,7 +12,11 @@ import { HistoryView } from "../features/history/HistoryView"
 import { applyMetrics, createMonitorState, toggleMonitor } from "../features/monitoring/monitor-state"
 import { PortsView } from "../features/ports/PortsView"
 import { SettingsView } from "../features/settings/SettingsView"
+import { CommandPalette } from "../features/commands/CommandPalette"
+import { executeCommand, isCommandEnabled, type CommandActions, type CommandContext, type CommandId, type TerminalCommandSurface } from "../features/commands/command-registry"
+import { matchGlobalShortcut, shouldIgnoreGlobalShortcutTarget } from "../features/commands/command-shortcuts"
 import { TerminalConnectionOverlay } from "../features/terminal/TerminalConnectionOverlay"
+import { TerminalSearchOverlay } from "../features/terminal/TerminalSearchOverlay"
 import { insertHorizontalSplit, removeSessionFromLayout, visibleSessionIds, type TerminalLayout } from "../features/terminal/layout"
 import {
   activateSession,
@@ -24,6 +30,7 @@ import {
 } from "../features/terminal/session-state"
 import { TerminalWorkspace } from "../features/terminal/TerminalWorkspace"
 import { type TerminalController, type TerminalPreferences } from "../features/terminal/terminal-controller"
+import type { TerminalSearchController } from "../features/terminal/terminal-search"
 import { I18nProvider, useI18n } from "../i18n"
 import { bootstrapReducer, createBootstrapState, deriveBootstrapCapabilities, retryableBootstrapResources } from "./bootstrap-state"
 import { getRockerBridge } from "./bridge"
@@ -126,12 +133,18 @@ function Workspace() {
   const [monitor, setMonitor] = useState(createMonitorState)
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
   const [settingsPersistenceFailed, setSettingsPersistenceFailed] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [, setCommandContextVersion] = useState(0)
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const stored = Number(localStorage.getItem("rocker.sidebarWidth") ?? defaultSettings.sidebarWidth)
     return clampSidebarWidth(Number.isFinite(stored) ? stored : defaultSettings.sidebarWidth)
   })
 
   const controllers = useRef(new Map<string, TerminalController>())
+  const searchControllers = useRef(new Map<string, TerminalSearchController>())
+  const terminalSurfaces = useRef(new Map<string, TerminalCommandSurface>())
+  const commandContextRef = useRef<CommandContext | undefined>(undefined)
   const settingsRef = useRef(settings)
   const pendingAppearanceUpdate = useRef<Partial<AppSettings>>({})
   const settingsPersistTimer = useRef<number | undefined>(undefined)
@@ -309,6 +322,18 @@ function Workspace() {
     } else {
       controllers.current.delete(sessionId)
     }
+  }, [])
+
+  const handleSearchController = useCallback((sessionId: string, controller: TerminalSearchController | undefined): void => {
+    if (controller) searchControllers.current.set(sessionId, controller)
+    else searchControllers.current.delete(sessionId)
+    setCommandContextVersion((current) => current + 1)
+  }, [])
+
+  const handleTerminalCommandSurface = useCallback((sessionId: string, surface: TerminalCommandSurface | undefined): void => {
+    if (surface) terminalSurfaces.current.set(sessionId, surface)
+    else terminalSurfaces.current.delete(sessionId)
+    setCommandContextVersion((current) => current + 1)
   }, [])
 
   const handleSessionEvent = useCallback((event: TerminalSessionEvent): void => {
@@ -542,6 +567,8 @@ function Workspace() {
   const activeConnectionId = activeSession && canUseConnection(activeSession.state)
     ? connectionIds.current.get(activeSession.id)
     : undefined
+  const activeSearchController = activeSession ? searchControllers.current.get(activeSession.id) : undefined
+  const activeTerminalSurface = activeSession ? terminalSurfaces.current.get(activeSession.id) : undefined
 
   useEffect(() => {
     if (!activeSession || activeSession.state !== "connected") {
@@ -653,10 +680,84 @@ function Workspace() {
     releaseRestoreAdmission(session.id)
     connectionIds.current.delete(session.id)
     controllers.current.delete(session.id)
+    searchControllers.current.delete(session.id)
+    terminalSurfaces.current.delete(session.id)
     void bridge.sessions.close(session.id).catch(() => undefined)
     setWorkspace((current) => closeSession(current, session.id))
     if (workspace.sessions.length <= 1) setActiveNav("hosts")
   }
+
+  const restoreTerminalFocus = (): void => {
+    activeTerminalSurface?.focus()
+    if (!activeTerminalSurface && activeSession) controllers.current.get(activeSession.id)?.focus()
+  }
+
+  const commandActions: CommandActions = {
+    terminal: {
+      search: () => setSearchOpen(true),
+      copy: () => activeTerminalSurface?.copy(),
+      paste: () => activeTerminalSurface?.paste(),
+      selectAll: () => activeTerminalSurface?.selectAll(),
+      clear: () => activeTerminalSurface?.clear(),
+      focus: restoreTerminalFocus,
+      increaseFont: () => updateSettings({ terminalFontSize: clampTerminalFontSize(settingsRef.current.terminalFontSize + 1) }),
+      decreaseFont: () => updateSettings({ terminalFontSize: clampTerminalFontSize(settingsRef.current.terminalFontSize - 1) }),
+      resetFont: () => updateSettings({ terminalFontSize: defaultSettings.terminalFontSize })
+    },
+    session: {
+      activate: (session) => {
+        setWorkspace((current) => activateSession(current, session.id))
+        setActiveNav("terminal")
+      },
+      reconnect: (session) => capabilities.sshAvailable ? bridge.sessions.reconnect(session.id) : undefined,
+      rename: renameTerminalSession,
+      duplicate: (session) => duplicateSession(session),
+      duplicateWindow: (session) => capabilities.sshAvailable ? bridge.sessions.duplicateInNewWindow(session.hostId) : undefined,
+      splitHorizontal: (session) => duplicateSession(session, false, true),
+      close: closeTerminalSession
+    },
+    navigation: {
+      navigate: (destination) => setActiveNav(destination === "local-terminal" ? "terminal" : destination)
+    },
+    palette: { open: () => setPaletteOpen(true) }
+  }
+  const commandContext: CommandContext = {
+    activeSession,
+    connectionState: activeSession?.state,
+    terminalBufferAvailable: activeSession !== undefined,
+    terminal: activeTerminalSurface,
+    selection: { hasSelection: activeTerminalSurface?.hasSelection() ?? false },
+    clipboard: { canPaste: activeSession?.state === "connected" },
+    activeNavigation: activeNav,
+    settingsAvailable: true,
+    settingsPersistenceAvailable: settingsMutationsAvailable,
+    recentSessions: [],
+    actions: commandActions
+  }
+  commandContextRef.current = commandContext
+
+  const invokeCommand = (commandId: CommandId): void => {
+    const context = commandContextRef.current
+    if (!context || !isCommandEnabled(commandId, context)) return
+    void executeCommand(commandId, context)
+  }
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent): void => {
+      if (shouldIgnoreGlobalShortcutTarget(event.target)) return
+      const commandId = matchGlobalShortcut(event, bridge.app.platform)
+      const context = commandContextRef.current
+      if (!commandId || !context || !isCommandEnabled(commandId, context)) return
+      event.preventDefault()
+      void executeCommand(commandId, context)
+    }
+    window.addEventListener("keydown", listener)
+    return () => window.removeEventListener("keydown", listener)
+  }, [bridge])
+
+  useEffect(() => {
+    setSearchOpen(false)
+  }, [activeSession?.id])
 
   const saveHost = async (profile: HostProfile, credentials: { password?: string; passphrase?: string }): Promise<void> => {
     if (!capabilities.hostMutationsAvailable) return
@@ -710,18 +811,29 @@ function Workspace() {
         <main className="workspace">
           <RecoveryBanner state={bootstrapState} onRetry={retryBootstrap} onExportDiagnostics={() => bridge.diagnostics.export()} />
           <div className="workspace-stage">
+          <div aria-label={t("commands.title")} className="workspace-command-affordances">
+            <IconButton disabled={!isCommandEnabled("terminal.search", commandContext)} label={t("terminal.search")} onClick={() => invokeCommand("terminal.search")}>
+              <Search size={15} />
+            </IconButton>
+            <IconButton label={t("commands.openPalette")} onClick={() => invokeCommand("palette.open")}>
+              <Command size={15} />
+            </IconButton>
+          </div>
           {workspace.sessions.length > 0 && (
             <div className="terminal-workspace-host" hidden={activeNav !== "terminal"}>
               <TerminalWorkspace
                 workspace={workspace}
                 workspaceVisible={activeNav === "terminal"}
-                overlay={<TerminalConnectionOverlay
-                  session={activeSession}
-                  onCancel={() => { if (activeSession) void bridge.sessions.cancelReconnect(activeSession.id).catch(() => undefined) }}
-                  reconnectDisabled={!capabilities.sshAvailable}
-                  onReconnectNow={() => { if (activeSession && capabilities.sshAvailable) void bridge.sessions.reconnect(activeSession.id).catch(() => undefined) }}
-                  onClose={() => { if (activeSession) closeTerminalSession(activeSession) }}
-                />}
+                overlay={<>
+                  <TerminalConnectionOverlay
+                    session={activeSession}
+                    onCancel={() => { if (activeSession) void bridge.sessions.cancelReconnect(activeSession.id).catch(() => undefined) }}
+                    reconnectDisabled={!capabilities.sshAvailable}
+                    onReconnectNow={() => { if (activeSession && capabilities.sshAvailable) void bridge.sessions.reconnect(activeSession.id).catch(() => undefined) }}
+                    onClose={() => { if (activeSession) closeTerminalSession(activeSession) }}
+                  />
+                  <TerminalSearchOverlay controller={activeSearchController} open={searchOpen} onClose={() => setSearchOpen(false)} onRestoreFocus={restoreTerminalFocus} />
+                </>}
                 monitor={monitor}
                 monitorHostName={activeHost?.name}
                 onMonitorToggle={() => setMonitor((current) => toggleMonitor(current))}
@@ -732,6 +844,8 @@ function Workspace() {
                 onResize={handleTerminalResize}
                 onAck={handleTerminalAck}
                 onController={handleTerminalController}
+                onSearchController={handleSearchController}
+                onCommandSurface={handleTerminalCommandSurface}
               />
             </div>
           )}
@@ -758,6 +872,7 @@ function Workspace() {
           </div>
         </main>
         <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={(profile, credentials) => void saveHost(profile, credentials)} />
+        <CommandPalette open={paletteOpen} context={commandContext} onClose={() => setPaletteOpen(false)} onRestoreFocus={restoreTerminalFocus} />
       </div>
     </div>
   )

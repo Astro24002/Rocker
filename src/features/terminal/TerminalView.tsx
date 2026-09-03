@@ -2,6 +2,7 @@ import { FitAddon } from "@xterm/addon-fit"
 import { Terminal } from "@xterm/xterm"
 import { useCallback, useEffect, useRef, type ClipboardEvent as ReactClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import type { TerminalDimensions } from "../../../electron/ssh/types"
+import type { TerminalCommandSurface } from "../commands/command-registry"
 import type { WorkspaceSession } from "./session-state"
 import { createTerminalSearchAdapter, TerminalSearchController } from "./terminal-search"
 import { TerminalController, type TerminalPreferences } from "./terminal-controller"
@@ -20,6 +21,7 @@ export interface TerminalViewProps {
   onAck(channelGeneration: number, sequence: number): void
   onController(sessionId: string, controller: TerminalController | undefined): void
   onSearchController?(sessionId: string, controller: TerminalSearchController | undefined): void
+  onCommandSurface?(sessionId: string, surface: TerminalCommandSurface | undefined): void
 }
 
 export function TerminalView(props: TerminalViewProps) {
@@ -119,6 +121,22 @@ export function TerminalView(props: TerminalViewProps) {
     controllerRef.current = controller
     propsRef.current.onController(props.session.id, controller)
     propsRef.current.onSearchController?.(props.session.id, searchController)
+    const commandSurface: TerminalCommandSurface = {
+      hasSelection: () => terminal.hasSelection(),
+      copy: () => {
+        const selection = terminal.getSelection()
+        if (selection) return navigator.clipboard?.writeText(selection)
+      },
+      paste: async () => {
+        const text = await navigator.clipboard?.readText()
+        if (!text) return
+        sendPastedText(text, propsRef.current.confirmMultilinePaste, propsRef.current.multilinePasteConfirmation, (data) => controller.sendInput(data))
+      },
+      selectAll: () => terminal.selectAll(),
+      clear: () => terminal.clear(),
+      focus: () => controller.focus()
+    }
+    propsRef.current.onCommandSurface?.(props.session.id, commandSurface)
 
     const dataDisposable = terminal.onData((data) => controller.sendInput(data))
     terminal.attachCustomKeyEventHandler((event) => {
@@ -149,6 +167,7 @@ export function TerminalView(props: TerminalViewProps) {
       fitHiddenRef.current = false
       searchController.dispose()
       propsRef.current.onSearchController?.(props.session.id, undefined)
+      propsRef.current.onCommandSurface?.(props.session.id, undefined)
       controller.dispose()
       if (controllerRef.current === controller) controllerRef.current = null
       if (terminalRef.current === terminal) terminalRef.current = null
@@ -176,12 +195,7 @@ export function TerminalView(props: TerminalViewProps) {
     event.preventDefault()
     event.stopPropagation()
     const text = event.clipboardData.getData("text/plain")
-    if (!text) return
-    if (text.includes("\n") && propsRef.current.confirmMultilinePaste) {
-      const message = propsRef.current.multilinePasteConfirmation ?? "Paste multiple lines into the terminal?"
-      if (!window.confirm(message)) return
-    }
-    controllerRef.current?.sendInput(text)
+    sendPastedText(text, propsRef.current.confirmMultilinePaste, propsRef.current.multilinePasteConfirmation, (data) => controllerRef.current?.sendInput(data))
   }
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
@@ -218,6 +232,15 @@ const hiddenSurfaceStyle = {
 function isCopyShortcut(event: globalThis.KeyboardEvent, terminal: Pick<Terminal, "hasSelection" | "getSelection">): boolean {
   if (!terminal.hasSelection() || event.altKey || event.key.toLowerCase() !== "c") return false
   return (event.ctrlKey && event.shiftKey && !event.metaKey) || (event.metaKey && !event.ctrlKey)
+}
+
+function sendPastedText(text: string, confirmMultilinePaste: boolean, confirmation: string | undefined, sendInput: (data: string) => void): void {
+  if (!text) return
+  if (text.includes("\n") && confirmMultilinePaste) {
+    const message = confirmation ?? "Paste multiple lines into the terminal?"
+    if (!window.confirm(message)) return
+  }
+  sendInput(text)
 }
 
 function isInterruptKey(event: globalThis.KeyboardEvent, terminal: Pick<Terminal, "hasSelection"> | null): boolean {

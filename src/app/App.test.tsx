@@ -64,6 +64,19 @@ beforeEach(() => {
 })
 
 describe("desktop workspace shell", () => {
+  it("opens the command palette from the exact global shortcut", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], undefined))
+    render(<App />)
+
+    await waitFor(() => expect(bridge.bootstrap.load).toHaveBeenCalledTimes(1))
+    const event = new KeyboardEvent("keydown", { key: "p", ctrlKey: true, shiftKey: true })
+    const preventDefault = vi.spyOn(event, "preventDefault")
+    window.dispatchEvent(event)
+
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "Command Palette" })).toBeInTheDocument())
+  })
+
   it("loads renderer data through one bootstrap request", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
     render(<App />)

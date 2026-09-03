@@ -16,6 +16,8 @@ const xterm = vi.hoisted(() => {
     public readonly open = vi.fn()
     public readonly focus = vi.fn()
     public readonly dispose = vi.fn()
+    public readonly selectAll = vi.fn()
+    public readonly clear = vi.fn()
     public readonly write = vi.fn((_data: Uint8Array | string, done?: () => void) => done?.())
     public readonly hasSelection = vi.fn(() => false)
     public readonly getSelection = vi.fn(() => "")
@@ -194,6 +196,28 @@ describe("TerminalView", () => {
     expect(onController).toHaveBeenCalledWith(session.id, expect.objectContaining({ acceptOutput: expect.any(Function) }))
     unmount()
     expect(onController).toHaveBeenLastCalledWith(session.id, undefined)
+  })
+
+  it("registers a renderer-only command surface for the stable terminal", () => {
+    const onCommandSurface = vi.fn()
+    const { unmount } = render(<TerminalView {...createProps({ onCommandSurface })} />)
+    const surface = onCommandSurface.mock.calls[0][1] as {
+      copy(): Promise<void>
+      clear(): void
+      focus(): void
+      selectAll(): void
+    }
+
+    expect(surface).toEqual(expect.objectContaining({ copy: expect.any(Function), clear: expect.any(Function), focus: expect.any(Function), selectAll: expect.any(Function) }))
+    surface.clear()
+    surface.focus()
+    surface.selectAll()
+    expect(xterm.terminals[0].clear).toHaveBeenCalledTimes(1)
+    expect(xterm.terminals[0].focus).toHaveBeenCalledTimes(1)
+    expect(xterm.terminals[0].selectAll).toHaveBeenCalledTimes(1)
+
+    unmount()
+    expect(onCommandSurface).toHaveBeenLastCalledWith(session.id, undefined)
   })
 
   it("creates one per-session search controller and disposes it with the xterm", () => {
