@@ -1,10 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { I18nProvider } from "../../i18n"
 import { CommandPalette, type CommandPaletteProps } from "./CommandPalette"
 import type { CommandContext } from "./command-registry"
 
 describe("CommandPalette", () => {
+  afterEach(() => localStorage.clear())
+
   it("renders grouped commands, keeps disabled rows visible, and fuzzy filters labels", () => {
     const context = createContext(undefined)
     renderPalette({ context })
@@ -37,6 +39,65 @@ describe("CommandPalette", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "Search commands" }), { target: { value: "paste" } })
     expect(screen.getByRole("option", { name: "Paste" })).toBeInTheDocument()
     expect(screen.queryByRole("option", { name: "Build server" })).not.toBeInTheDocument()
+  })
+
+  it("identifies recent-session activation as a focus transition", async () => {
+    const context = createContext("connected")
+    context.recentSessions = [{
+      id: "recent-1",
+      label: "Build server",
+      session: { ...connectedSession, id: "recent-1", label: "Build server" },
+      lastFocusedAt: 100
+    }]
+    const onRestoreFocus = vi.fn()
+    renderPalette({ context, onRestoreFocus })
+
+    fireEvent.click(screen.getByRole("option", { name: "Build server" }))
+
+    await waitFor(() => expect(context.actions.session.activate).toHaveBeenCalledWith(expect.objectContaining({ id: "recent-1" })))
+    expect(onRestoreFocus).toHaveBeenCalledWith("recent-session")
+  })
+
+  it("keeps ArrowDown and Enter aligned with grouped rows across categories", async () => {
+    const context = createContext("connected")
+    renderPalette({ context })
+    const query = screen.getByRole("searchbox", { name: "Search commands" })
+
+    fireEvent.change(query, { target: { value: "re" } })
+    const selectedOption = (): HTMLElement => screen.getAllByRole("option").find((option) => option.getAttribute("aria-selected") === "true") as HTMLElement
+    expect(selectedOption()).toHaveAttribute("data-command-id", "terminal.font.reset")
+
+    for (let index = 0; index < 7; index += 1) fireEvent.keyDown(query, { key: "ArrowDown" })
+    expect(selectedOption()).toHaveAttribute("data-command-id", "session.close")
+    fireEvent.keyDown(query, { key: "Enter" })
+
+    await waitFor(() => expect(context.actions.session.close).toHaveBeenCalledTimes(1))
+    expect(context.actions.terminal.search).not.toHaveBeenCalled()
+  })
+
+  it("connects the searchbox to a stable listbox and announces the selected option", () => {
+    renderPalette()
+    const query = screen.getByRole("searchbox", { name: "Search commands" })
+    const listbox = screen.getByRole("listbox", { name: "Command Palette" })
+    const selected = screen.getAllByRole("option").find((option) => option.getAttribute("aria-selected") === "true") as HTMLElement
+
+    expect(listbox).toHaveAttribute("id", "command-palette-options")
+    expect(query).toHaveAttribute("aria-controls", "command-palette-options")
+    expect(query).toHaveAttribute("aria-activedescendant", selected.id)
+    expect(selected).toHaveAttribute("aria-selected", "true")
+    expect(screen.getAllByRole("option").filter((option) => option !== selected).every((option) => option.getAttribute("aria-selected") === "false")).toBe(true)
+  })
+
+  it("matches the visible Simplified Chinese label for Copy", () => {
+    localStorage.setItem("rocker.locale", "zh-CN")
+    const context = createContext("connected")
+    renderPalette({ context })
+    const query = screen.getByRole("searchbox", { name: "搜索命令" })
+
+    fireEvent.change(query, { target: { value: "复制" } })
+
+    expect(screen.getByRole("option", { name: "复制" })).toBeInTheDocument()
+    expect(screen.queryByRole("option", { name: "粘贴" })).not.toBeInTheDocument()
   })
 
   it("moves selection, executes with Enter, closes, and restores focus", async () => {

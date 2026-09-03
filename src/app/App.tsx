@@ -12,7 +12,7 @@ import { HistoryView } from "../features/history/HistoryView"
 import { applyMetrics, createMonitorState, toggleMonitor } from "../features/monitoring/monitor-state"
 import { PortsView } from "../features/ports/PortsView"
 import { SettingsView } from "../features/settings/SettingsView"
-import { CommandPalette } from "../features/commands/CommandPalette"
+import { CommandPalette, type CommandPaletteFocusRequest } from "../features/commands/CommandPalette"
 import { executeCommand, isCommandEnabled, type CommandActions, type CommandContext, type CommandId, type TerminalCommandSurface } from "../features/commands/command-registry"
 import { matchGlobalShortcut, shouldIgnoreGlobalShortcutTarget } from "../features/commands/command-shortcuts"
 import { TerminalConnectionOverlay } from "../features/terminal/TerminalConnectionOverlay"
@@ -154,6 +154,10 @@ function Workspace() {
   const settingsWriteQueue = useRef<PendingSettingsWrite[]>([])
   const settingsWriteInFlight = useRef<PendingSettingsWrite | undefined>(undefined)
   const latestSettingsStatusVersion = useRef(0)
+  const activeSessionIdRef = useRef<string | undefined>(undefined)
+  const activeNavigationRef = useRef<NavKey | "terminal">("hosts")
+  const workspaceStageRef = useRef<HTMLDivElement>(null)
+  const focusRestoreTimer = useRef<number | undefined>(undefined)
   const connectionIds = useRef(new Map<string, string>())
   const pendingOpens = useRef(new Map<string, PendingTerminalOpen>())
   const openingSessionIds = useRef(new Set<string>())
@@ -230,6 +234,10 @@ function Workspace() {
       if (settingsPersistTimer.current !== undefined) {
         window.clearTimeout(settingsPersistTimer.current)
         settingsPersistTimer.current = undefined
+      }
+      if (focusRestoreTimer.current !== undefined) {
+        window.clearTimeout(focusRestoreTimer.current)
+        focusRestoreTimer.current = undefined
       }
       const pending = pendingAppearanceUpdate.current
       pendingAppearanceUpdate.current = {}
@@ -569,6 +577,8 @@ function Workspace() {
     : undefined
   const activeSearchController = activeSession ? searchControllers.current.get(activeSession.id) : undefined
   const activeTerminalSurface = activeSession ? terminalSurfaces.current.get(activeSession.id) : undefined
+  activeSessionIdRef.current = workspace.activeSessionId
+  activeNavigationRef.current = activeNav
 
   useEffect(() => {
     if (!activeSession || activeSession.state !== "connected") {
@@ -687,19 +697,67 @@ function Workspace() {
     if (workspace.sessions.length <= 1) setActiveNav("hosts")
   }
 
-  const restoreTerminalFocus = (): void => {
-    activeTerminalSurface?.focus()
-    if (!activeTerminalSurface && activeSession) controllers.current.get(activeSession.id)?.focus()
-  }
+  const focusCurrentTerminal = useCallback((): boolean => {
+    if (activeNavigationRef.current !== "terminal") return false
+    const sessionId = activeSessionIdRef.current
+    if (!sessionId) return false
+    const surface = terminalSurfaces.current.get(sessionId)
+    if (surface) {
+      surface.focus()
+      return true
+    }
+    const controller = controllers.current.get(sessionId)
+    if (!controller) return false
+    controller.focus()
+    return true
+  }, [])
+
+  const restoreCurrentFocus = useCallback((): void => {
+    if (focusCurrentTerminal()) return
+    workspaceStageRef.current?.focus()
+  }, [focusCurrentTerminal])
+
+  const scheduleFocusRestore = useCallback((restore: () => void): void => {
+    if (focusRestoreTimer.current !== undefined) window.clearTimeout(focusRestoreTimer.current)
+    focusRestoreTimer.current = window.setTimeout(() => {
+      focusRestoreTimer.current = undefined
+      restore()
+    }, 0)
+  }, [])
+
+  const restorePaletteFocus = useCallback((request?: CommandPaletteFocusRequest): void => {
+    if (!request) {
+      restoreCurrentFocus()
+      return
+    }
+    scheduleFocusRestore(() => {
+      if (request === "terminal.search") {
+        const searchInput = document.querySelector<HTMLInputElement>(".terminal-search-overlay input")
+        if (searchInput) {
+          searchInput.focus()
+          return
+        }
+      }
+      if (request.startsWith("navigation.") && activeNavigationRef.current !== "terminal") {
+        workspaceStageRef.current?.focus()
+        return
+      }
+      if (focusCurrentTerminal()) return
+      workspaceStageRef.current?.focus()
+    })
+  }, [focusCurrentTerminal, restoreCurrentFocus, scheduleFocusRestore])
 
   const commandActions: CommandActions = {
     terminal: {
-      search: () => setSearchOpen(true),
+      search: () => {
+        setActiveNav("terminal")
+        setSearchOpen(true)
+      },
       copy: () => activeTerminalSurface?.copy(),
       paste: () => activeTerminalSurface?.paste(),
       selectAll: () => activeTerminalSurface?.selectAll(),
       clear: () => activeTerminalSurface?.clear(),
-      focus: restoreTerminalFocus,
+      focus: restoreCurrentFocus,
       increaseFont: () => updateSettings({ terminalFontSize: clampTerminalFontSize(settingsRef.current.terminalFontSize + 1) }),
       decreaseFont: () => updateSettings({ terminalFontSize: clampTerminalFontSize(settingsRef.current.terminalFontSize - 1) }),
       resetFont: () => updateSettings({ terminalFontSize: defaultSettings.terminalFontSize })
@@ -810,7 +868,7 @@ function Workspace() {
         />
         <main className="workspace">
           <RecoveryBanner state={bootstrapState} onRetry={retryBootstrap} onExportDiagnostics={() => bridge.diagnostics.export()} />
-          <div className="workspace-stage">
+          <div className="workspace-stage" data-testid="workspace-stage" ref={workspaceStageRef} tabIndex={-1}>
           <div aria-label={t("commands.title")} className="workspace-command-affordances">
             <IconButton disabled={!isCommandEnabled("terminal.search", commandContext)} label={t("terminal.search")} onClick={() => invokeCommand("terminal.search")}>
               <Search size={15} />
@@ -832,7 +890,7 @@ function Workspace() {
                     onReconnectNow={() => { if (activeSession && capabilities.sshAvailable) void bridge.sessions.reconnect(activeSession.id).catch(() => undefined) }}
                     onClose={() => { if (activeSession) closeTerminalSession(activeSession) }}
                   />
-                  <TerminalSearchOverlay controller={activeSearchController} open={searchOpen} onClose={() => setSearchOpen(false)} onRestoreFocus={restoreTerminalFocus} />
+                  <TerminalSearchOverlay controller={activeSearchController} open={searchOpen} onClose={() => setSearchOpen(false)} onRestoreFocus={restoreCurrentFocus} />
                 </>}
                 monitor={monitor}
                 monitorHostName={activeHost?.name}
@@ -872,7 +930,7 @@ function Workspace() {
           </div>
         </main>
         <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={(profile, credentials) => void saveHost(profile, credentials)} />
-        <CommandPalette open={paletteOpen} context={commandContext} onClose={() => setPaletteOpen(false)} onRestoreFocus={restoreTerminalFocus} />
+        <CommandPalette open={paletteOpen} context={commandContext} onClose={() => setPaletteOpen(false)} onRestoreFocus={restorePaletteFocus} />
       </div>
     </div>
   )

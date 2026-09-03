@@ -27,12 +27,17 @@ export function handleGlobalShortcut(
 export function shouldIgnoreGlobalShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
   if (target.closest("[data-command-palette], .terminal-search-overlay")) return false
+  if (isXtermHelperTextarea(target)) return false
   if (target.isContentEditable || target.contentEditable === "true") return true
   if (target.tagName === "TEXTAREA") return true
   if (target.tagName !== "INPUT") return false
 
   const inputType = (target as HTMLInputElement).type.toLowerCase()
   return !["button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"].includes(inputType)
+}
+
+function isXtermHelperTextarea(target: HTMLElement): boolean {
+  return target.classList.contains("xterm-helper-textarea") && Boolean(target.closest(".terminal-surface"))
 }
 
 export const getShortcutCommand = matchGlobalShortcut

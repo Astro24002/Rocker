@@ -11,14 +11,17 @@ import {
   type CommandCategory,
   type CommandContext,
   type CommandDefinition,
+  type CommandId,
   type RecentSessionCommand
 } from "./command-registry"
+
+export type CommandPaletteFocusRequest = CommandId | "recent-session"
 
 export interface CommandPaletteProps {
   open: boolean
   context: CommandContext
   onClose(): void
-  onRestoreFocus(): void
+  onRestoreFocus(request?: CommandPaletteFocusRequest): void
 }
 
 type PaletteStatus = "failed" | "disabled"
@@ -40,19 +43,23 @@ export function CommandPalette({ open, context, onClose, onRestoreFocus }: Comma
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [status, setStatus] = useState<PaletteStatus>()
 
+  const localizedLabels = useMemo<ReadonlyMap<CommandId, string>>(() => new Map(
+    commandRegistry.map((command) => [command.id, t(command.labelKey)] as const)
+  ), [t])
   const visibleCommands = useMemo(() => {
     const paletteCommands = commandRegistry.filter((command) => command.id !== "palette.open")
-    return filterCommands(paletteCommands, query)
-  }, [query])
+    return filterCommands(paletteCommands, query, localizedLabels)
+  }, [localizedLabels, query])
   const recentSessions = useMemo(() => {
     if (query.trim().length > 0) return []
     return [...context.recentSessions].sort((left, right) => right.lastFocusedAt - left.lastFocusedAt || left.id.localeCompare(right.id))
   }, [context.recentSessions, query])
+  const groups = useMemo(() => groupCommands(visibleCommands), [visibleCommands])
+  const orderedCommands = useMemo(() => groups.flatMap((group) => group.commands), [groups])
   const items = useMemo<PaletteItem[]>(() => [
     ...recentSessions.map((entry) => ({ kind: "recent" as const, entry })),
-    ...visibleCommands.map((command) => ({ kind: "command" as const, command }))
-  ], [recentSessions, visibleCommands])
-  const groups = useMemo(() => groupCommands(visibleCommands), [visibleCommands])
+    ...orderedCommands.map((command) => ({ kind: "command" as const, command }))
+  ], [orderedCommands, recentSessions])
 
   useEffect(() => {
     if (!open) return
@@ -72,9 +79,9 @@ export function CommandPalette({ open, context, onClose, onRestoreFocus }: Comma
 
   if (!open) return null
 
-  const closePalette = (): void => {
+  const closePalette = (focusRequest?: CommandPaletteFocusRequest): void => {
     onClose()
-    onRestoreFocus()
+    onRestoreFocus(focusRequest)
   }
 
   const moveSelection = (direction: 1 | -1): void => {
@@ -95,7 +102,7 @@ export function CommandPalette({ open, context, onClose, onRestoreFocus }: Comma
     if (item.kind === "recent") {
       try {
         await context.actions.session.activate(item.entry.session)
-        closePalette()
+        closePalette("recent-session")
       } catch {
         setStatus("failed")
       }
@@ -104,7 +111,7 @@ export function CommandPalette({ open, context, onClose, onRestoreFocus }: Comma
 
     const result = await executeCommand(item.command.id, context)
     if (result.status === "executed") {
-      closePalette()
+      closePalette(item.command.id)
     } else {
       setStatus(result.status === "disabled" ? "disabled" : "failed")
     }
@@ -133,13 +140,14 @@ export function CommandPalette({ open, context, onClose, onRestoreFocus }: Comma
       <section aria-label={t("commands.title")} aria-modal="true" className="command-palette" onKeyDownCapture={handleKeyDown} role="dialog">
         <div className="command-palette-header">
           <div className="command-palette-title"><Command aria-hidden="true" size={16} /><strong>{t("commands.title")}</strong></div>
-          <button aria-label={t("commands.closePalette")} className="command-palette-close" onClick={closePalette} title={t("commands.closePalette")} type="button"><X size={15} /></button>
+          <button aria-label={t("commands.closePalette")} className="command-palette-close" onClick={() => closePalette()} title={t("commands.closePalette")} type="button"><X size={15} /></button>
         </div>
         <label className="command-palette-query">
           <Search aria-hidden="true" size={15} />
           <input
-            aria-activedescendant={items[selectedIndex] ? paletteItemId(items[selectedIndex], selectedIndex) : undefined}
+            aria-activedescendant={items[selectedIndex] ? paletteItemId(items[selectedIndex]) : undefined}
             aria-label={t("commands.input")}
+            aria-controls="command-palette-options"
             autoComplete="off"
             onChange={(event) => { setQuery(event.target.value); setSelectedIndex(0); setStatus(undefined) }}
             ref={queryRef}
@@ -149,29 +157,24 @@ export function CommandPalette({ open, context, onClose, onRestoreFocus }: Comma
           />
           <kbd><CornerDownLeft aria-hidden="true" size={12} /> Enter</kbd>
         </label>
-        <div aria-label={t("commands.title")} className="command-palette-list" role="listbox">
+        <div aria-label={t("commands.title")} className="command-palette-list" id="command-palette-options" role="listbox">
           {recentSessions.length > 0 && (
             <div className="command-palette-group command-palette-recent-group">
               <h3>{t("commands.recentSessions")}</h3>
               {recentSessions.map((entry, index) => {
                 const itemIndex = index
-                return <PaletteRow key={entry.id} disabled={false} id={paletteItemId({ kind: "recent", entry }, itemIndex)} label={entry.label} selected={selectedIndex === itemIndex} onClick={() => { setSelectedIndex(itemIndex); void executeItem(itemIndex) }} onMouseEnter={() => setSelectedIndex(itemIndex)} />
+                return <PaletteRow key={entry.id} disabled={false} id={paletteItemId({ kind: "recent", entry })} label={entry.label} selected={selectedIndex === itemIndex} onClick={() => { setSelectedIndex(itemIndex); void executeItem(itemIndex) }} onMouseEnter={() => setSelectedIndex(itemIndex)} />
               })}
             </div>
           )}
           {groups.map((group) => {
-            let groupOffset = recentSessions.length
-            for (const preceding of groups) {
-              if (preceding === group) break
-              groupOffset += preceding.commands.length
-            }
             return (
               <div className="command-palette-group" key={group.category}>
                 <h3>{t(categoryLabels[group.category])}</h3>
                 {group.commands.map((command, index) => {
-                  const itemIndex = groupOffset + index
+                  const itemIndex = recentSessions.length + orderedCommands.indexOf(command)
                   const enabled = isCommandEnabled(command.id, context)
-                  return <PaletteRow key={command.id} command={command} disabled={!enabled} id={paletteItemId({ kind: "command", command }, itemIndex)} label={t(command.labelKey)} selected={selectedIndex === itemIndex} onClick={() => { if (!enabled) return; setSelectedIndex(itemIndex); void executeItem(itemIndex) }} onMouseEnter={() => setSelectedIndex(itemIndex)} />
+                  return <PaletteRow key={command.id} command={command} disabled={!enabled} id={paletteItemId({ kind: "command", command })} label={t(command.labelKey)} selected={selectedIndex === itemIndex} onClick={() => { if (!enabled) return; setSelectedIndex(itemIndex); void executeItem(itemIndex) }} onMouseEnter={() => setSelectedIndex(itemIndex)} />
                 })}
               </div>
             )
@@ -197,6 +200,7 @@ function PaletteRow({ command, disabled, id, label, selected, onClick, onMouseEn
     <div
       aria-disabled={disabled ? "true" : undefined}
       aria-label={label}
+      aria-selected={selected ? "true" : "false"}
       className="command-palette-row"
       data-command-id={command?.id}
       data-disabled={disabled}
@@ -215,6 +219,6 @@ function isSelectable(item: PaletteItem | undefined, context: CommandContext): b
   return item?.kind === "recent" || (item?.kind === "command" && isCommandEnabled(item.command.id, context))
 }
 
-function paletteItemId(item: PaletteItem, index: number): string {
-  return `command-palette-item-${item.kind}-${item.kind === "recent" ? item.entry.id : item.command.id}-${index}`
+function paletteItemId(item: PaletteItem): string {
+  return `command-palette-item-${item.kind}-${item.kind === "recent" ? item.entry.id : item.command.id}`
 }

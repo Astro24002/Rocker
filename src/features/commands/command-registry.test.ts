@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import type { TerminalSessionState } from "../../../electron/ssh/types"
 import {
   commandRegistry,
   executeCommand,
@@ -61,6 +62,8 @@ describe("command registry", () => {
       "session.reconnect": false,
       "session.rename": false,
       "session.duplicate": false,
+      "session.duplicate-window": false,
+      "session.split-horizontal": false,
       "session.close": false
     }],
     ["connected session", "connected", true, {
@@ -71,6 +74,32 @@ describe("command registry", () => {
       "session.reconnect": false,
       "session.rename": true,
       "session.duplicate": true,
+      "session.duplicate-window": true,
+      "session.split-horizontal": true,
+      "session.close": true
+    }],
+    ["restoring session", "restoring", false, {
+      "terminal.search": true,
+      "terminal.copy": false,
+      "terminal.paste": false,
+      "terminal.clear": true,
+      "session.reconnect": false,
+      "session.rename": true,
+      "session.duplicate": false,
+      "session.duplicate-window": false,
+      "session.split-horizontal": false,
+      "session.close": true
+    }],
+    ["connecting session", "connecting", false, {
+      "terminal.search": true,
+      "terminal.copy": false,
+      "terminal.paste": false,
+      "terminal.clear": true,
+      "session.reconnect": false,
+      "session.rename": true,
+      "session.duplicate": false,
+      "session.duplicate-window": false,
+      "session.split-horizontal": false,
       "session.close": true
     }],
     ["reconnecting session", "reconnecting", false, {
@@ -80,7 +109,9 @@ describe("command registry", () => {
       "terminal.clear": true,
       "session.reconnect": false,
       "session.rename": true,
-      "session.duplicate": true,
+      "session.duplicate": false,
+      "session.duplicate-window": false,
+      "session.split-horizontal": false,
       "session.close": true
     }],
     ["disconnected session", "disconnected", true, {
@@ -91,6 +122,8 @@ describe("command registry", () => {
       "session.reconnect": true,
       "session.rename": true,
       "session.duplicate": true,
+      "session.duplicate-window": false,
+      "session.split-horizontal": false,
       "session.close": true
     }],
     ["error session", "error", false, {
@@ -101,10 +134,12 @@ describe("command registry", () => {
       "session.reconnect": true,
       "session.rename": true,
       "session.duplicate": true,
+      "session.duplicate-window": false,
+      "session.split-horizontal": false,
       "session.close": true
     }]
-  ])("derives exact enabled states for %s", (_name, state, hasSelection, expected) => {
-    const context = createContext(state as typeof session.state | undefined, hasSelection as boolean)
+  ] satisfies Array<[string, TerminalSessionState | undefined, boolean, Record<string, boolean>]>)("derives exact enabled states for %s", (_name, state, hasSelection, expected) => {
+    const context = createContext(state, hasSelection)
 
     for (const [id, enabled] of Object.entries(expected as Record<string, boolean>)) {
       expect(getCommand(id as CommandId)?.isEnabled(context), id).toBe(enabled)
@@ -112,6 +147,76 @@ describe("command registry", () => {
     expect(getCommand("navigation.sftp")?.isEnabled(context)).toBe(true)
     expect(getCommand("navigation.local-terminal")?.isEnabled(context)).toBe(true)
     expect(getCommand("palette.open")?.isEnabled(context)).toBe(true)
+  })
+
+  it("never executes a disabled session command in any connection state", async () => {
+    const expectedByState: Array<[TerminalSessionState | undefined, Record<string, boolean>]> = [
+      [undefined, {
+        "session.reconnect": false,
+        "session.rename": false,
+        "session.duplicate": false,
+        "session.duplicate-window": false,
+        "session.split-horizontal": false,
+        "session.close": false
+      }],
+      ["connected", {
+        "session.reconnect": false,
+        "session.rename": true,
+        "session.duplicate": true,
+        "session.duplicate-window": true,
+        "session.split-horizontal": true,
+        "session.close": true
+      }],
+      ["restoring", {
+        "session.reconnect": false,
+        "session.rename": true,
+        "session.duplicate": false,
+        "session.duplicate-window": false,
+        "session.split-horizontal": false,
+        "session.close": true
+      }],
+      ["connecting", {
+        "session.reconnect": false,
+        "session.rename": true,
+        "session.duplicate": false,
+        "session.duplicate-window": false,
+        "session.split-horizontal": false,
+        "session.close": true
+      }],
+      ["reconnecting", {
+        "session.reconnect": false,
+        "session.rename": true,
+        "session.duplicate": false,
+        "session.duplicate-window": false,
+        "session.split-horizontal": false,
+        "session.close": true
+      }],
+      ["disconnected", {
+        "session.reconnect": true,
+        "session.rename": true,
+        "session.duplicate": true,
+        "session.duplicate-window": false,
+        "session.split-horizontal": false,
+        "session.close": true
+      }],
+      ["error", {
+        "session.reconnect": true,
+        "session.rename": true,
+        "session.duplicate": true,
+        "session.duplicate-window": false,
+        "session.split-horizontal": false,
+        "session.close": true
+      }]
+    ]
+
+    for (const [state, expected] of expectedByState) {
+      const context = createContext(state, true)
+      for (const [commandId, enabled] of Object.entries(expected) as Array<[CommandId, boolean]>) {
+        if (enabled) continue
+        await expect(executeCommand(commandId, context)).resolves.toEqual({ status: "disabled" })
+      }
+      for (const action of Object.values(context.actions.session)) expect(action).not.toHaveBeenCalled()
+    }
   })
 
   it("keeps disabled commands visible without executing their actions", async () => {
@@ -153,7 +258,7 @@ describe("command registry", () => {
   })
 })
 
-function createContext(state: typeof session.state | undefined, hasSelection: boolean): CommandContext {
+function createContext(state: TerminalSessionState | undefined, hasSelection: boolean): CommandContext {
   const activeSession = state ? { ...session, state } : undefined
   return {
     activeSession,

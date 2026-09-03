@@ -18,6 +18,7 @@ const terminalHarness = vi.hoisted(() => ({
     applyPreferences: vi.fn()
   },
   controllers: new Map<string, { applyPreferences: ReturnType<typeof vi.fn> }>(),
+  surfaces: new Map<string, { focus: ReturnType<typeof vi.fn> }>(),
   registeredSessions: new Set<string>(),
   latestWorkspace: undefined as unknown
 }))
@@ -29,6 +30,8 @@ vi.mock("../features/terminal/TerminalWorkspace", async () => {
       workspace: TerminalWorkspaceState
       overlay?: ReactNode
       onController(sessionId: string, controller: typeof terminalHarness.controller | undefined): void
+      onCommandSurface?(sessionId: string, surface: { hasSelection(): boolean; copy(): void; paste(): void; selectAll(): void; clear(): void; focus(): void } | undefined): void
+      onSearchController?(sessionId: string, controller: object | undefined): void
       onResize(sessionId: string, channelGeneration: number, dimensions: { cols: number; rows: number }): void
     }) => {
       terminalHarness.latestWorkspace = props.workspace
@@ -37,10 +40,34 @@ vi.mock("../features/terminal/TerminalWorkspace", async () => {
           if (terminalHarness.registeredSessions.has(session.id)) continue
           terminalHarness.registeredSessions.add(session.id)
           props.onController(session.id, (terminalHarness.controllers.get(session.id) ?? terminalHarness.controller) as typeof terminalHarness.controller)
+          const surface = terminalHarness.surfaces.get(session.id) ?? { focus: vi.fn() }
+          terminalHarness.surfaces.set(session.id, surface)
+          props.onCommandSurface?.(session.id, {
+            hasSelection: () => false,
+            copy: vi.fn(),
+            paste: vi.fn(),
+            selectAll: vi.fn(),
+            clear: vi.fn(),
+            focus: () => (surface.focus as unknown as () => void)()
+          })
+          props.onSearchController?.(session.id, {
+            getState: () => ({
+              sessionId: session.id,
+              query: "",
+              options: { caseSensitive: false, wholeWord: false, regex: false },
+              resultStatus: "idle"
+            }),
+            onStateChange: () => ({ dispose: vi.fn() }),
+            setQuery: vi.fn(),
+            setOptions: vi.fn(),
+            findNext: vi.fn(),
+            findPrevious: vi.fn(),
+            clear: vi.fn()
+          })
           props.onResize(session.id, session.channelGeneration, session.dimensions ?? { cols: 120, rows: 40 })
         }
-      }, [props.workspace, props.onController, props.onResize])
-      return <><div data-testid="terminal-workspace-mock">{props.workspace.sessions.map((session) => <span key={session.id}>{session.label}</span>)}</div>{props.overlay}</>
+      }, [props.workspace, props.onCommandSurface, props.onController, props.onResize, props.onSearchController])
+      return <><div data-testid="terminal-workspace-mock">{props.workspace.sessions.map((session) => <div className="terminal-surface" data-session-id={session.id} key={session.id}><textarea className="xterm-helper-textarea" aria-label={`Terminal input ${session.label}`} /> <span>{session.label}</span></div>)}</div>{props.overlay}</>
     }
   }
 })
@@ -56,6 +83,7 @@ beforeEach(() => {
   terminalHarness.controller.setConnected.mockReset()
   terminalHarness.controller.applyPreferences.mockReset()
   terminalHarness.controllers.clear()
+  terminalHarness.surfaces.clear()
   terminalHarness.registeredSessions.clear()
   terminalHarness.latestWorkspace = undefined
   sessionListener = undefined
@@ -75,6 +103,114 @@ describe("desktop workspace shell", () => {
 
     expect(preventDefault).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(screen.getByRole("dialog", { name: "Command Palette" })).toBeInTheDocument())
+  })
+
+  it("opens the command palette from an exact shortcut targeted at the xterm helper textarea", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const helper = document.querySelector(".terminal-surface .xterm-helper-textarea") as HTMLTextAreaElement
+    helper.focus()
+    const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "p", ctrlKey: true, shiftKey: true })
+    const preventDefault = vi.spyOn(event, "preventDefault")
+    helper.dispatchEvent(event)
+
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "Command Palette" })).toBeInTheDocument())
+  })
+
+  it("activates the terminal before showing search from a non-terminal view", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Search terminal" }))
+
+    const terminalHost = screen.getByTestId("terminal-workspace-mock").closest(".terminal-workspace-host") as HTMLElement
+    await waitFor(() => expect(terminalHost).not.toHaveAttribute("hidden"))
+    expect(screen.getByRole("search", { name: "Search terminal" })).toBeInTheDocument()
+    expect(screen.queryByRole("heading", { name: "Settings" })).not.toBeInTheDocument()
+  })
+
+  it("restores Escape focus to the unchanged active terminal", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const sessionId = workspace().activeSessionId!
+    await waitFor(() => expect(terminalHarness.surfaces.get(sessionId)).toBeDefined())
+    const surface = terminalHarness.surfaces.get(sessionId)!
+    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    fireEvent.keyDown(screen.getByRole("searchbox", { name: "Search commands" }), { key: "Escape" })
+
+    expect(surface.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ["hosts", "Hosts"],
+    ["history", "History"],
+    ["ports", "Port Forwarding"],
+    ["settings", "Settings"],
+    ["sftp", "SFTP"],
+    ["snippets", "Snippets"]
+  ])("restores palette focus to the visible %s destination", async (queryValue, heading) => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const sessionId = workspace().activeSessionId!
+    await waitFor(() => expect(terminalHarness.surfaces.get(sessionId)).toBeDefined())
+    const surface = terminalHarness.surfaces.get(sessionId)!
+    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    const query = screen.getByRole("searchbox", { name: "Search commands" })
+    fireEvent.change(query, { target: { value: queryValue } })
+    fireEvent.keyDown(query, { key: "Enter" })
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId("workspace-stage")).toHaveFocus())
+    expect(surface.focus).not.toHaveBeenCalled()
+  })
+
+  it("restores palette focus to the new active terminal after duplicate", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const originalSessionId = workspace().activeSessionId!
+    await waitFor(() => expect(terminalHarness.surfaces.get(originalSessionId)).toBeDefined())
+    const originalSurface = terminalHarness.surfaces.get(originalSessionId)!
+    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    const query = screen.getByRole("searchbox", { name: "Search commands" })
+    fireEvent.change(query, { target: { value: "duplicate" } })
+    fireEvent.keyDown(query, { key: "Enter" })
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(2))
+    const newSessionId = workspace().activeSessionId!
+    await waitFor(() => expect(terminalHarness.surfaces.get(newSessionId)?.focus).toHaveBeenCalledTimes(1))
+    expect(newSessionId).not.toBe(originalSessionId)
+    expect(originalSurface.focus).not.toHaveBeenCalled()
+  })
+
+  it("restores palette focus to the destination after closing the active terminal", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const sessionId = workspace().activeSessionId!
+    await waitFor(() => expect(terminalHarness.surfaces.get(sessionId)).toBeDefined())
+    const surface = terminalHarness.surfaces.get(sessionId)!
+    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    const query = screen.getByRole("searchbox", { name: "Search commands" })
+    fireEvent.change(query, { target: { value: "close session" } })
+    fireEvent.keyDown(query, { key: "Enter" })
+
+    await waitFor(() => expect(screen.queryByTestId("terminal-workspace-mock")).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId("workspace-stage")).toHaveFocus())
+    expect(surface.focus).not.toHaveBeenCalled()
   })
 
   it("loads renderer data through one bootstrap request", async () => {

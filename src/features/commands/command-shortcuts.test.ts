@@ -65,6 +65,28 @@ describe("global command shortcuts", () => {
     expect(shouldIgnoreGlobalShortcutTarget(searchInput)).toBe(false)
     expect(shouldIgnoreGlobalShortcutTarget(document.createElement("button"))).toBe(false)
   })
+
+  it("allows exact global shortcuts from the real xterm helper textarea", () => {
+    const surface = document.createElement("div")
+    surface.className = "terminal-surface"
+    const helper = document.createElement("textarea")
+    helper.className = "xterm-helper-textarea"
+    surface.append(helper)
+    document.body.append(surface)
+    const preventDefault = vi.fn()
+    const onCommand = vi.fn()
+
+    expect(shouldIgnoreGlobalShortcutTarget(helper)).toBe(false)
+    expect(handleGlobalShortcut(shortcutEvent({
+      key: "f",
+      ctrlKey: true,
+      shiftKey: true,
+      target: helper,
+      preventDefault
+    }), "linux", onCommand)).toBe(true)
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    expect(onCommand).toHaveBeenCalledWith("terminal.search")
+  })
 })
 
 function shortcutEvent(overrides: Partial<KeyboardEvent> = {}): KeyboardEvent {

@@ -227,7 +227,7 @@ export const commandRegistry: readonly CommandDefinition[] = [
     labelKey: "commands.duplicate",
     category: "session",
     keywords: ["copy", "session"],
-    isEnabled: hasSession,
+    isEnabled: canDuplicateSession,
     execute: executeForSession((context, session) => context.actions.session.duplicate(session))
   },
   {
@@ -236,7 +236,7 @@ export const commandRegistry: readonly CommandDefinition[] = [
     labelKey: "commands.duplicateWindow",
     category: "session",
     keywords: ["copy", "window", "new window"],
-    isEnabled: hasSession,
+    isEnabled: canDuplicateWindow,
     execute: executeForSession((context, session) => context.actions.session.duplicateWindow(session))
   },
   {
@@ -245,7 +245,7 @@ export const commandRegistry: readonly CommandDefinition[] = [
     labelKey: "commands.splitHorizontal",
     category: "session",
     keywords: ["split", "layout"],
-    isEnabled: hasSession,
+    isEnabled: canSplitSession,
     execute: executeForSession((context, session) => context.actions.session.splitHorizontal(session))
   },
   {
@@ -380,12 +380,16 @@ export function fuzzyScore(value: string, query: string): number | undefined {
   return score - candidate.length
 }
 
-export function filterCommands(commandsToFilter: readonly CommandDefinition[], query: string): CommandDefinition[] {
+export function filterCommands(
+  commandsToFilter: readonly CommandDefinition[],
+  query: string,
+  localizedLabels?: ReadonlyMap<CommandId, string>
+): CommandDefinition[] {
   const trimmedQuery = query.trim()
   if (trimmedQuery.length === 0) return [...commandsToFilter]
 
   return commandsToFilter
-    .map((command, index) => ({ command, index, score: commandScore(command, trimmedQuery) }))
+    .map((command, index) => ({ command, index, score: commandScore(command, trimmedQuery, localizedLabels?.get(command.id)) }))
     .filter((entry): entry is { command: CommandDefinition; index: number; score: number } => entry.score !== undefined)
     .sort((left, right) => right.score - left.score || left.index - right.index)
     .map(({ command }) => command)
@@ -397,8 +401,8 @@ export function groupCommands(commandsToGroup: readonly CommandDefinition[]): Co
     .filter((group) => group.commands.length > 0)
 }
 
-function commandScore(command: CommandDefinition, query: string): number | undefined {
-  const values = [command.label, command.id, ...(command.keywords ?? [])]
+function commandScore(command: CommandDefinition, query: string, localizedLabel = command.label): number | undefined {
+  const values = [localizedLabel, command.label, command.id, ...(command.keywords ?? [])]
   return values.reduce<number | undefined>((best, value) => {
     const score = fuzzyScore(value, query)
     return score === undefined ? best : best === undefined ? score : Math.max(best, score)
@@ -406,7 +410,7 @@ function commandScore(command: CommandDefinition, query: string): number | undef
 }
 
 function normalizeForFuzzy(value: string): string {
-  return value.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "")
+  return value.toLocaleLowerCase().normalize("NFKC").replace(/[^\p{L}\p{M}\p{N}]+/gu, "")
 }
 
 function connectionState(context: CommandContext): TerminalSessionState | undefined {
@@ -420,6 +424,19 @@ function sessionState(context: CommandContext): TerminalSessionState | undefined
 function hasSession(context: CommandContext): boolean {
   const state = sessionState(context)
   return context.activeSession !== undefined && state !== "closing"
+}
+
+function canDuplicateSession(context: CommandContext): boolean {
+  const state = sessionState(context)
+  return state === "connected" || state === "disconnected" || state === "error"
+}
+
+function canDuplicateWindow(context: CommandContext): boolean {
+  return sessionState(context) === "connected"
+}
+
+function canSplitSession(context: CommandContext): boolean {
+  return sessionState(context) === "connected"
 }
 
 function hasTerminalBuffer(context: CommandContext): boolean {
