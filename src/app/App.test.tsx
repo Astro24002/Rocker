@@ -136,6 +136,35 @@ describe("desktop workspace shell", () => {
     expect(screen.queryByRole("heading", { name: "Settings" })).not.toBeInTheDocument()
   })
 
+  it("executes Local Terminal to a placeholder while preserving an active SSH workspace", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    const query = screen.getByRole("searchbox", { name: "Search commands" })
+    fireEvent.change(query, { target: { value: "local terminal" } })
+    fireEvent.keyDown(query, { key: "Enter" })
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Local Terminal" })).toBeInTheDocument())
+    expect(screen.getByTestId("terminal-workspace-mock").closest(".terminal-workspace-host")).toHaveAttribute("hidden")
+    expect(bridge.sessions.open).toHaveBeenCalled()
+  })
+
+  it("executes Local Terminal to a placeholder with no active SSH session", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], undefined))
+    render(<App />)
+
+    await waitFor(() => expect(bridge.bootstrap.load).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    const query = screen.getByRole("searchbox", { name: "Search commands" })
+    fireEvent.change(query, { target: { value: "local terminal" } })
+    fireEvent.keyDown(query, { key: "Enter" })
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Local Terminal" })).toBeInTheDocument())
+    expect(screen.queryByTestId("terminal-workspace-mock")).not.toBeInTheDocument()
+  })
+
   it("restores Escape focus to the unchanged active terminal", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
     render(<App />)

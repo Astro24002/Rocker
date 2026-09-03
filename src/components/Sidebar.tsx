@@ -6,14 +6,15 @@ import { NavItem } from "./NavItem"
 import type { WorkspaceSession } from "../features/terminal/session-state"
 
 export type NavKey = "hosts" | "sftp" | "ports" | "snippets" | "history" | "settings"
+export type WorkspaceNavKey = NavKey | "terminal" | "local-terminal"
 
 interface SidebarProps {
   width: number
-  activeNav: NavKey | "settings" | "terminal"
+  activeNav: WorkspaceNavKey
   sessions?: WorkspaceSession[]
   activeSessionId?: string
   onWidthChange(width: number): void
-  onNavigate(nav: NavKey | "settings" | "terminal"): void
+  onNavigate(nav: WorkspaceNavKey): void
   onSessionActivate?(id: string): void
   onSessionDuplicate?(session: WorkspaceSession): void
   onSessionDuplicateWindow?(session: WorkspaceSession): void
@@ -66,7 +67,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, onWi
   return (
     <aside className="sidebar" style={{ width }}>
       <div className="sidebar-quick-actions">
-        <button className="local-terminal-action" type="button" onClick={() => onNavigate("terminal")}>
+        <button className="local-terminal-action" data-active={activeNav === "local-terminal"} type="button" onClick={() => onNavigate("local-terminal")}>
           <SquareTerminal aria-hidden="true" size={16} />
           <span>{t("sidebar.localTerminal")}</span>
         </button>

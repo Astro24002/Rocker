@@ -235,10 +235,12 @@ describe("command registry", () => {
     await expect(executeCommand("terminal.copy", context)).resolves.toEqual({ status: "executed" })
     await expect(executeCommand("session.rename", context)).resolves.toEqual({ status: "executed" })
     await expect(executeCommand("navigation.sftp", context)).resolves.toEqual({ status: "executed" })
+    await expect(executeCommand("navigation.local-terminal", context)).resolves.toEqual({ status: "executed" })
 
     expect(context.actions.terminal.copy).toHaveBeenCalledTimes(1)
     expect(context.actions.session.rename).toHaveBeenCalledWith(session)
-    expect(context.actions.navigation.navigate).toHaveBeenCalledWith("sftp")
+    expect(context.actions.navigation.navigate).toHaveBeenNthCalledWith(1, "sftp")
+    expect(context.actions.navigation.navigate).toHaveBeenNthCalledWith(2, "local-terminal")
   })
 
   it("returns a safe failure result without exposing an action error", async () => {

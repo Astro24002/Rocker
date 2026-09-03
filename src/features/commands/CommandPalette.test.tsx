@@ -117,6 +117,21 @@ describe("CommandPalette", () => {
     expect(onRestoreFocus).toHaveBeenCalledTimes(1)
   })
 
+  it("executes Local Terminal as its placeholder navigation destination", async () => {
+    const context = createContext("connected")
+    const onClose = vi.fn()
+    const onRestoreFocus = vi.fn()
+    renderPalette({ context, onClose, onRestoreFocus })
+    const query = screen.getByRole("searchbox", { name: "Search commands" })
+
+    fireEvent.change(query, { target: { value: "local terminal" } })
+    fireEvent.keyDown(query, { key: "Enter" })
+
+    await waitFor(() => expect(context.actions.navigation.navigate).toHaveBeenCalledWith("local-terminal"))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onRestoreFocus).toHaveBeenCalledWith("navigation.local-terminal")
+  })
+
   it("closes on Escape and reports only a safe failure status", async () => {
     const context = createContext("connected")
     const copy = context.actions.terminal.copy as unknown as ReturnType<typeof vi.fn>

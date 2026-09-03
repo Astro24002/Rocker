@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { ComingSoonView } from "../components/ComingSoonView"
 import { IconButton } from "../components/IconButton"
 import { RecoveryBanner } from "../components/RecoveryBanner"
-import { Sidebar, clampSidebarWidth, type NavKey } from "../components/Sidebar"
+import { Sidebar, clampSidebarWidth, type WorkspaceNavKey } from "../components/Sidebar"
 import { WindowChrome } from "../components/WindowChrome"
 import { HostEditor } from "../features/hosts/HostEditor"
 import { HostList } from "../features/hosts/HostList"
@@ -124,7 +124,7 @@ function Workspace() {
   const { locale, setLocale, t } = useI18n()
   const translation = useRef(t)
   translation.current = t
-  const [activeNav, setActiveNav] = useState<NavKey | "terminal">("hosts")
+  const [activeNav, setActiveNav] = useState<WorkspaceNavKey>("hosts")
   const [hosts, setHosts] = useState<HostProfile[]>([])
   const [history, setHistory] = useState<ConnectionHistoryItem[]>([])
   const [editor, setEditor] = useState<{ open: boolean; profile?: HostProfile }>({ open: false })
@@ -155,7 +155,7 @@ function Workspace() {
   const settingsWriteInFlight = useRef<PendingSettingsWrite | undefined>(undefined)
   const latestSettingsStatusVersion = useRef(0)
   const activeSessionIdRef = useRef<string | undefined>(undefined)
-  const activeNavigationRef = useRef<NavKey | "terminal">("hosts")
+  const activeNavigationRef = useRef<WorkspaceNavKey>("hosts")
   const workspaceStageRef = useRef<HTMLDivElement>(null)
   const focusRestoreTimer = useRef<number | undefined>(undefined)
   const connectionIds = useRef(new Map<string, string>())
@@ -775,7 +775,7 @@ function Workspace() {
       close: closeTerminalSession
     },
     navigation: {
-      navigate: (destination) => setActiveNav(destination === "local-terminal" ? "terminal" : destination)
+      navigate: (destination) => setActiveNav(destination)
     },
     palette: { open: () => setPaletteOpen(true) }
   }
@@ -924,6 +924,8 @@ function Workspace() {
             }} />
           ) : activeNav === "ports" ? (
             <PortsView bridge={bridge} connectionId={activeConnectionId} session={activeSession} username={activeHost?.username} bindAddress={settings.bindAddress} />
+          ) : activeNav === "local-terminal" ? (
+            <ComingSoonView feature="local-terminal" />
           ) : (
             <ComingSoonView feature={activeNav} />
           )}

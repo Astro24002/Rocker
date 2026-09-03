@@ -126,6 +126,7 @@ export const zhCN = {
   "placeholder.comingSoon": "即将推出",
   "placeholder.sftp": "安全文件传输将在后续版本中提供。",
   "placeholder.snippets": "可复用命令片段将在后续版本中提供。",
+  "placeholder.localTerminal": "本地 Shell 将在后续版本中提供。",
   "history.title": "历史记录",
   "ports.title": "端口转发",
   "ports.subtitle": "查看远程服务，只转发你明确批准的端口。",

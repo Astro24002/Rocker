@@ -124,6 +124,7 @@ export const en = {
   "placeholder.comingSoon": "Coming soon",
   "placeholder.sftp": "Secure file transfers will arrive in a later release.",
   "placeholder.snippets": "Reusable command snippets will arrive in a later release.",
+  "placeholder.localTerminal": "A local shell will arrive in a later release.",
   "history.title": "History",
   "ports.title": "Port Forwarding",
   "ports.subtitle": "Review remote services and forward only the ports you approve.",
