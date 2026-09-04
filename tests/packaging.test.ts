@@ -1,19 +1,89 @@
 import { existsSync, readFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import { describe, expect, it } from "vitest"
 
-const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+type DependencyMap = Record<string, string>
+
+type PackageMetadata = {
   version: string
-  dependencies?: Record<string, string>
-  devDependencies?: Record<string, string>
+  dependencies?: DependencyMap
+  devDependencies?: DependencyMap
 }
+
+type LockfileMetadata = {
+  version: string
+  packages: {
+    "": {
+      version: string
+      dependencies?: DependencyMap
+      devDependencies?: DependencyMap
+    }
+  }
+}
+
+type BuilderTarget = {
+  target: string
+  arch: string[]
+}
+
+type BuilderConfig = {
+  win?: { target?: BuilderTarget[] }
+  mac?: { target?: BuilderTarget[] }
+}
+
+type WorkflowConfig = {
+  jobs?: {
+    package?: {
+      strategy?: {
+        matrix?: {
+          include?: Array<{
+            os: string
+            command: string
+            artifacts: string
+          }>
+        }
+      }
+    }
+  }
+}
+
+const require = createRequire(import.meta.url)
+const { load: parseYaml } = require("js-yaml") as {
+  load: (source: string) => unknown
+}
+
+const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as PackageMetadata
+const lockfile = JSON.parse(readFileSync("package-lock.json", "utf8")) as LockfileMetadata
+
+const APPROVED_RUNTIME_DEPENDENCY_KEYS = ["ssh2"]
+const APPROVED_DEV_DEPENDENCY_KEYS = [
+  "@testing-library/jest-dom",
+  "@testing-library/react",
+  "@types/node",
+  "@types/react",
+  "@types/react-dom",
+  "@types/ssh2",
+  "@vitejs/plugin-react",
+  "@xterm/addon-fit",
+  "@xterm/addon-search",
+  "@xterm/xterm",
+  "electron",
+  "electron-builder",
+  "electron-vite",
+  "jsdom",
+  "lucide-react",
+  "react",
+  "react-dom",
+  "sharp",
+  "typescript",
+  "vite",
+  "vitest"
+]
+
+const sortedKeys = (dependencies: DependencyMap | undefined) => Object.keys(dependencies ?? {}).sort()
 
 describe("desktop packaging metadata", () => {
   it("prepares the 0.3.3 release version in package and lock metadata", () => {
-    const lockfile = JSON.parse(readFileSync("package-lock.json", "utf8")) as {
-      version: string
-      packages: { "": { version: string } }
-    }
-
     expect(packageJson.version).toBe("0.3.3")
     expect(lockfile.version).toBe("0.3.3")
     expect(lockfile.packages[""].version).toBe("0.3.3")
@@ -25,9 +95,14 @@ describe("desktop packaging metadata", () => {
     expect(config).toMatch(/^appId:\s*rocker$/m)
     expect(config).toMatch(/^productName:\s*Rocker$/m)
     expect(config).toMatch(/^executableName:\s*rocker$/m)
-    expect(config).toContain("target: nsis")
-    expect(config).toContain("target: dmg")
-    expect(config).toContain("target: zip")
+    const builder = parseYaml(config) as BuilderConfig
+    expect(builder.win?.target).toEqual([
+      { target: "nsis", arch: ["x64", "arm64"] }
+    ])
+    expect(builder.mac?.target).toEqual([
+      { target: "dmg", arch: ["x64", "arm64"] },
+      { target: "zip", arch: ["x64", "arm64"] }
+    ])
     expect(config).toContain("artifactName: Rocker-v${version}-${arch}.${ext}")
     expect(config).toContain("!node_modules/cpu-features/**")
     expect(config).toContain("!node_modules/nan/**")
@@ -36,32 +111,38 @@ describe("desktop packaging metadata", () => {
     expect(config).not.toMatch(/android|ios/i)
   })
 
-  it("keeps bundled UI libraries out of production dependencies", () => {
-    expect(Object.keys(packageJson.dependencies ?? {})).toEqual(["ssh2"])
-    expect(packageJson.devDependencies).toMatchObject({
-      "@xterm/xterm": expect.any(String),
-      "@xterm/addon-fit": expect.any(String),
-      "@xterm/addon-search": expect.any(String),
-      "lucide-react": expect.any(String),
-      react: expect.any(String),
-      "react-dom": expect.any(String)
-    })
-  })
+  it("keeps only approved dependency keys in package and lock metadata", () => {
+    const packageRoot = packageJson
+    const lockRoot = lockfile.packages[""]
 
-  it("keeps terminal productivity dependencies and feature scope bounded", () => {
-    const packageText = readFileSync("package.json", "utf8")
-    const lockfileText = readFileSync("package-lock.json", "utf8")
-
-    expect(packageJson.dependencies).not.toHaveProperty("@xterm/addon-search")
-    expect(`${packageText}\n${lockfileText}`).not.toMatch(
-      /node-pty|node_pty|pty\.js|local[-_ ]terminal|openai|anthropic|langchain/i
-    )
+    expect(sortedKeys(packageRoot.dependencies)).toEqual(APPROVED_RUNTIME_DEPENDENCY_KEYS)
+    expect(sortedKeys(packageRoot.devDependencies)).toEqual([...APPROVED_DEV_DEPENDENCY_KEYS].sort())
+    expect(sortedKeys(lockRoot.dependencies)).toEqual(APPROVED_RUNTIME_DEPENDENCY_KEYS)
+    expect(sortedKeys(lockRoot.devDependencies)).toEqual([...APPROVED_DEV_DEPENDENCY_KEYS].sort())
+    expect(lockRoot.dependencies).toEqual(packageRoot.dependencies)
+    expect(lockRoot.devDependencies).toEqual(packageRoot.devDependencies)
   })
 
   it("gates packaging on release-grade verification and uploads only installer assets", () => {
     const workflow = readFileSync(".github/workflows/build.yml", "utf8")
     const releaseJob = workflow.slice(workflow.indexOf("\n  release:"))
     const soakJob = workflow.slice(workflow.indexOf("\n  soak:"), workflow.indexOf("\n  package:"))
+    const workflowConfig = parseYaml(workflow) as WorkflowConfig
+
+    expect(workflowConfig.jobs?.package?.strategy?.matrix).toEqual({
+      include: [
+        {
+          os: "windows-latest",
+          command: "npm run dist:win",
+          artifacts: "release/Rocker-v*-x64.exe\nrelease/Rocker-v*-arm64.exe\n"
+        },
+        {
+          os: "macos-14",
+          command: "npm run dist:mac",
+          artifacts: "release/Rocker-v*.dmg\nrelease/Rocker-v*.zip\n"
+        }
+      ]
+    })
 
     expect(workflow).toContain("npm test")
     expect(workflow).toContain("npm run typecheck")
@@ -138,9 +219,11 @@ describe("desktop packaging metadata", () => {
     expect(verification).toContain("Base before v0.4 implementation")
     expect(verification).toContain("Task 5 final commit")
     expect(verification).toContain("Task 6 verification record")
+    expect(verification).toContain("| Task 6 verification record | `b9e9fd2` |")
     expect(verification).toContain("npm audit")
     expect(verification).toContain("native Windows/macOS startup")
     expect(verification).toContain("DEFERRED")
+    expect(smokeChecklist).toContain("Result values: `PASS`, `FAIL`, `BLOCKED`, `DEFERRED`, or `PENDING`.")
 
     for (const section of [
       "Search",
