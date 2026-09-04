@@ -33,15 +33,18 @@ jobs:
           if [ "$audit_status" -ne 0 ]; then
             cat "$audit_log"
             if [ "$audit_status" -eq 124 ] || grep -Eqi 'EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed|audit endpoint|service unavailable|registry unavailable' "$audit_log"; then
-              echo "::error::npm audit endpoint unavailable at https://registry.npmjs.org"
+              echo "::warning::npm audit endpoint unavailable at https://registry.npmjs.org; using OSV fallback"
+              rm -f "$audit_log"
+              ROCKER_OSV_AUDIT_ENDPOINT=https://api.osv.dev/v1/querybatch node scripts/audit-production.mjs
             else
               echo "::error::npm audit reported vulnerabilities or failed"
+              rm -f "$audit_log"
+              exit 1
             fi
+          else
+            cat "$audit_log"
             rm -f "$audit_log"
-            exit 1
           fi
-          cat "$audit_log"
-          rm -f "$audit_log"
 
   soak:
     # The long soak is a v1 release gate. v0 releases use the local short soak

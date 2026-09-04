@@ -156,6 +156,8 @@ describe("desktop packaging metadata", () => {
     expect(workflow).toContain("npm audit --omit=dev --audit-level=moderate")
     expect(workflow).toContain("env npm_config_registry=https://registry.npmjs.org")
     expect(workflow).toContain("timeout 90s env npm_config_registry=https://registry.npmjs.org npm audit")
+    expect(workflow).toContain("node scripts/audit-production.mjs")
+    expect(workflow).toContain("https://api.osv.dev/v1/querybatch")
     expect(workflow).toContain("::error::")
     expect(workflow).toContain("mkdir -p release-publish")
     expect(workflow).toContain("release/Rocker-v*-x64.exe")
