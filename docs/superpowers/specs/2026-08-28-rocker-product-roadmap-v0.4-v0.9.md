@@ -1,6 +1,6 @@
 # Rocker Product Roadmap: v0.4.0 to v0.9.0
 
-Date: 2026-08-28 (updated 2026-09-02)
+Date: 2026-08-28 (updated 2026-09-04)
 Status: Maintained product evolution baseline
 Scope: Windows and macOS desktop application
 
@@ -94,9 +94,18 @@ The approved detailed design is [v0.4 Terminal Productivity Design](./2026-09-02
   debounced SettingsStore persistence.
 - Local Terminal remains a placeholder in v0.4; no `node-pty` is introduced.
 
-Implementation planning starts only after the detailed design receives final
-product-owner review. This roadmap remains the source of truth for the order
-and boundaries of v0.4 through v0.9.
+### v0.4 Implementation Status
+
+The v0.4 Terminal Productivity implementation is complete in the current
+development line after Tasks 1 through 6. The implementation record and manual
+smoke checklist are [available here](../../releases/v0.4.0-implementation-verification.md)
+and [here](../../releases/v0.4.0-smoke-checklist.md).
+
+This status does not create a release. The package version remains `0.3.3`, and
+no tag, GitHub release, or installer was created. Native Windows/macOS startup
+coverage and the 30-minute long soak remain deferred for the v0 line. This
+roadmap remains the source of truth for the order and boundaries of v0.4
+through v0.9.
 
 ## v0.5.0: Hosts and Security Center
 

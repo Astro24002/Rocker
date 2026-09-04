@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
@@ -41,10 +41,21 @@ describe("desktop packaging metadata", () => {
     expect(packageJson.devDependencies).toMatchObject({
       "@xterm/xterm": expect.any(String),
       "@xterm/addon-fit": expect.any(String),
+      "@xterm/addon-search": expect.any(String),
       "lucide-react": expect.any(String),
       react: expect.any(String),
       "react-dom": expect.any(String)
     })
+  })
+
+  it("keeps terminal productivity dependencies and feature scope bounded", () => {
+    const packageText = readFileSync("package.json", "utf8")
+    const lockfileText = readFileSync("package-lock.json", "utf8")
+
+    expect(packageJson.dependencies).not.toHaveProperty("@xterm/addon-search")
+    expect(`${packageText}\n${lockfileText}`).not.toMatch(
+      /node-pty|node_pty|pty\.js|local[-_ ]terminal|openai|anthropic|langchain/i
+    )
   })
 
   it("gates packaging on release-grade verification and uploads only installer assets", () => {
@@ -95,5 +106,54 @@ describe("desktop packaging metadata", () => {
     expect(macSmoke).toContain("Darwin")
     expect(macSmoke).toContain("npm run dist:mac")
     expect(macSmoke).toContain("native macOS")
+  })
+
+  it("keeps v0 workflow release and soak intent explicit", () => {
+    const workflow = readFileSync(".github/workflows/build.yml", "utf8")
+    const soakJob = workflow.slice(workflow.indexOf("\n  soak:"), workflow.indexOf("\n  package:"))
+
+    expect(workflow).toContain("command: npm run dist:win")
+    expect(workflow).toContain("command: npm run dist:mac")
+    expect(workflow).toContain("release/Rocker-v*-x64.exe")
+    expect(workflow).toContain("release/Rocker-v*-arm64.exe")
+    expect(workflow).toContain("release/Rocker-v*.dmg")
+    expect(workflow).toContain("release/Rocker-v*.zip")
+    expect(workflow).toContain("The long soak is a v1 release gate")
+    expect(workflow).toContain("v0 releases use the local short soak")
+    expect(soakJob).toContain("startsWith(github.ref, 'refs/tags/v1.')")
+    expect(soakJob).toContain("timeout-minutes: 45")
+    expect(workflow).not.toMatch(/dist:(?:linux|android|ios)/i)
+  })
+
+  it("keeps the v0.4 implementation evidence and smoke checklist present", () => {
+    const verificationPath = "docs/releases/v0.4.0-implementation-verification.md"
+    const smokePath = "docs/releases/v0.4.0-smoke-checklist.md"
+
+    expect(existsSync(verificationPath)).toBe(true)
+    expect(existsSync(smokePath)).toBe(true)
+
+    const verification = readFileSync(verificationPath, "utf8")
+    const smokeChecklist = readFileSync(smokePath, "utf8")
+
+    expect(verification).toContain("Base before v0.4 implementation")
+    expect(verification).toContain("Task 5 final commit")
+    expect(verification).toContain("Task 6 verification record")
+    expect(verification).toContain("npm audit")
+    expect(verification).toContain("native Windows/macOS startup")
+    expect(verification).toContain("DEFERRED")
+
+    for (const section of [
+      "Search",
+      "Command Palette",
+      "Shell Key Pass-Through",
+      "Session Menu",
+      "Duplicate and New Window",
+      "Recent Sessions",
+      "Live Terminal Settings",
+      "Blocked Settings Storage",
+      "Placeholder Navigation"
+    ]) {
+      expect(smokeChecklist).toContain(section)
+    }
   })
 })

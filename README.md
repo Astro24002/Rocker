@@ -22,6 +22,20 @@ React, xterm.js, and `ssh2`.
 - Local connection history.
 - English UI by default with optional Simplified Chinese.
 
+## v0.4 implementation status
+
+The v0.4 Terminal Productivity implementation is complete in the current
+development line. It includes per-Session terminal search, the shared Command
+Palette, terminal and Session context actions, recent-session navigation, and
+live terminal appearance settings while preserving SSH, PTY, Host Key, and
+connection reuse contracts.
+
+This is an implementation milestone, not a published release. The package
+version remains `0.3.3`; no tag, release, or installer was created. Native
+Windows/macOS startup coverage and the 30-minute long soak remain deferred for
+the v0 line. See the [verification record](docs/releases/v0.4.0-implementation-verification.md)
+and [smoke checklist](docs/releases/v0.4.0-smoke-checklist.md).
+
 SFTP and Snippets are visible navigation placeholders. Cloud sync, mobile
 clients, ProxyJump, remote forwarding, and Dynamic SOCKS5 are not part of the
 first release.
