@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { ComingSoonView } from "../components/ComingSoonView"
 import { IconButton } from "../components/IconButton"
 import { RecoveryBanner } from "../components/RecoveryBanner"
-import { Sidebar, clampSidebarWidth, type SessionCommandId, type WorkspaceNavKey } from "../components/Sidebar"
+import { Sidebar, clampSidebarWidth, type ContextMenuOwner, type SessionCommandId, type WorkspaceNavKey } from "../components/Sidebar"
 import { WindowChrome } from "../components/WindowChrome"
 import { HostEditor } from "../features/hosts/HostEditor"
 import { HostList } from "../features/hosts/HostList"
@@ -138,6 +138,7 @@ function Workspace() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [recentSessionState, setRecentSessionState] = useState<RecentSessionState>({})
+  const [contextMenuOwner, setContextMenuOwner] = useState<ContextMenuOwner>()
   const [terminalContextMenu, setTerminalContextMenu] = useState<{ sessionId: string; x: number; y: number }>()
   const [, setCommandContextVersion] = useState(0)
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -770,11 +771,25 @@ function Workspace() {
     })
   }, [focusCurrentTerminal, restoreCurrentFocus, scheduleFocusRestore])
 
+  const restoreSidebarFocus = useCallback((closedSessionId: string): void => {
+    scheduleFocusRestore(() => {
+      if (focusCurrentTerminal()) return
+      const remainingSessionIds = new Set(workspaceRef.current.sessions.filter((session) => session.id !== closedSessionId).map((session) => session.id))
+      const remainingSessionButton = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-session-id]")).find((button) => button.dataset.sessionId && remainingSessionIds.has(button.dataset.sessionId))
+      if (remainingSessionButton?.isConnected) {
+        remainingSessionButton.focus()
+        return
+      }
+      workspaceStageRef.current?.focus()
+    })
+  }, [focusCurrentTerminal, scheduleFocusRestore])
+
   const openCommandPalette = useCallback((): void => {
     if (focusRestoreTimer.current !== undefined) {
       window.clearTimeout(focusRestoreTimer.current)
       focusRestoreTimer.current = undefined
     }
+    setContextMenuOwner(undefined)
     setTerminalContextMenu(undefined)
     setPaletteOpen(true)
   }, [])
@@ -850,7 +865,15 @@ function Workspace() {
     void executeCommand(commandId, context)
   }
 
-  const closeTerminalContextMenu = useCallback((): void => setTerminalContextMenu(undefined), [])
+  const handleContextMenuOwnerChange = useCallback((owner: ContextMenuOwner | undefined): void => {
+    setContextMenuOwner(owner)
+    if (owner !== "terminal") setTerminalContextMenu(undefined)
+  }, [])
+
+  const closeTerminalContextMenu = useCallback((): void => {
+    setTerminalContextMenu(undefined)
+    setContextMenuOwner((owner) => owner === "terminal" ? undefined : owner)
+  }, [])
   const openTerminalContextMenu = useCallback((sessionId: string, event: MouseEvent): void => {
     if (paletteOpen) return
     event.preventDefault()
@@ -861,6 +884,7 @@ function Workspace() {
     }
     if (!workspaceRef.current.sessions.some((session) => session.id === sessionId)) return
     if (workspaceRef.current.activeSessionId !== sessionId) activateExistingSession(sessionId)
+    setContextMenuOwner("terminal")
     setTerminalContextMenu({ sessionId, x: event.clientX, y: event.clientY })
   }, [activateExistingSession, paletteOpen])
 
@@ -901,6 +925,7 @@ function Workspace() {
     if (!terminalContextMenu) return
     if (activeNav === "terminal" && terminalMenuSession && terminalMenuSurface) return
     setTerminalContextMenu(undefined)
+    setContextMenuOwner((owner) => owner === "terminal" ? undefined : owner)
     restorePaletteFocus()
   }, [activeNav, restorePaletteFocus, terminalContextMenu, terminalMenuSession, terminalMenuSurface])
 
@@ -970,10 +995,13 @@ function Workspace() {
           sessions={workspace.sessions}
           activeSessionId={workspace.activeSessionId}
           commandPaletteOpen={paletteOpen}
+          contextMenuOwner={contextMenuOwner}
           onWidthChange={changeSidebarWidth}
           onNavigate={setActiveNav}
           onSessionActivate={activateExistingSession}
           onSessionCommand={invokeSessionCommand}
+          onContextMenuOwnerChange={handleContextMenuOwnerChange}
+          onRestoreFocus={restoreSidebarFocus}
           commandContext={commandContext}
         />
         <main className="workspace">

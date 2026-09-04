@@ -1,5 +1,5 @@
 import { Clock3, Columns2, Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, RotateCw, Search, Server, Settings, SquareTerminal, X } from "lucide-react"
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactElement } from "react"
+import { useCallback, useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactElement } from "react"
 import { useI18n } from "../i18n"
 import { isCommandEnabled, type CommandContext, type CommandId } from "../features/commands/command-registry"
 import { IconButton } from "./IconButton"
@@ -9,6 +9,7 @@ import type { WorkspaceSession } from "../features/terminal/session-state"
 export type NavKey = "hosts" | "sftp" | "ports" | "snippets" | "history" | "settings"
 export type WorkspaceNavKey = NavKey | "terminal" | "local-terminal"
 export type SessionCommandId = Extract<CommandId, `session.${string}`>
+export type ContextMenuOwner = "sidebar" | "terminal"
 
 interface SidebarProps {
   width: number
@@ -16,10 +17,13 @@ interface SidebarProps {
   sessions?: WorkspaceSession[]
   activeSessionId?: string
   commandPaletteOpen?: boolean
+  contextMenuOwner?: ContextMenuOwner
   onWidthChange(width: number): void
   onNavigate(nav: WorkspaceNavKey): void
   onSessionActivate?(id: string): void
   onSessionCommand?(commandId: SessionCommandId, session: WorkspaceSession): void
+  onContextMenuOwnerChange?(owner: ContextMenuOwner | undefined): void
+  onRestoreFocus?(sessionId: string): void
   commandContext?: CommandContext
 }
 
@@ -35,28 +39,51 @@ export function clampSidebarWidth(width: number): number {
   return Math.max(180, Math.min(360, Math.round(width)))
 }
 
-export function Sidebar({ width, activeNav, sessions = [], activeSessionId, commandPaletteOpen = false, onWidthChange, onNavigate, onSessionActivate, onSessionCommand, commandContext }: SidebarProps) {
+export function Sidebar({ width, activeNav, sessions = [], activeSessionId, commandPaletteOpen = false, contextMenuOwner, onWidthChange, onNavigate, onSessionActivate, onSessionCommand, onContextMenuOwnerChange, onRestoreFocus, commandContext }: SidebarProps) {
   const { t } = useI18n()
   const [menuSessionId, setMenuSessionId] = useState<string>()
   const menuRef = useRef<HTMLDivElement>(null)
   const menuTriggerRef = useRef<HTMLButtonElement>(null)
+  const pendingRestoreSessionId = useRef<string | undefined>(undefined)
+
+  const closeSessionMenu = useCallback((restoreFocus = true): void => {
+    if (!menuSessionId) return
+    if (restoreFocus) pendingRestoreSessionId.current = menuSessionId
+    else pendingRestoreSessionId.current = undefined
+    setMenuSessionId(undefined)
+    if (contextMenuOwner !== "terminal") onContextMenuOwnerChange?.(undefined)
+  }, [contextMenuOwner, menuSessionId, onContextMenuOwnerChange])
 
   useEffect(() => {
     if (!menuSessionId) return
+    if (contextMenuOwner === "terminal") {
+      pendingRestoreSessionId.current = undefined
+      setMenuSessionId(undefined)
+      return
+    }
     menuRef.current?.focus()
-    const close = (): void => setMenuSessionId(undefined)
+    const close = (): void => closeSessionMenu()
     window.addEventListener("click", close)
     return () => window.removeEventListener("click", close)
-  }, [menuSessionId])
+  }, [closeSessionMenu, contextMenuOwner, menuSessionId])
 
   useEffect(() => {
-    if (commandPaletteOpen) setMenuSessionId(undefined)
-  }, [commandPaletteOpen])
-
-  const closeSessionMenu = (): void => {
+    if (!commandPaletteOpen) return
+    pendingRestoreSessionId.current = undefined
     setMenuSessionId(undefined)
-    menuTriggerRef.current?.focus()
-  }
+    if (contextMenuOwner === "sidebar") onContextMenuOwnerChange?.(undefined)
+  }, [commandPaletteOpen, contextMenuOwner, onContextMenuOwnerChange])
+
+  useEffect(() => {
+    const sessionId = pendingRestoreSessionId.current
+    if (menuSessionId || !sessionId) return
+    pendingRestoreSessionId.current = undefined
+    if (menuTriggerRef.current?.isConnected) {
+      menuTriggerRef.current.focus()
+      return
+    }
+    onRestoreFocus?.(sessionId)
+  }, [menuSessionId, onRestoreFocus])
 
   const startResize = (event: React.PointerEvent<HTMLDivElement>): void => {
     event.preventDefault()
@@ -109,7 +136,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
           <div className="sidebar-session-list">
             {sessions.map((session) => (
               <div key={session.id} className="sidebar-session-row">
-                <button aria-expanded={menuSessionId === session.id} aria-haspopup="menu" data-active={session.id === activeSessionId} ref={(element) => { if (element && menuSessionId === session.id) menuTriggerRef.current = element }} type="button" onContextMenu={(event) => { event.preventDefault(); if (commandPaletteOpen) return; event.stopPropagation(); menuTriggerRef.current = event.currentTarget; setMenuSessionId(session.id) }} onClick={() => {
+                <button aria-expanded={menuSessionId === session.id} aria-haspopup="menu" data-active={session.id === activeSessionId} data-session-id={session.id} ref={(element) => { if (element && menuSessionId === session.id) menuTriggerRef.current = element }} type="button" onContextMenu={(event) => { event.preventDefault(); if (commandPaletteOpen) return; event.stopPropagation(); pendingRestoreSessionId.current = undefined; menuTriggerRef.current = event.currentTarget; onContextMenuOwnerChange?.("sidebar"); setMenuSessionId(session.id) }} onClick={() => {
                   onSessionActivate?.(session.id)
                   onNavigate("terminal")
                 }}>

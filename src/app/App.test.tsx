@@ -455,6 +455,40 @@ describe("desktop workspace shell", () => {
     expect(screen.getByRole("searchbox", { name: "Search terminal output" })).toHaveFocus()
   })
 
+  it("dismisses the terminal menu when a Sidebar session menu opens", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const sessionButton = screen.getByRole("button", { name: "G11" })
+    const terminal = document.querySelector(".terminal-surface")
+    expect(terminal).not.toBeNull()
+
+    fireEvent.contextMenu(terminal!)
+    expect(screen.getByRole("menu", { name: "Terminal actions" })).toBeInTheDocument()
+    fireEvent.contextMenu(sessionButton)
+
+    expect(screen.getByRole("menu", { name: "Session actions for G11" })).toBeInTheDocument()
+    expect(screen.queryByRole("menu", { name: "Terminal actions" })).not.toBeInTheDocument()
+  })
+
+  it("dismisses the Sidebar menu when a terminal context menu opens", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const sessionButton = screen.getByRole("button", { name: "G11" })
+    const terminal = document.querySelector(".terminal-surface")
+    expect(terminal).not.toBeNull()
+
+    fireEvent.contextMenu(sessionButton)
+    expect(screen.getByRole("menu", { name: "Session actions for G11" })).toBeInTheDocument()
+    fireEvent.contextMenu(terminal!)
+
+    expect(screen.getByRole("menu", { name: "Terminal actions" })).toBeInTheDocument()
+    expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
+  })
+
   it("handles pointer clicks and Escape only in the command palette after menu dismissal", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
     render(<App />)
@@ -511,6 +545,34 @@ describe("desktop workspace shell", () => {
     fireEvent.keyDown(query, { key: "Escape" })
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Command Palette" })).not.toBeInTheDocument())
     expect(screen.queryByRole("menu", { name: `Session actions for ${session.label}` })).not.toBeInTheDocument()
+  })
+
+  it("restores stage focus after closing the last session from its Sidebar menu", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const session = workspace().sessions[0]
+    fireEvent.contextMenu(screen.getByRole("button", { name: session.label }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Close" }))
+
+    await waitFor(() => expect(screen.queryByTestId("terminal-workspace-mock")).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId("workspace-stage")).toHaveFocus())
+  })
+
+  it("restores focus to the active terminal after closing a non-active session", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshotWithTwoSessions(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(2))
+    const [activeSession, nonActiveSession] = workspace().sessions
+    await waitFor(() => expect(terminalHarness.surfaces.get(activeSession.id)).toBeDefined())
+    const activeSurface = terminalHarness.surfaces.get(activeSession.id)!
+    fireEvent.contextMenu(screen.getByRole("button", { name: nonActiveSession.label }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Close" }))
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    await waitFor(() => expect(activeSurface.focus).toHaveBeenCalledTimes(1))
   })
 
   it("preserves the current leaf when splitting a connected hidden session", async () => {
