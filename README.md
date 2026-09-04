@@ -22,18 +22,18 @@ React, xterm.js, and `ssh2`.
 - Local connection history.
 - English UI by default with optional Simplified Chinese.
 
-## v0.4 implementation status
+## v0.4.0 release status
 
-The v0.4 Terminal Productivity implementation is complete in the current
-development line. It includes per-Session terminal search, the shared Command
-Palette, terminal and Session context actions, recent-session navigation, and
-live terminal appearance settings while preserving SSH, PTY, Host Key, and
-connection reuse contracts.
+Rocker v0.4.0 is the Terminal Productivity release line. It includes
+per-Session terminal search, the shared Command Palette, terminal and Session
+context actions, recent-session navigation, and live terminal appearance
+settings while preserving SSH, PTY, Host Key, and connection reuse contracts.
 
-This is an implementation milestone, not a published release. The package
-version remains `0.3.3`; no tag, release, or installer was created. Native
-Windows/macOS startup coverage and the 30-minute long soak remain deferred for
-the v0 line. See the [verification record](docs/releases/v0.4.0-implementation-verification.md)
+The release source uses package version `0.4.0` and tag `v0.4.0`. The GitHub
+Actions release workflow publishes only the six Windows/macOS installer and
+archive assets produced by the platform runners. Native Windows/macOS startup
+coverage remains deferred for the v0 line, and the 30-minute long soak remains
+a v1 release gate. See the [verification record](docs/releases/v0.4.0-implementation-verification.md)
 and [smoke checklist](docs/releases/v0.4.0-smoke-checklist.md).
 
 SFTP and Snippets are visible navigation placeholders. Cloud sync, mobile

@@ -94,18 +94,17 @@ The approved detailed design is [v0.4 Terminal Productivity Design](./2026-09-02
   debounced SettingsStore persistence.
 - Local Terminal remains a placeholder in v0.4; no `node-pty` is introduced.
 
-### v0.4 Implementation Status
+### v0.4 Release Status
 
-The v0.4 Terminal Productivity implementation is complete in the current
-development line after Tasks 1 through 6. The implementation record and manual
-smoke checklist are [available here](../../releases/v0.4.0-implementation-verification.md)
+The v0.4 Terminal Productivity implementation is complete after Tasks 1
+through 6 and is released from package version `0.4.0` and tag `v0.4.0`. The
+release verification record and manual smoke checklist are [available here](../../releases/v0.4.0-implementation-verification.md)
 and [here](../../releases/v0.4.0-smoke-checklist.md).
 
-This status does not create a release. The package version remains `0.3.3`, and
-no tag, GitHub release, or installer was created. Native Windows/macOS startup
-coverage and the 30-minute long soak remain deferred for the v0 line. This
-roadmap remains the source of truth for the order and boundaries of v0.4
-through v0.9.
+The GitHub Actions release workflow builds only the Windows/macOS installer and
+archive targets. Native Windows/macOS startup coverage remains deferred for the
+v0 line, while the 30-minute long soak remains a v1 release gate. This roadmap
+remains the source of truth for the order and boundaries of v0.4 through v0.9.
 
 ## v0.5.0: Hosts and Security Center
 
