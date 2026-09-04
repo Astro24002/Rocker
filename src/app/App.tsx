@@ -673,7 +673,7 @@ function Workspace() {
   const openSearchForSession = useCallback((sessionOrId: WorkspaceSession | string): void => {
     const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId.id
     if (!workspaceRef.current.sessions.some((session) => session.id === sessionId)) return
-    pendingSearchSessionId.current = workspaceRef.current.activeSessionId === sessionId ? undefined : sessionId
+    pendingSearchSessionId.current = sessionId
     activateExistingSession(sessionId)
     setActiveNav("terminal")
     setSearchOpen(true)
@@ -918,13 +918,18 @@ function Workspace() {
   }, [bridge])
 
   useEffect(() => {
+    if (activeNav !== "terminal") {
+      pendingSearchSessionId.current = undefined
+      setSearchOpen(false)
+      return
+    }
     if (pendingSearchSessionId.current === activeSession?.id) {
       pendingSearchSessionId.current = undefined
       return
     }
     pendingSearchSessionId.current = undefined
     setSearchOpen(false)
-  }, [activeSession?.id])
+  }, [activeNav, activeSession?.id])
 
   const saveHost = async (profile: HostProfile, credentials: { password?: string; passphrase?: string }): Promise<void> => {
     if (!capabilities.hostMutationsAvailable) return

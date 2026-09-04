@@ -136,6 +136,39 @@ describe("desktop workspace shell", () => {
     await waitFor(() => expect(screen.getByRole("dialog", { name: "Command Palette" })).toBeInTheDocument())
   })
 
+  it("opens Search from the exact global shortcut targeted at the xterm helper textarea", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const helper = document.querySelector(".terminal-surface .xterm-helper-textarea") as HTMLTextAreaElement
+    helper.focus()
+    const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "f", ctrlKey: true, shiftKey: true })
+    const preventDefault = vi.spyOn(event, "preventDefault")
+    helper.dispatchEvent(event)
+
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.getByRole("searchbox", { name: "Search terminal output" })).toHaveFocus())
+  })
+
+  it("returns Search focus to the active terminal after Escape", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const sessionId = workspace().activeSessionId!
+    await waitFor(() => expect(terminalHarness.surfaces.get(sessionId)).toBeDefined())
+    const surface = terminalHarness.surfaces.get(sessionId)!
+    fireEvent.click(screen.getByRole("button", { name: "Search terminal" }))
+    const searchbox = await screen.findByRole("searchbox", { name: "Search terminal output" })
+    expect(searchbox).toHaveFocus()
+
+    fireEvent.keyDown(searchbox, { key: "Escape" })
+
+    await waitFor(() => expect(screen.queryByRole("search", { name: "Search terminal" })).not.toBeInTheDocument())
+    expect(surface.focus).toHaveBeenCalledTimes(1)
+  })
+
   it("activates the terminal before showing search from a non-terminal view", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
     render(<App />)
@@ -150,6 +183,19 @@ describe("desktop workspace shell", () => {
     await waitFor(() => expect(terminalHost).not.toHaveAttribute("hidden"))
     expect(screen.getByRole("search", { name: "Search terminal" })).toBeInTheDocument()
     expect(screen.queryByRole("heading", { name: "Settings" })).not.toBeInTheDocument()
+  })
+
+  it("closes Search when navigating away from the terminal destination", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    fireEvent.click(screen.getByRole("button", { name: "Search terminal" }))
+    expect(screen.getByRole("search", { name: "Search terminal" })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    expect(screen.queryByRole("search", { name: "Search terminal" })).not.toBeInTheDocument()
+    expect(document.querySelector(".terminal-search-overlay")).toBeNull()
   })
 
   it("executes Local Terminal to a placeholder while preserving an active SSH workspace", async () => {
@@ -179,6 +225,21 @@ describe("desktop workspace shell", () => {
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Local Terminal" })).toBeInTheDocument())
     expect(screen.queryByTestId("terminal-workspace-mock")).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ["SFTP", "SFTP"],
+    ["Snippets", "Snippets"],
+    ["Local Terminal", "Local Terminal"]
+  ])("reaches the %s placeholder from Sidebar navigation", async (label, heading) => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], undefined))
+    render(<App />)
+
+    await waitFor(() => expect(bridge.bootstrap.load).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole("button", { name: label }))
+
+    expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument()
+    expect(screen.getByText("Coming soon")).toBeInTheDocument()
   })
 
   it("restores Escape focus to the unchanged active terminal", async () => {
@@ -711,6 +772,64 @@ describe("desktop workspace shell", () => {
     expect(screen.queryByTestId("terminal-workspace-mock")).not.toBeInTheDocument()
   })
 
+  it.each(["connecting", "reconnecting"] as const)("blocks bridge-backed session commands while %s", async (state) => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    await waitFor(() => expect(sessionListener).toBeTypeOf("function"))
+    const sessionId = workspace().sessions[0].id
+    act(() => sessionListener!({ kind: "state", sessionId, connectionId: "connection-1", channelGeneration: 1, state }))
+    await waitFor(() => expect(workspace().sessions[0].state).toBe(state))
+
+    const openCallCount = bridge.sessions.open.mock.calls.length
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    const reconnect = screen.getByRole("menuitem", { name: "Reconnect" })
+    const duplicate = screen.getByRole("menuitem", { name: "Duplicate" })
+    expect(reconnect).toBeDisabled()
+    expect(duplicate).toBeDisabled()
+
+    fireEvent.click(reconnect)
+    fireEvent.click(duplicate)
+
+    expect(bridge.sessions.reconnect).not.toHaveBeenCalled()
+    expect(bridge.sessions.open).toHaveBeenCalledTimes(openCallCount)
+  })
+
+  it("renames only the display label while preserving session identity and split order", async () => {
+    const splitWorkspace = workspaceSnapshotWithSplitLayout(host.id)
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], splitWorkspace))
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue("renamed")
+    try {
+      render(<App />)
+
+      await waitFor(() => expect(workspace().sessions).toHaveLength(2))
+      await waitFor(() => expect(workspace().sessions.every((session) => session.state === "connected")).toBe(true))
+      const before = workspace()
+      const target = before.sessions[1]
+      const beforeTarget = { ...target }
+      const beforeLayout = before.layout
+      const beforeActiveSessionId = before.activeSessionId
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: target.label }))
+      fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }))
+
+      await waitFor(() => expect(workspace().sessions.find((session) => session.id === target.id)?.label).toBe("renamed"))
+      const afterTarget = workspace().sessions.find((session) => session.id === target.id)
+      expect(afterTarget).toMatchObject({
+        ...beforeTarget,
+        label: "renamed"
+      })
+      expect(workspace().activeSessionId).toBe(beforeActiveSessionId)
+      expect(workspace().layout).toEqual(beforeLayout)
+      expect(bridge.sessions.reconnect).not.toHaveBeenCalled()
+      expect(bridge.sessions.close).not.toHaveBeenCalled()
+      expect(prompt).toHaveBeenCalledWith("Rename session", target.label)
+    } finally {
+      prompt.mockRestore()
+    }
+  })
+
   it("submits hydrated workspace metadata without a renderer-side debounce", async () => {
     vi.useFakeTimers()
     try {
@@ -996,6 +1115,19 @@ function workspaceSnapshotWithTwoSessionsAndLayout(hostId: string) {
   return {
     ...workspaceSnapshotWithTwoSessions(hostId),
     layout: { kind: "leaf" as const, sessionId: "22222222-2222-4222-8222-222222222222" }
+  }
+}
+
+function workspaceSnapshotWithSplitLayout(hostId: string) {
+  return {
+    ...workspaceSnapshotWithTwoSessions(hostId),
+    layout: {
+      kind: "split" as const,
+      direction: "horizontal" as const,
+      ratio: 0.5,
+      first: { kind: "leaf" as const, sessionId: "22222222-2222-4222-8222-222222222222" },
+      second: { kind: "leaf" as const, sessionId: "33333333-3333-4333-8333-333333333333" }
+    }
   }
 }
 

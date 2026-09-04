@@ -37,6 +37,17 @@ describe("Sidebar session actions", () => {
     expect(screen.getByRole("menuitem", { name: "Close" })).toBeInTheDocument()
   })
 
+  it("focuses the session menu and closes it on Escape", () => {
+    render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onWidthChange={vi.fn()} onNavigate={vi.fn()} /></I18nProvider>)
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    const menu = screen.getByRole("menu", { name: "Session actions for G11" })
+
+    expect(menu).toHaveFocus()
+    fireEvent.keyDown(menu, { key: "Escape" })
+    expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
+  })
+
   it("clears its row menu when the command palette opens", () => {
     const { rerender } = render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onWidthChange={vi.fn()} onNavigate={vi.fn()} commandPaletteOpen={false} /></I18nProvider>)
 

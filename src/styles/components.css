@@ -229,7 +229,7 @@
   top: 4px;
   left: calc(100% + 8px);
   display: flex;
-  width: 238px;
+  width: min(238px, calc(100vw - 16px));
   flex-direction: column;
   padding: 6px;
   border: 1px solid var(--line-strong);
@@ -238,11 +238,18 @@
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.025);
 }
 
+.session-menu:focus-visible,
+.terminal-context-menu:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .session-menu button {
   display: flex;
   align-items: center;
   gap: 9px;
   min-height: 30px;
+  min-width: 0;
   padding: 0 10px;
   border-radius: 5px;
   color: var(--text-secondary);
@@ -263,6 +270,13 @@
 
 .session-menu button:hover svg {
   color: currentColor;
+}
+
+.session-menu button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-menu-label {
