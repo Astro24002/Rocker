@@ -1,15 +1,13 @@
-import { Command, Search } from "lucide-react"
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
 import { ComingSoonView } from "../components/ComingSoonView"
-import { IconButton } from "../components/IconButton"
 import { RecoveryBanner } from "../components/RecoveryBanner"
-import { Sidebar, clampSidebarWidth, type ContextMenuOwner, type SessionCommandId, type WorkspaceNavKey } from "../components/Sidebar"
+import { Sidebar, type ContextMenuOwner, type SessionCommandId, type WorkspaceNavKey } from "../components/Sidebar"
+import { WorkspaceResizeHandle } from "../components/WorkspaceResizeHandle"
 import { WindowChrome } from "../components/WindowChrome"
 import { HostEditor } from "../features/hosts/HostEditor"
 import { HostList } from "../features/hosts/HostList"
 import { toggleFavorite, upsertHost } from "../features/hosts/host-state"
 import { HistoryView } from "../features/history/HistoryView"
-import { applyMetrics, createMonitorState, toggleMonitor } from "../features/monitoring/monitor-state"
 import { PortsView } from "../features/ports/PortsView"
 import { SettingsView } from "../features/settings/SettingsView"
 import { CommandPalette, type CommandPaletteFocusRequest } from "../features/commands/CommandPalette"
@@ -34,6 +32,7 @@ import { TerminalWorkspace } from "../features/terminal/TerminalWorkspace"
 import { type TerminalController, type TerminalPreferences } from "../features/terminal/terminal-controller"
 import type { TerminalSearchController } from "../features/terminal/terminal-search"
 import { I18nProvider, useI18n } from "../i18n"
+import { normalizeSidebarWidth } from "../shared/sidebar-width"
 import { bootstrapReducer, createBootstrapState, deriveBootstrapCapabilities, retryableBootstrapResources } from "./bootstrap-state"
 import { getRockerBridge } from "./bridge"
 import type { BootstrapResourceName } from "../../electron/ipc/bridge-contract"
@@ -132,7 +131,6 @@ function Workspace() {
   const [editor, setEditor] = useState<{ open: boolean; profile?: HostProfile }>({ open: false })
   const [workspace, setWorkspace] = useState<TerminalWorkspaceState>(createTerminalWorkspaceState)
   const [bootstrapState, dispatchBootstrap] = useReducer(bootstrapReducer, undefined, createBootstrapState)
-  const [monitor, setMonitor] = useState(createMonitorState)
   const [settings, setSettings] = useState<AppSettings>(defaultSettings)
   const [settingsPersistenceFailed, setSettingsPersistenceFailed] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -143,7 +141,7 @@ function Workspace() {
   const [, setCommandContextVersion] = useState(0)
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const stored = Number(localStorage.getItem("rocker.sidebarWidth") ?? defaultSettings.sidebarWidth)
-    return clampSidebarWidth(Number.isFinite(stored) ? stored : defaultSettings.sidebarWidth)
+    return normalizeSidebarWidth(Number.isFinite(stored) ? stored : defaultSettings.sidebarWidth)
   })
 
   const controllers = useRef(new Map<string, TerminalController>())
@@ -422,7 +420,7 @@ function Workspace() {
         settingsRef.current = nextSettings
         setSettings(nextSettings)
         setLocale(nextSettings.locale)
-        setSidebarWidth(clampSidebarWidth(nextSettings.sidebarWidth))
+        setSidebarWidth(normalizeSidebarWidth(nextSettings.sidebarWidth))
 
         if (nextSettings.restorePreviousWorkspace && workspaceWritable.current && snapshot.workspace.value) {
           const restored = restoreWorkspace(snapshot.workspace.value, availableHosts, snapshot.hosts.health.status !== "blocked")
@@ -503,7 +501,7 @@ function Workspace() {
           settingsRef.current = nextSettings
           setSettings(nextSettings)
           setLocale(nextSettings.locale)
-          setSidebarWidth(clampSidebarWidth(nextSettings.sidebarWidth))
+          setSidebarWidth(normalizeSidebarWidth(nextSettings.sidebarWidth))
           if (retryStatusVersion === latestSettingsStatusVersion.current) setSettingsPersistenceFailed(false)
         }
       }
@@ -588,28 +586,6 @@ function Workspace() {
   workspaceRef.current = workspace
   activeNavigationRef.current = activeNav
 
-  useEffect(() => {
-    if (!activeSession || activeSession.state !== "connected") {
-      setMonitor((current) => ({ ...current, metrics: undefined, error: undefined }))
-      return
-    }
-
-    let cancelled = false
-    const sample = (): void => {
-      void bridge.monitor.sample(activeSession.id).then((metrics) => {
-        if (!cancelled) setMonitor((current) => applyMetrics(current, metrics))
-      }).catch((error) => {
-        if (!cancelled) setMonitor((current) => ({ ...current, error: error instanceof Error ? error.message : String(error) }))
-      })
-    }
-    sample()
-    const interval = window.setInterval(sample, 5_000)
-    return () => {
-      cancelled = true
-      window.clearInterval(interval)
-    }
-  }, [activeSession?.id, activeSession?.state, bridge])
-
   const applyLocalSettingsUpdate = (update: Partial<AppSettings>): AppSettings => {
     if (Object.keys(update).length === 0) return settingsRef.current
     const mutationVersion = ++settingsMutationVersion.current
@@ -629,7 +605,7 @@ function Workspace() {
 
   const changeSidebarWidth = (width: number): void => {
     if (!settingsMutationsAvailable) return
-    const next = clampSidebarWidth(width)
+    const next = normalizeSidebarWidth(width)
     localStorage.setItem("rocker.sidebarWidth", String(next))
     setSidebarWidth(next)
     applyLocalSettingsUpdate({ sidebarWidth: next })
@@ -867,7 +843,7 @@ function Workspace() {
 
   const handleContextMenuOwnerChange = useCallback((owner: ContextMenuOwner | undefined): void => {
     setContextMenuOwner(owner)
-    if (owner !== "terminal") setTerminalContextMenu(undefined)
+      if (owner !== "terminal") setTerminalContextMenu(undefined)
   }, [])
 
   const closeTerminalContextMenu = useCallback((): void => {
@@ -987,34 +963,25 @@ function Workspace() {
 
   return (
     <div className="app-shell" data-ui-style="modern-professional">
-      <WindowChrome />
-      <div className="app-content">
-        <Sidebar
-          width={sidebarWidth}
-          activeNav={activeNav}
-          sessions={workspace.sessions}
-          activeSessionId={workspace.activeSessionId}
-          commandPaletteOpen={paletteOpen}
-          contextMenuOwner={contextMenuOwner}
-          onWidthChange={changeSidebarWidth}
-          onNavigate={setActiveNav}
-          onSessionActivate={activateExistingSession}
-          onSessionCommand={invokeSessionCommand}
-          onContextMenuOwnerChange={handleContextMenuOwnerChange}
-          onRestoreFocus={restoreSidebarFocus}
-          commandContext={commandContext}
-        />
-        <main className="workspace">
+      <Sidebar
+        width={sidebarWidth}
+        activeNav={activeNav}
+        sessions={workspace.sessions}
+        activeSessionId={workspace.activeSessionId}
+        commandPaletteOpen={paletteOpen}
+        contextMenuOwner={contextMenuOwner}
+        onNavigate={setActiveNav}
+        onSessionActivate={activateExistingSession}
+        onSessionCommand={invokeSessionCommand}
+        onContextMenuOwnerChange={handleContextMenuOwnerChange}
+        onRestoreFocus={restoreSidebarFocus}
+        commandContext={commandContext}
+      />
+      <main className="workspace">
+          <WorkspaceResizeHandle width={sidebarWidth} onWidthChange={changeSidebarWidth} />
+          <WindowChrome />
           <RecoveryBanner state={bootstrapState} onRetry={retryBootstrap} onExportDiagnostics={() => bridge.diagnostics.export()} />
           <div className="workspace-stage" data-testid="workspace-stage" ref={workspaceStageRef} tabIndex={-1}>
-          <div aria-label={t("commands.title")} className="workspace-command-affordances">
-            <IconButton disabled={!isCommandEnabled("terminal.search", commandContext)} label={t("terminal.search")} onClick={() => invokeCommand("terminal.search")}>
-              <Search size={15} />
-            </IconButton>
-            <IconButton data-command-palette-trigger="true" label={t("commands.openPalette")} onClick={() => invokeCommand("palette.open")}>
-              <Command size={15} />
-            </IconButton>
-          </div>
           {workspace.sessions.length > 0 && (
             <div className="terminal-workspace-host" hidden={activeNav !== "terminal"}>
               <TerminalWorkspace
@@ -1030,9 +997,6 @@ function Workspace() {
                   />
                   <TerminalSearchOverlay controller={activeSearchController} open={searchOpen} onClose={() => setSearchOpen(false)} onRestoreFocus={restoreCurrentFocus} />
                 </>}
-                monitor={monitor}
-                monitorHostName={activeHost?.name}
-                onMonitorToggle={() => setMonitor((current) => toggleMonitor(current))}
                 preferences={terminalPreferences}
                 confirmMultilinePaste={settings.confirmMultilinePaste}
                 multilinePasteConfirmation={t("terminal.multilinePasteConfirmation")}
@@ -1063,20 +1027,17 @@ function Workspace() {
             }} />
           ) : activeNav === "ports" ? (
             <PortsView bridge={bridge} connectionId={activeConnectionId} session={activeSession} username={activeHost?.username} bindAddress={settings.bindAddress} />
-          ) : activeNav === "local-terminal" ? (
-            <ComingSoonView feature="local-terminal" />
           ) : (
             <ComingSoonView feature={activeNav} />
           )}
           </div>
-        </main>
-        <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={(profile, credentials) => void saveHost(profile, credentials)} />
-        <CommandPalette open={paletteOpen} context={commandContext} onClose={() => setPaletteOpen(false)} onRestoreFocus={restorePaletteFocus} />
-        {!paletteOpen && terminalContextMenu && terminalMenuSession && <TerminalContextMenu open x={terminalContextMenu.x} y={terminalContextMenu.y} context={terminalMenuContext} onClose={closeTerminalContextMenu} onRestoreFocus={(request) => {
-          if (request === "terminal.focus") return
-          restorePaletteFocus(request)
-        }} />}
-      </div>
+      </main>
+      <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={(profile, credentials) => void saveHost(profile, credentials)} />
+      <CommandPalette open={paletteOpen} context={commandContext} onClose={() => setPaletteOpen(false)} onRestoreFocus={restorePaletteFocus} />
+      {!paletteOpen && terminalContextMenu && terminalMenuSession && <TerminalContextMenu open x={terminalContextMenu.x} y={terminalContextMenu.y} context={terminalMenuContext} onClose={closeTerminalContextMenu} onRestoreFocus={(request) => {
+        if (request === "terminal.focus") return
+        restorePaletteFocus(request)
+      }} />}
     </div>
   )
 }

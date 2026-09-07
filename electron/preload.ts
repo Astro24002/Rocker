@@ -44,9 +44,6 @@ const bridge: RockerBridge = {
     load: (): Promise<AppBootstrapSnapshot> => ipcRenderer.invoke(ipcChannels.bootstrapLoad),
     retry: (resources: BootstrapResourceName[]): Promise<Partial<AppBootstrapSnapshot>> => ipcRenderer.invoke(ipcChannels.bootstrapRetry, resources)
   },
-  monitor: {
-    sample: (sessionId) => ipcRenderer.invoke(ipcChannels.monitorSample, sessionId)
-  },
   history: {
     list: () => ipcRenderer.invoke(ipcChannels.historyList),
     clear: () => ipcRenderer.invoke(ipcChannels.historyClear)

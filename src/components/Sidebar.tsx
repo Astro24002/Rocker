@@ -1,13 +1,14 @@
-import { Clock3, Columns2, Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, RotateCw, Search, Server, Settings, SquareTerminal, X } from "lucide-react"
-import { useCallback, useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactElement } from "react"
+import { ChevronRight, Clock3, Columns2, Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, RotateCw, Server, Settings, X } from "lucide-react"
+import { forwardRef, useCallback, useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactElement } from "react"
 import { useI18n } from "../i18n"
 import { isCommandEnabled, type CommandContext, type CommandId } from "../features/commands/command-registry"
-import { IconButton } from "./IconButton"
 import { NavItem } from "./NavItem"
+import { isCompactSidebar, normalizeSidebarWidth } from "../shared/sidebar-width"
+import rockerMark from "../../build/icon.svg"
 import type { WorkspaceSession } from "../features/terminal/session-state"
 
 export type NavKey = "hosts" | "sftp" | "ports" | "snippets" | "history" | "settings"
-export type WorkspaceNavKey = NavKey | "terminal" | "local-terminal"
+export type WorkspaceNavKey = NavKey | "terminal"
 export type SessionCommandId = Extract<CommandId, `session.${string}`>
 export type ContextMenuOwner = "sidebar" | "terminal"
 
@@ -18,7 +19,6 @@ interface SidebarProps {
   activeSessionId?: string
   commandPaletteOpen?: boolean
   contextMenuOwner?: ContextMenuOwner
-  onWidthChange(width: number): void
   onNavigate(nav: WorkspaceNavKey): void
   onSessionActivate?(id: string): void
   onSessionCommand?(commandId: SessionCommandId, session: WorkspaceSession): void
@@ -30,20 +30,20 @@ interface SidebarProps {
 const navItems: Array<{ key: NavKey; icon: typeof Server }> = [
   { key: "hosts", icon: Server },
   { key: "sftp", icon: FolderClosed },
-  { key: "ports", icon: Network },
   { key: "snippets", icon: FileCode2 },
+  { key: "ports", icon: Network },
   { key: "history", icon: Clock3 }
 ]
 
-export function clampSidebarWidth(width: number): number {
-  return Math.max(180, Math.min(360, Math.round(width)))
-}
+export const clampSidebarWidth = normalizeSidebarWidth
 
-export function Sidebar({ width, activeNav, sessions = [], activeSessionId, commandPaletteOpen = false, contextMenuOwner, onWidthChange, onNavigate, onSessionActivate, onSessionCommand, onContextMenuOwnerChange, onRestoreFocus, commandContext }: SidebarProps) {
+export function Sidebar({ width, activeNav, sessions = [], activeSessionId, commandPaletteOpen = false, contextMenuOwner, onNavigate, onSessionActivate, onSessionCommand, onContextMenuOwnerChange, onRestoreFocus, commandContext }: SidebarProps) {
   const { t } = useI18n()
   const [menuSessionId, setMenuSessionId] = useState<string>()
+  const [duplicateMenuSessionId, setDuplicateMenuSessionId] = useState<string>()
   const menuRef = useRef<HTMLDivElement>(null)
   const menuTriggerRef = useRef<HTMLButtonElement>(null)
+  const duplicateTriggerRef = useRef<HTMLButtonElement>(null)
   const pendingRestoreSessionId = useRef<string | undefined>(undefined)
 
   const closeSessionMenu = useCallback((restoreFocus = true): void => {
@@ -51,6 +51,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
     if (restoreFocus) pendingRestoreSessionId.current = menuSessionId
     else pendingRestoreSessionId.current = undefined
     setMenuSessionId(undefined)
+    setDuplicateMenuSessionId(undefined)
     if (contextMenuOwner !== "terminal") onContextMenuOwnerChange?.(undefined)
   }, [contextMenuOwner, menuSessionId, onContextMenuOwnerChange])
 
@@ -59,6 +60,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
     if (contextMenuOwner === "terminal") {
       pendingRestoreSessionId.current = undefined
       setMenuSessionId(undefined)
+      setDuplicateMenuSessionId(undefined)
       return
     }
     menuRef.current?.focus()
@@ -71,6 +73,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
     if (!commandPaletteOpen) return
     pendingRestoreSessionId.current = undefined
     setMenuSessionId(undefined)
+    setDuplicateMenuSessionId(undefined)
     if (contextMenuOwner === "sidebar") onContextMenuOwnerChange?.(undefined)
   }, [commandPaletteOpen, contextMenuOwner, onContextMenuOwnerChange])
 
@@ -85,34 +88,16 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
     onRestoreFocus?.(sessionId)
   }, [menuSessionId, onRestoreFocus])
 
-  const startResize = (event: React.PointerEvent<HTMLDivElement>): void => {
-    event.preventDefault()
-    const startX = event.clientX
-    const startWidth = width
-    const move = (moveEvent: PointerEvent): void => onWidthChange(clampSidebarWidth(startWidth + moveEvent.clientX - startX))
-    const stop = (): void => {
-      window.removeEventListener("pointermove", move)
-      window.removeEventListener("pointerup", stop)
-    }
-    window.addEventListener("pointermove", move)
-    window.addEventListener("pointerup", stop)
-  }
-
-  const resizeWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === "ArrowLeft") onWidthChange(clampSidebarWidth(width - 12))
-    if (event.key === "ArrowRight") onWidthChange(clampSidebarWidth(width + 12))
-  }
+  const openDuplicateMenu = useCallback((sessionId: string, session: WorkspaceSession, commandContext: CommandContext | undefined): void => {
+    if (!isSessionCommandEnabled("session.duplicate", session, commandContext)) return
+    setDuplicateMenuSessionId(sessionId)
+  }, [])
 
   return (
-    <aside className="sidebar" style={{ width }}>
-      <div className="sidebar-quick-actions">
-        <button className="local-terminal-action" data-active={activeNav === "local-terminal"} type="button" onClick={() => onNavigate("local-terminal")}>
-          <SquareTerminal aria-hidden="true" size={16} />
-          <span>{t("sidebar.localTerminal")}</span>
-        </button>
-        <IconButton label={t("nav.settings")} className="sidebar-settings-action" data-active={activeNav === "settings"} onClick={() => onNavigate("settings")}>
-          <Settings size={16} />
-        </IconButton>
+    <aside className="sidebar" data-compact={isCompactSidebar(width)} style={{ width: normalizeSidebarWidth(width) }}>
+      <div className="sidebar-brand">
+        <img alt="" aria-hidden="true" src={rockerMark} />
+        <span>Rocker</span>
       </div>
 
       <nav className="primary-nav" aria-label="Primary">
@@ -125,12 +110,17 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
             onClick={() => onNavigate(key)}
           />
         ))}
+        <NavItem
+          icon={Settings}
+          label={t("nav.settings")}
+          active={activeNav === "settings"}
+          onClick={() => onNavigate("settings")}
+        />
       </nav>
 
       <section className="session-section">
         <div className="sidebar-section-heading">
           <span>{t("sidebar.sessions")}</span>
-          <Search aria-hidden="true" size={14} />
         </div>
         {sessions.length === 0 ? <p className="sidebar-empty">{t("sidebar.noSessions")}</p> : (
           <div className="sidebar-session-list">
@@ -146,8 +136,42 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
                 {menuSessionId === session.id && <div aria-label={`Session actions for ${session.label}`} className="session-menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key !== "Escape") return; event.preventDefault(); closeSessionMenu() }} ref={menuRef} role="menu" tabIndex={-1}>
                   <SessionMenuItem commandId="session.reconnect" disabled={!isSessionCommandEnabled("session.reconnect", session, commandContext)} onClick={() => dispatchSessionCommand("session.reconnect", session, commandContext, onSessionCommand, closeSessionMenu)}><RotateCw aria-hidden="true" size={14} /><span>{t("commands.reconnect")}</span></SessionMenuItem>
                   <SessionMenuItem commandId="session.rename" disabled={!isSessionCommandEnabled("session.rename", session, commandContext)} onClick={() => dispatchSessionCommand("session.rename", session, commandContext, onSessionCommand, closeSessionMenu)}><Pencil aria-hidden="true" size={14} /><span>{t("sidebar.rename")}</span></SessionMenuItem>
-                  <SessionMenuItem commandId="session.duplicate" disabled={!isSessionCommandEnabled("session.duplicate", session, commandContext)} onClick={() => dispatchSessionCommand("session.duplicate", session, commandContext, onSessionCommand, closeSessionMenu)}><Copy aria-hidden="true" size={14} /><span>{t("sidebar.duplicate")}</span></SessionMenuItem>
-                  <SessionMenuItem commandId="session.duplicate-window" disabled={!isSessionCommandEnabled("session.duplicate-window", session, commandContext)} onClick={() => dispatchSessionCommand("session.duplicate-window", session, commandContext, onSessionCommand, closeSessionMenu)}><ExternalLink aria-hidden="true" size={14} /><span>{t("sidebar.duplicateWindow")}</span></SessionMenuItem>
+                  <div className="session-menu-submenu-item" onPointerEnter={() => openDuplicateMenu(session.id, session, commandContext)}>
+                    <SessionMenuItem
+                      aria-expanded={duplicateMenuSessionId === session.id}
+                      aria-haspopup="menu"
+                      commandId="session.duplicate"
+                      disabled={!isSessionCommandEnabled("session.duplicate", session, commandContext)}
+                      ref={duplicateMenuSessionId === session.id ? duplicateTriggerRef : undefined}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        openDuplicateMenu(session.id, session, commandContext)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "ArrowRight" && event.key !== "Enter" && event.key !== " ") return
+                        event.preventDefault()
+                        openDuplicateMenu(session.id, session, commandContext)
+                      }}
+                    >
+                      <Copy aria-hidden="true" size={14} /><span>{t("sidebar.duplicate")}</span><ChevronRight aria-hidden="true" className="session-menu-chevron" size={14} />
+                    </SessionMenuItem>
+                    {duplicateMenuSessionId === session.id && <div aria-label={t("sidebar.duplicateActions")} className="session-submenu" onKeyDown={(event) => {
+                      if (event.key !== "Escape") return
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setDuplicateMenuSessionId(undefined)
+                      duplicateTriggerRef.current?.focus()
+                    }} role="menu">
+                      <SessionMenuItem commandId="session.duplicate" disabled={!isSessionCommandEnabled("session.duplicate", session, commandContext)} onClick={(event) => {
+                        event.stopPropagation()
+                        dispatchSessionCommand("session.duplicate", session, commandContext, onSessionCommand, closeSessionMenu)
+                      }}><Copy aria-hidden="true" size={14} /><span>{t("sidebar.duplicateInWindow")}</span></SessionMenuItem>
+                      <SessionMenuItem commandId="session.duplicate-window" disabled={!isSessionCommandEnabled("session.duplicate-window", session, commandContext)} onClick={(event) => {
+                        event.stopPropagation()
+                        dispatchSessionCommand("session.duplicate-window", session, commandContext, onSessionCommand, closeSessionMenu)
+                      }}><ExternalLink aria-hidden="true" size={14} /><span>{t("sidebar.duplicateInNewWindow")}</span></SessionMenuItem>
+                    </div>}
+                  </div>
                   <SessionMenuItem commandId="session.split-horizontal" disabled={!isSessionCommandEnabled("session.split-horizontal", session, commandContext)} onClick={() => dispatchSessionCommand("session.split-horizontal", session, commandContext, onSessionCommand, closeSessionMenu)}><Columns2 aria-hidden="true" size={14} /><span>{t("sidebar.splitHorizontal")}</span></SessionMenuItem>
                   <SessionMenuItem className="session-menu-danger" commandId="session.close" disabled={!isSessionCommandEnabled("session.close", session, commandContext)} onClick={() => dispatchSessionCommand("session.close", session, commandContext, onSessionCommand, closeSessionMenu)}><X aria-hidden="true" size={14} /><span>{t("sidebar.close")}</span></SessionMenuItem>
                 </div>}
@@ -157,15 +181,6 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
         )}
       </section>
 
-      <div
-        className="sidebar-resizer"
-        role="separator"
-        aria-label="Resize sidebar"
-        aria-orientation="vertical"
-        tabIndex={0}
-        onPointerDown={startResize}
-        onKeyDown={resizeWithKeyboard}
-      />
     </aside>
   )
 }
@@ -174,9 +189,9 @@ interface SessionMenuItemProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   commandId: SessionCommandId
 }
 
-function SessionMenuItem({ commandId, children, ...props }: SessionMenuItemProps): ReactElement {
-  return <button {...props} aria-disabled={props.disabled ? "true" : undefined} data-command-id={commandId} role="menuitem" type="button">{children}</button>
-}
+const SessionMenuItem = forwardRef<HTMLButtonElement, SessionMenuItemProps>(function SessionMenuItem({ commandId, children, ...props }, ref): ReactElement {
+  return <button {...props} ref={ref} aria-disabled={props.disabled ? "true" : undefined} data-command-id={commandId} role="menuitem" type="button">{children}</button>
+})
 
 function dispatchSessionCommand(commandId: SessionCommandId, session: WorkspaceSession, commandContext: CommandContext | undefined, onSessionCommand: SidebarProps["onSessionCommand"], closeSessionMenu: () => void): void {
   if (!isSessionCommandEnabled(commandId, session, commandContext)) return

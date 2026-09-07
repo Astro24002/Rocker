@@ -1,15 +1,9 @@
 .app-shell {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   width: 100%;
   height: 100%;
   background: var(--workspace-bg);
-}
-
-.app-content {
-  display: flex;
-  min-height: 0;
-  flex: 1;
 }
 
 .window-chrome {
@@ -19,33 +13,15 @@
   align-items: stretch;
   justify-content: space-between;
   color: var(--text-muted);
-  border-bottom: 1px solid var(--line);
-  background: #14181d;
+  background: var(--workspace-bg);
   user-select: none;
 }
 
 .window-drag-region {
-  display: flex;
+  display: block;
   min-width: 0;
   flex: 1;
-  align-items: center;
-  gap: 7px;
-  padding-left: 12px;
   -webkit-app-region: drag;
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.window-mark {
-  display: grid;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  border-radius: 4px;
-  color: var(--accent-ink);
-  background: var(--accent);
-  font-size: 9px;
-  font-weight: 800;
 }
 
 .window-controls {
@@ -69,8 +45,8 @@
 }
 
 .window-controls .window-close:hover {
-  color: #ffffff;
-  background: #c74747;
+  color: var(--text-primary);
+  background: var(--danger);
 }
 
 .sidebar {
@@ -78,22 +54,50 @@
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
-  min-width: 180px;
-  max-width: 360px;
+  min-width: 58px;
+  max-width: 320px;
   height: 100%;
   background: var(--sidebar-bg);
-  border-right: 1px solid var(--line);
-  box-shadow: 8px 0 24px rgba(0, 0, 0, 0.08);
+  border-right: 0;
+  box-shadow: none;
   user-select: none;
 }
 
 .workspace {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   flex: 1;
   height: 100%;
   background: var(--workspace-bg);
+}
+
+.workspace-resize-handle {
+  position: absolute;
+  z-index: 15;
+  top: 0;
+  left: 0;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  outline: none;
+}
+
+.workspace-resize-handle::after {
+  position: absolute;
+  top: 0;
+  left: 4px;
+  width: 2px;
+  height: 100%;
+  background: transparent;
+  content: "";
+}
+
+.workspace-resize-handle:hover::after,
+.workspace-resize-handle:focus-visible::after,
+.workspace-resize-handle[data-dragging="true"]::after {
+  background: var(--accent);
 }
 
 .workspace-stage {
@@ -103,21 +107,9 @@
   flex: 1;
 }
 
-.workspace-stage > :not(.workspace-command-affordances) {
+.workspace-stage > * {
   min-height: 0;
   flex: 1;
-}
-
-.workspace-command-affordances {
-  display: flex;
-  min-height: 38px;
-  flex: 0 0 38px;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.012);
 }
 
 .hosts-view,
@@ -152,7 +144,7 @@
 .host-groups {
   padding: 18px 12px;
   border-right: 1px solid var(--line);
-  background: #12161b;
+  background: var(--management-bg);
 }
 
 .host-content,

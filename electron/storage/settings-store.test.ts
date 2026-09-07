@@ -9,6 +9,28 @@ const temporaryPaths: string[] = []
 afterEach(async () => Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true }))))
 
 describe("SettingsStore", () => {
+  it.each([
+    [58, 58],
+    [119, 58],
+    [120, 180],
+    [179, 180],
+    [180, 180],
+    [320, 320],
+    [321, 320]
+  ])("normalizes legacy sidebar width %s to %s", (sidebarWidth, expected) => {
+    const normalized = normalizeSettings({
+      locale: "en",
+      sidebarWidth,
+      terminalFont: "JetBrains Mono",
+      terminalFontSize: 13,
+      connectionTimeout: 15,
+      autoReconnect: true,
+      bindAddress: "127.0.0.1"
+    })
+
+    expect(normalized?.sidebarWidth).toBe(expected)
+  })
+
   it.each([1000, 5000, 10000, 25000, 50000] as const)("keeps approved scrollback value %s", (scrollback) => {
     const normalized = normalizeSettings({
       locale: "en",

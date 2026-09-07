@@ -89,7 +89,7 @@ describe("diagnostic sanitization", () => {
       reason: "permission",
       details: { store: "credentials", source: "backup" }
     })
-    const monitoring = sanitizeDiagnosticEvent({
+    const removedMonitoring = sanitizeDiagnosticEvent({
       at: "2026-08-31T12:00:01.000Z",
       category: "monitoring",
       action: "sample-failed",
@@ -97,7 +97,7 @@ describe("diagnostic sanitization", () => {
     })
 
     expect(event).toMatchObject({ category: "storage", reason: "permission" })
-    expect(monitoring).toMatchObject({ category: "monitoring", reason: "output-limit" })
+    expect(removedMonitoring).toMatchObject({ category: "unknown", reason: "output-limit" })
   })
 
   it("removes sensitive keys and path-like values from otherwise allowed details", () => {

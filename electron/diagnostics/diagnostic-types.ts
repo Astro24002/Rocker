@@ -4,7 +4,7 @@ export type StorageFailureReason = "corrupt" | "permission" | "unavailable" | "r
 
 export type DiagnosticReason = TerminalFailureReason | StorageFailureReason | RemoteOperationFailureReason
 
-export type DiagnosticCategory = "connection" | "session" | "forwarding" | "window" | "storage" | "monitoring" | "system"
+export type DiagnosticCategory = "connection" | "session" | "forwarding" | "window" | "storage" | "system"
 
 export type DiagnosticRuntimeMetadata = {
   buildChannel: "development" | "release"

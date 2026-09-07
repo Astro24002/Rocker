@@ -7,18 +7,19 @@ import {
 } from "./connection-manager"
 import { TerminalSessionManager } from "./terminal-session-manager"
 import { ForwardingManager } from "../ports/forwarding-manager"
-import { LinuxMetricsSampler } from "../monitoring/linux-metrics"
 import {
   runtimeResourcesAtBaseline,
   type RuntimeResourceSnapshot,
 } from "../runtime/resource-snapshot"
 import type { RuntimeOwner } from "../runtime/owner"
+import type { RemoteExecOptions } from "./types"
 
 const DEFAULT_DURATION_MS = 1_800_000
 const MIN_DURATION_MS = 1_000
 const CYCLE_TIMEOUT_MS = 10_000
 const MAX_RETRY_DELAY_MS = 100
 const owner: RuntimeOwner = { webContentsId: 9001, rendererGeneration: 1 }
+const soakExecOptions: RemoteExecOptions = { timeoutMs: 8_000, maxOutputBytes: 1_024 }
 
 export interface TerminalSoakOptions {
   durationMs?: number
@@ -82,7 +83,6 @@ export async function runTerminalSoak(options: TerminalSoakOptions = {}): Promis
   })
   const sessions = new TerminalSessionManager({ connections })
   const forwarding = new ForwardingManager(connections, { onEvent: () => observe() })
-  const monitoring = new LinuxMetricsSampler(sessions)
   const terminalEvents: SoakTerminalEvent[] = []
   const unsubscribeSessions = sessions.onEvent(({ event }) => {
     if (event.kind === "output") {
@@ -115,7 +115,7 @@ export async function runTerminalSoak(options: TerminalSoakOptions = {}): Promis
     while (iterations < 2 || now() - startedAt < durationMs) {
       iterations += 1
       try {
-        await runCycle({ fixture, connections, sessions, forwarding, monitoring, terminalEvents, cycleTimeoutMs }, iterations)
+        await runCycle({ fixture, connections, sessions, forwarding, terminalEvents, cycleTimeoutMs }, iterations)
       } catch {
         failures += 1
       }
@@ -162,7 +162,6 @@ interface CycleContext {
   connections: SshConnectionManager
   sessions: TerminalSessionManager
   forwarding: ForwardingManager
-  monitoring: LinuxMetricsSampler
   terminalEvents: SoakTerminalEvent[]
   cycleTimeoutMs: number
 }
@@ -175,7 +174,8 @@ async function runCycle(context: CycleContext, iteration: number): Promise<void>
   context.sessions.write(first.sessionId, first.channelGeneration, `soak-${iteration}-first\n`)
   context.sessions.write(second.sessionId, second.channelGeneration, `soak-${iteration}-second\n`)
   context.sessions.resize(first.sessionId, first.channelGeneration, { cols: 120, rows: 40 })
-  await context.monitoring.sample(second.sessionId)
+  const boundedExecOutput = await context.sessions.exec(second.sessionId, "true", soakExecOptions)
+  if (boundedExecOutput.trim() !== "ok") throw new Error("Bounded exec probe returned an unexpected response")
 
   const connectionId = context.sessions.connectionIdForSession(first.sessionId)
   if (!connectionId) throw new Error("Soak session did not retain its connection")

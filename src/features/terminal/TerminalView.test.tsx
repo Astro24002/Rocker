@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { WorkspaceSession } from "./session-state"
 import { TerminalView } from "./TerminalView"
 import type { TerminalPreferences } from "./terminal-controller"
+import "../../styles/base.css"
+import { ROCKER_TERMINAL_TOKEN_NAMES } from "./terminal-theme"
 
 const xterm = vi.hoisted(() => {
   const terminals: FakeTerminal[] = []
@@ -98,6 +100,7 @@ const session: WorkspaceSession = {
 
 describe("TerminalView", () => {
   beforeEach(() => {
+    for (const token of ROCKER_TERMINAL_TOKEN_NAMES) document.documentElement.style.setProperty(token, "#ffffff")
     xterm.terminals.length = 0
     fit.addons.length = 0
     search.addons.length = 0

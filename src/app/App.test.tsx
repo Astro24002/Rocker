@@ -107,7 +107,32 @@ beforeEach(() => {
   window.rocker = bridge as unknown as RockerBridge
 })
 
+function openPaletteShortcut(): void {
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "p", ctrlKey: true, shiftKey: true })))
+}
+
+function openSearchShortcut(): void {
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, shiftKey: true })))
+}
+
 describe("desktop workspace shell", () => {
+  it("keeps Sidebar and Workspace as app-shell siblings with chrome and resize inside Workspace", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], undefined))
+    const { container } = render(<App />)
+
+    await waitFor(() => expect(bridge.bootstrap.load).toHaveBeenCalledTimes(1))
+
+    const shell = container.querySelector(".app-shell")!
+    const sidebar = shell.querySelector(":scope > .sidebar")
+    const workspace = shell.querySelector(":scope > .workspace")
+    expect(sidebar).toBeInTheDocument()
+    expect(workspace).toBeInTheDocument()
+    expect(shell.querySelector(":scope > .app-content")).toBeNull()
+    expect(workspace?.querySelector(":scope > .window-chrome")).toBeInTheDocument()
+    expect(workspace?.querySelector(":scope > .workspace-resize-handle")).toBeInTheDocument()
+    expect(sidebar?.querySelector(".workspace-resize-handle")).toBeNull()
+  })
+
   it("opens the command palette from the exact global shortcut", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], undefined))
     render(<App />)
@@ -159,7 +184,7 @@ describe("desktop workspace shell", () => {
     const sessionId = workspace().activeSessionId!
     await waitFor(() => expect(terminalHarness.surfaces.get(sessionId)).toBeDefined())
     const surface = terminalHarness.surfaces.get(sessionId)!
-    fireEvent.click(screen.getByRole("button", { name: "Search terminal" }))
+    openSearchShortcut()
     const searchbox = await screen.findByRole("searchbox", { name: "Search terminal output" })
     expect(searchbox).toHaveFocus()
 
@@ -177,7 +202,7 @@ describe("desktop workspace shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
     expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole("button", { name: "Search terminal" }))
+    openSearchShortcut()
 
     const terminalHost = screen.getByTestId("terminal-workspace-mock").closest(".terminal-workspace-host") as HTMLElement
     await waitFor(() => expect(terminalHost).not.toHaveAttribute("hidden"))
@@ -190,7 +215,7 @@ describe("desktop workspace shell", () => {
     render(<App />)
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(1))
-    fireEvent.click(screen.getByRole("button", { name: "Search terminal" }))
+    openSearchShortcut()
     expect(screen.getByRole("search", { name: "Search terminal" })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
@@ -198,39 +223,9 @@ describe("desktop workspace shell", () => {
     expect(document.querySelector(".terminal-search-overlay")).toBeNull()
   })
 
-  it("executes Local Terminal to a placeholder while preserving an active SSH workspace", async () => {
-    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
-    render(<App />)
-
-    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
-    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
-    const query = screen.getByRole("searchbox", { name: "Search commands" })
-    fireEvent.change(query, { target: { value: "local terminal" } })
-    fireEvent.keyDown(query, { key: "Enter" })
-
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Local Terminal" })).toBeInTheDocument())
-    expect(screen.getByTestId("terminal-workspace-mock").closest(".terminal-workspace-host")).toHaveAttribute("hidden")
-    expect(bridge.sessions.open).toHaveBeenCalled()
-  })
-
-  it("executes Local Terminal to a placeholder with no active SSH session", async () => {
-    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], undefined))
-    render(<App />)
-
-    await waitFor(() => expect(bridge.bootstrap.load).toHaveBeenCalledTimes(1))
-    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
-    const query = screen.getByRole("searchbox", { name: "Search commands" })
-    fireEvent.change(query, { target: { value: "local terminal" } })
-    fireEvent.keyDown(query, { key: "Enter" })
-
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Local Terminal" })).toBeInTheDocument())
-    expect(screen.queryByTestId("terminal-workspace-mock")).not.toBeInTheDocument()
-  })
-
   it.each([
     ["SFTP", "SFTP"],
-    ["Snippets", "Snippets"],
-    ["Local Terminal", "Local Terminal"]
+    ["Snippets", "Snippets"]
   ])("reaches the %s placeholder from Sidebar navigation", async (label, heading) => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], undefined))
     render(<App />)
@@ -250,7 +245,7 @@ describe("desktop workspace shell", () => {
     const sessionId = workspace().activeSessionId!
     await waitFor(() => expect(terminalHarness.surfaces.get(sessionId)).toBeDefined())
     const surface = terminalHarness.surfaces.get(sessionId)!
-    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    openPaletteShortcut()
     fireEvent.keyDown(screen.getByRole("searchbox", { name: "Search commands" }), { key: "Escape" })
 
     expect(surface.focus).toHaveBeenCalledTimes(1)
@@ -271,7 +266,7 @@ describe("desktop workspace shell", () => {
     const sessionId = workspace().activeSessionId!
     await waitFor(() => expect(terminalHarness.surfaces.get(sessionId)).toBeDefined())
     const surface = terminalHarness.surfaces.get(sessionId)!
-    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    openPaletteShortcut()
     const query = screen.getByRole("searchbox", { name: "Search commands" })
     fireEvent.change(query, { target: { value: queryValue } })
     fireEvent.keyDown(query, { key: "Enter" })
@@ -289,7 +284,7 @@ describe("desktop workspace shell", () => {
     const originalSessionId = workspace().activeSessionId!
     await waitFor(() => expect(terminalHarness.surfaces.get(originalSessionId)).toBeDefined())
     const originalSurface = terminalHarness.surfaces.get(originalSessionId)!
-    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    openPaletteShortcut()
     const query = screen.getByRole("searchbox", { name: "Search commands" })
     fireEvent.change(query, { target: { value: "duplicate" } })
     fireEvent.keyDown(query, { key: "Enter" })
@@ -309,7 +304,7 @@ describe("desktop workspace shell", () => {
     const sessionId = workspace().activeSessionId!
     await waitFor(() => expect(terminalHarness.surfaces.get(sessionId)).toBeDefined())
     const surface = terminalHarness.surfaces.get(sessionId)!
-    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    openPaletteShortcut()
     const query = screen.getByRole("searchbox", { name: "Search commands" })
     fireEvent.change(query, { target: { value: "close session" } })
     fireEvent.keyDown(query, { key: "Enter" })
@@ -325,7 +320,7 @@ describe("desktop workspace shell", () => {
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(2))
     fireEvent.click(screen.getByRole("button", { name: "G11 copy" }))
-    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    openPaletteShortcut()
     expect(screen.getByText("Recent Sessions")).toBeInTheDocument()
     expect(screen.getByRole("option", { name: "G11 copy" })).toBeInTheDocument()
 
@@ -334,7 +329,7 @@ describe("desktop workspace shell", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Close" }))
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(1))
-    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    openPaletteShortcut()
     expect(screen.queryByRole("option", { name: "G11 copy" })).not.toBeInTheDocument()
     for (const [payload] of bridge.workspace.save.mock.calls as unknown as Array<[Record<string, unknown>]>) expect(payload).not.toHaveProperty("recentSessions")
   })
@@ -350,7 +345,7 @@ describe("desktop workspace shell", () => {
     fireEvent.click(screen.getByRole("button", { name: workspace().sessions[0].label }))
     expect(workspace().activeSessionId).toBe(firstSessionId)
 
-    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }))
+    openPaletteShortcut()
     fireEvent.click(screen.getByRole("option", { name: secondSession.label }))
 
     await waitFor(() => expect(workspace().activeSessionId).toBe(secondSession.id))
@@ -502,9 +497,7 @@ describe("desktop workspace shell", () => {
     expect(screen.getByRole("menu", { name: "Terminal actions" })).toBeInTheDocument()
     surface.focus.mockClear()
 
-    const paletteTrigger = screen.getByRole("button", { name: "Open command palette" })
-    fireEvent.pointerDown(paletteTrigger)
-    fireEvent.click(paletteTrigger)
+    openPaletteShortcut()
     const query = await screen.findByRole("searchbox", { name: "Search commands" })
     expect(screen.queryByRole("menu", { name: "Terminal actions" })).not.toBeInTheDocument()
     expect(query).toHaveFocus()
@@ -688,8 +681,7 @@ describe("desktop workspace shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
     expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument()
     expect(screen.getAllByRole("button", { name: "Export diagnostics" }).some((button) => !button.hasAttribute("disabled"))).toBe(true)
-    fireEvent.click(screen.getByRole("button", { name: "Local Terminal" }))
-    expect(screen.getByText("No active sessions")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Local Terminal" })).not.toBeInTheDocument()
   })
 
   it("resumes a queued workspace session after security resources recover", async () => {
@@ -754,7 +746,7 @@ describe("desktop workspace shell", () => {
   it("clamps the resizable sidebar", () => {
     expect(clampSidebarWidth(120)).toBe(180)
     expect(clampSidebarWidth(240)).toBe(240)
-    expect(clampSidebarWidth(520)).toBe(360)
+    expect(clampSidebarWidth(520)).toBe(320)
   })
 
   it("routes output packets to a controller without putting bytes in workspace state", async () => {
@@ -788,9 +780,8 @@ describe("desktop workspace shell", () => {
     expect(bridge.sessions.open).not.toHaveBeenCalled()
   })
 
-  it("keeps terminal recovery independent from a failed monitor sample", async () => {
+  it("does not expose or poll host monitoring for a connected session", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
-    bridge.monitor.sample.mockRejectedValue(new Error("monitor unavailable"))
     render(<App />)
 
     await waitFor(() => expect(sessionListener).toBeTypeOf("function"))
@@ -801,8 +792,9 @@ describe("desktop workspace shell", () => {
       channelGeneration: 1,
       state: "connected"
     })
-    await waitFor(() => expect(bridge.monitor.sample).toHaveBeenCalled())
+    await waitFor(() => expect(workspace().sessions[0]?.state).toBe("connected"))
 
+    expect("monitor" in bridge).toBe(false)
     expect(bridge.sessions.close).not.toHaveBeenCalled()
     expect(bridge.sessions.reconnect).not.toHaveBeenCalled()
     expect(bridge.sessions.cancelReconnect).not.toHaveBeenCalled()
@@ -1230,7 +1222,6 @@ function createBridge() {
       load: vi.fn(async () => bootstrapSnapshot([], undefined)),
       retry: vi.fn(async () => ({}))
     },
-    monitor: { sample: vi.fn(async (sessionId: string) => ({ sessionId, latencyMs: 1, cpuPercent: null, memoryPercent: null, diskPercent: null, loadAverage: null, receiveBytesPerSecond: null, transmitBytesPerSecond: null, sampledAt: "2026-08-19T12:00:00.000Z" })) },
     history: { list: vi.fn(async () => []), clear: vi.fn(async () => undefined) },
     settings: {
       get: vi.fn(async (): Promise<AppSettings> => ({ locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, scrollback: 10000, cursorStyle: "bar", cursorBlink: true, terminalBell: true, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited", restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1" })),

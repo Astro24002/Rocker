@@ -1,6 +1,6 @@
 # Rocker Architecture Audit
 
-Date: 2026-08-28
+Date: 2026-09-07
 
 ## Current Runtime Shape
 
@@ -12,7 +12,6 @@ electron/main.ts
        -> TerminalSessionManager
        -> ForwardingManager
        -> PortService
-       -> LinuxMetricsSampler
        -> storage stores
 
 electron/preload.ts

@@ -1,6 +1,7 @@
 import { JsonStore } from "./json-store"
 import { StorageBlockedError, type LoadResult } from "./storage-result"
 import type { AppSettings } from "./types"
+import { normalizeSidebarWidth } from "../../src/shared/sidebar-width"
 
 export const defaultSettings: AppSettings = {
   locale: "en",
@@ -52,7 +53,7 @@ export function normalizeSettings(value: unknown): AppSettings | undefined {
   const settings = value as Partial<AppSettings>
   return {
     locale: settings.locale === "zh-CN" ? "zh-CN" : "en",
-    sidebarWidth: clamp(settings.sidebarWidth ?? defaultSettings.sidebarWidth, 180, 360, 220),
+    sidebarWidth: normalizeSidebarWidth(settings.sidebarWidth ?? defaultSettings.sidebarWidth),
     terminalFont: typeof settings.terminalFont === "string" && settings.terminalFont.length <= 80 ? settings.terminalFont : defaultSettings.terminalFont,
     terminalFontSize: clamp(settings.terminalFontSize ?? defaultSettings.terminalFontSize, 10, 24, 13),
     scrollback: isScrollback(settings.scrollback) ? settings.scrollback : defaultSettings.scrollback,

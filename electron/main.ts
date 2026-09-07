@@ -4,7 +4,6 @@ import { DiagnosticLogger } from "./diagnostics/diagnostic-logger"
 import { bootstrapPrimaryInstance } from "./application/single-instance"
 import { registerIpcHandlers, type IpcDependencies } from "./ipc/register"
 import { ipcChannels } from "./ipc/bridge-contract"
-import { LinuxMetricsSampler, type MonitoringEvent } from "./monitoring/linux-metrics"
 import { ForwardingManager, type ForwardingEvent } from "./ports/forwarding-manager"
 import { PortService } from "./ports/port-service"
 import { CredentialVault } from "./storage/credentials"
@@ -47,7 +46,7 @@ function createNativeWindow(options: WorkspaceWindowOptions = {}): BrowserWindow
     height: options.height ?? 900,
     ...(options.x === undefined ? {} : { x: options.x }),
     ...(options.y === undefined ? {} : { y: options.y }),
-    backgroundColor: "#0f1118",
+    backgroundColor: "#0A0E0C",
     frame: false,
     titleBarStyle: "hidden",
     webPreferences: {
@@ -119,9 +118,6 @@ async function startApplication(): Promise<void> {
     connections,
     ports: new PortService(connections),
     forwarding,
-    monitoring: new LinuxMetricsSampler(sessions, {
-      onEvent: (event) => recordMonitoringDiagnostic(diagnostics, event)
-    }),
     history: new HistoryStore(join(userDataPath, "history.json")),
     settings,
     diagnostics,
@@ -288,10 +284,6 @@ function recordWindowDiagnostic(logger: DiagnosticLogger, event: WindowLifecycle
       rendererGeneration: event.owner.rendererGeneration
     }
   })
-}
-
-function recordMonitoringDiagnostic(logger: DiagnosticLogger, event: MonitoringEvent): void {
-  logger.record({ category: "monitoring", action: event.kind, sessionId: event.sessionId, reason: event.reason })
 }
 
 bootstrapPrimaryInstance(app, {

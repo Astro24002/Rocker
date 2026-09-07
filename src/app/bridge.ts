@@ -158,9 +158,6 @@ function createBrowserPreviewBridge(): RockerBridge {
         return result
       }
     },
-    monitor: {
-      sample: async (sessionId) => ({ sessionId, latencyMs: 18, cpuPercent: 12, memoryPercent: 41, diskPercent: 58, loadAverage: 0.42, receiveBytesPerSecond: 0, transmitBytesPerSecond: 0, sampledAt: new Date().toISOString() })
-    },
     history: {
       list: async () => [
         { id: "preview-history", hostId: "demo-g11", connectedAt: new Date(Date.now() - 36 * 60_000).toISOString(), durationMs: 742_000, outcome: "connected" }

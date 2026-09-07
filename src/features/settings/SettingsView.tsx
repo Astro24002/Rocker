@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Download } from "lucide-react"
 import type { AppSettings } from "../../app/types"
 import type { Locale } from "../../i18n"
 import { useI18n } from "../../i18n"
+import { ThemePreview } from "./ThemePreview"
 
 interface SettingsViewProps {
   locale: Locale
@@ -45,6 +46,7 @@ export function SettingsView({ locale, disabled = false, terminalAppearanceDisab
       <header className="view-header"><div><span className="view-eyebrow">Rocker</span><h1>{t("settings.title")}</h1><p>{t("settings.subtitle")}</p></div></header>
       {persistenceUnavailable && <p className="settings-persistence-status" role="status">{t("settings.persistenceUnavailable")}</p>}
       <div className="settings-list">
+        <ThemePreview />
         <SettingRow title={t("settings.language")} description={t("settings.languageHint")}>
           <div className="segmented-control" aria-label={t("settings.language")}><button disabled={disabled} data-active={locale === "en"} type="button" onClick={() => { if (!disabled) onLocaleChange("en") }}>{t("settings.english")}</button><button disabled={disabled} data-active={locale === "zh-CN"} type="button" onClick={() => { if (!disabled) onLocaleChange("zh-CN") }}>{t("settings.chinese")}</button></div>
         </SettingRow>

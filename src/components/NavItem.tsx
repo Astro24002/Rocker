@@ -9,7 +9,7 @@ interface NavItemProps {
 
 export function NavItem({ icon: Icon, label, active, onClick }: NavItemProps) {
   return (
-    <button className="nav-item" data-active={active} type="button" onClick={onClick}>
+    <button aria-label={label} className="nav-item" data-active={active} title={label} type="button" onClick={onClick}>
       <Icon aria-hidden="true" size={16} strokeWidth={1.8} />
       <span>{label}</span>
     </button>

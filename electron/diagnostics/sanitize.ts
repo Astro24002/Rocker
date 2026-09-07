@@ -9,7 +9,7 @@ import type {
 
 const MAX_STRING = 256
 const MAX_EVENTS = 1000
-const categories = new Set<DiagnosticCategory>(["connection", "session", "forwarding", "window", "storage", "monitoring", "system"])
+const categories = new Set<DiagnosticCategory>(["connection", "session", "forwarding", "window", "storage", "system"])
 const reasons = new Set<DiagnosticReason>([
   "network", "timeout", "dns", "authentication", "host-key-changed", "host-key-rejected",
   "configuration", "channel-ended", "local-port-in-use", "cancelled", "unknown",

@@ -24,11 +24,10 @@ export type CommandId =
   | "navigation.settings"
   | "navigation.sftp"
   | "navigation.snippets"
-  | "navigation.local-terminal"
   | "palette.open"
 
 export type CommandCategory = "terminal" | "session" | "navigation" | "palette"
-export type NavigationCommand = "hosts" | "history" | "ports" | "settings" | "sftp" | "snippets" | "local-terminal" | "terminal"
+export type NavigationCommand = "hosts" | "history" | "ports" | "settings" | "sftp" | "snippets" | "terminal"
 
 export interface TerminalCommandSurface {
   hasSelection(): boolean
@@ -307,15 +306,6 @@ export const commandRegistry: readonly CommandDefinition[] = [
     keywords: ["commands", "templates"],
     isEnabled: alwaysEnabled,
     execute: ({ actions }) => actions.navigation.navigate("snippets")
-  },
-  {
-    id: "navigation.local-terminal",
-    label: "Local Terminal",
-    labelKey: "sidebar.localTerminal",
-    category: "navigation",
-    keywords: ["local shell"],
-    isEnabled: alwaysEnabled,
-    execute: ({ actions }) => actions.navigation.navigate("local-terminal")
   },
   {
     id: "palette.open",

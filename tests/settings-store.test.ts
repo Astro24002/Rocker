@@ -15,7 +15,7 @@ describe("desktop settings", () => {
     const store = new SettingsStore(join(directory, "settings.json"))
     expect((await store.get()).locale).toBe("en")
     await store.update({ locale: "zh-CN", sidebarWidth: 999 })
-    expect(await store.get()).toMatchObject({ locale: "zh-CN", sidebarWidth: 360 })
+    expect(await store.get()).toMatchObject({ locale: "zh-CN", sidebarWidth: 320 })
   })
 
   it("serializes concurrent updates without losing fields", async () => {

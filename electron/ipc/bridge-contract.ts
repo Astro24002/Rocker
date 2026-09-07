@@ -6,7 +6,6 @@ import type {
   StoredWorkspaceSession,
   StoredWorkspaceWindow
 } from "../storage/types"
-import type { HostMetrics } from "../monitoring/linux-metrics"
 import type { DiscoveredPort, ForwardingInfo, ForwardingSpec } from "../ports/types"
 import type { TerminalSessionEvent, TerminalSessionInfo } from "../ssh/types"
 import type { StorageHealth } from "../storage/storage-result"
@@ -108,9 +107,6 @@ export interface RockerBridge {
     load(): Promise<StoredWorkspaceWindow | undefined>
     save(snapshot: WorkspaceSaveRequest): Promise<void>
   }
-  monitor: {
-    sample(sessionId: string): Promise<HostMetrics>
-  }
   history: {
     list(): Promise<ConnectionHistoryItem[]>
     clear(): Promise<void>
@@ -158,7 +154,6 @@ export const ipcChannels = {
   workspaceSave: "rocker:workspace:save",
   bootstrapLoad: "rocker:bootstrap:load",
   bootstrapRetry: "rocker:bootstrap:retry",
-  monitorSample: "rocker:monitor:sample",
   historyList: "rocker:history:list",
   historyClear: "rocker:history:clear",
   settingsGet: "rocker:settings:get",

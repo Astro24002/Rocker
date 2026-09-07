@@ -5,6 +5,7 @@ import type { TerminalDimensions } from "../../../electron/ssh/types"
 import type { TerminalCommandSurface } from "../commands/command-registry"
 import type { WorkspaceSession } from "./session-state"
 import { createTerminalSearchAdapter, TerminalSearchController } from "./terminal-search"
+import { readRockerTerminalTheme } from "./terminal-theme"
 import { TerminalController, type TerminalPreferences } from "./terminal-controller"
 
 type TerminalOptionsWithBell = ConstructorParameters<typeof Terminal>[0] & { bellStyle?: "sound" | "none" }
@@ -65,20 +66,7 @@ export function TerminalView(props: TerminalViewProps) {
       lineHeight: 1.25,
       scrollback: propsRef.current.preferences.scrollback,
       bellStyle: propsRef.current.preferences.terminalBell ? "sound" : "none",
-      theme: {
-        background: "#11131b",
-        foreground: "#d8ddcf",
-        cursor: "#86de67",
-        selectionBackground: "#38533a",
-        black: "#171921",
-        red: "#ef7777",
-        green: "#86de67",
-        yellow: "#e7b85f",
-        blue: "#71a9e8",
-        magenta: "#c792d6",
-        cyan: "#51c8c1",
-        white: "#d9dce4"
-      }
+      theme: readRockerTerminalTheme()
     } as TerminalOptionsWithBell)
     const terminalOptions = terminal.options as TerminalRuntimeOptions
     const fitAddon = new FitAddon()

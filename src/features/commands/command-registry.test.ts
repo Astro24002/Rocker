@@ -44,7 +44,6 @@ describe("command registry", () => {
       "navigation.settings",
       "navigation.sftp",
       "navigation.snippets",
-      "navigation.local-terminal",
       "palette.open"
     ] satisfies CommandId[])
 
@@ -145,7 +144,7 @@ describe("command registry", () => {
       expect(getCommand(id as CommandId)?.isEnabled(context), id).toBe(enabled)
     }
     expect(getCommand("navigation.sftp")?.isEnabled(context)).toBe(true)
-    expect(getCommand("navigation.local-terminal")?.isEnabled(context)).toBe(true)
+    expect(getCommand("navigation.local-terminal" as CommandId)).toBeUndefined()
     expect(getCommand("palette.open")?.isEnabled(context)).toBe(true)
   })
 
@@ -235,12 +234,10 @@ describe("command registry", () => {
     await expect(executeCommand("terminal.copy", context)).resolves.toEqual({ status: "executed" })
     await expect(executeCommand("session.rename", context)).resolves.toEqual({ status: "executed" })
     await expect(executeCommand("navigation.sftp", context)).resolves.toEqual({ status: "executed" })
-    await expect(executeCommand("navigation.local-terminal", context)).resolves.toEqual({ status: "executed" })
 
     expect(context.actions.terminal.copy).toHaveBeenCalledTimes(1)
     expect(context.actions.session.rename).toHaveBeenCalledWith(session)
     expect(context.actions.navigation.navigate).toHaveBeenNthCalledWith(1, "sftp")
-    expect(context.actions.navigation.navigate).toHaveBeenNthCalledWith(2, "local-terminal")
   })
 
   it("returns a safe failure result without exposing an action error", async () => {

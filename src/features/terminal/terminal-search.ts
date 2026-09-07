@@ -271,15 +271,19 @@ function sameOptions(left: TerminalSearchOptions, right: TerminalSearchOptions):
 }
 
 function toXtermSearchOptions(options: TerminalSearchOptions): ISearchOptions {
+  const token = (name: string, fallback: string): string => {
+    if (typeof document === "undefined") return fallback
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+  }
   return {
     ...options,
     decorations: {
-      matchBackground: "#38533a",
-      matchBorder: "#5f9950",
-      matchOverviewRuler: "#5f9950",
-      activeMatchBackground: "#86de67",
-      activeMatchBorder: "#d8ddcf",
-      activeMatchColorOverviewRuler: "#d8ddcf"
+      matchBackground: token("--terminal-selection", "#204d32"),
+      matchBorder: token("--terminal-bright-green", "#78cf99"),
+      matchOverviewRuler: token("--terminal-bright-green", "#78cf99"),
+      activeMatchBackground: token("--accent", "#0aa344"),
+      activeMatchBorder: token("--terminal-bright-white", "#f2f7f3"),
+      activeMatchColorOverviewRuler: token("--terminal-bright-white", "#f2f7f3")
     }
   }
 }

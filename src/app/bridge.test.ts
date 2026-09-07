@@ -7,6 +7,11 @@ describe("browser preview bridge", () => {
     setPreviewWindowBridge(undefined)
   })
 
+  it("exposes the reduced bridge without host monitoring", () => {
+    setPreviewWindowBridge(undefined)
+    expect("monitor" in getRockerBridge()).toBe(false)
+  })
+
   it("redacts identity file paths from preview bootstrap hosts", async () => {
     setPreviewWindowBridge(undefined)
     const bridge = getRockerBridge()

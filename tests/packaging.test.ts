@@ -83,10 +83,10 @@ const APPROVED_DEV_DEPENDENCY_KEYS = [
 const sortedKeys = (dependencies: DependencyMap | undefined) => Object.keys(dependencies ?? {}).sort()
 
 describe("desktop packaging metadata", () => {
-  it("prepares the 0.4.0 release version in package and lock metadata", () => {
-    expect(packageJson.version).toBe("0.4.0")
-    expect(lockfile.version).toBe("0.4.0")
-    expect(lockfile.packages[""].version).toBe("0.4.0")
+  it("prepares the 0.4.1 release version in package and lock metadata", () => {
+    expect(packageJson.version).toBe("0.4.1")
+    expect(lockfile.version).toBe("0.4.1")
+    expect(lockfile.packages[""].version).toBe("0.4.1")
   })
 
   it("targets only Rocker for Windows and macOS", () => {
@@ -109,6 +109,15 @@ describe("desktop packaging metadata", () => {
     expect(config).not.toContain("artifactName: Rocker-${arch}.${ext}")
     expect(config).not.toMatch(/^linux:/m)
     expect(config).not.toMatch(/android|ios/i)
+  })
+
+  it("uses the Rocker Dark palette for the packaged brand asset", () => {
+    const iconSvg = readFileSync("build/icon.svg", "utf8")
+
+    expect(iconSvg).toContain("#0AA344")
+    expect(iconSvg).toContain("#0A0E0C")
+    expect(existsSync("build/icon.png")).toBe(true)
+    expect(readFileSync("build/icon.png").byteLength).toBeGreaterThan(0)
   })
 
   it("keeps only approved dependency keys in package and lock metadata", () => {

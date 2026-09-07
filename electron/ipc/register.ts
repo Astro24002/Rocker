@@ -9,7 +9,6 @@ import { diagnosticFileName, writeDiagnosticExport } from "../diagnostics/diagno
 import type { ForwardingManager } from "../ports/forwarding-manager"
 import type { PortService } from "../ports/port-service"
 import type { ForwardingSpec } from "../ports/types"
-import type { LinuxMetricsSampler } from "../monitoring/linux-metrics"
 import type { CredentialVault } from "../storage/credentials"
 import type { HistoryStore } from "../storage/history-store"
 import type { HostStore } from "../storage/host-store"
@@ -50,7 +49,6 @@ export interface IpcDependencies {
   connections: SshConnectionManager
   ports: PortService
   forwarding: ForwardingManager
-  monitoring: LinuxMetricsSampler
   history: HistoryStore
   settings: SettingsStore
   diagnostics: DiagnosticLogger
@@ -236,11 +234,6 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     }
     return result
   })
-  ipcMain.handle(ipcChannels.monitorSample, (event, sessionId: unknown) => {
-    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
-    assertOwnedSession(dependencies, owner, sessionId)
-    return dependencies.monitoring.sample(sessionId)
-  })
   ipcMain.handle(ipcChannels.historyList, () => dependencies.history.list())
   ipcMain.handle(ipcChannels.historyClear, () => dependencies.history.clear())
   ipcMain.handle(ipcChannels.settingsGet, () => dependencies.settings.get())
@@ -285,7 +278,6 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
 
   const unsubscribe = dependencies.sessions.onEvent(({ owner, event }) => {
     dependencies.windows.sendToOwner(owner, ipcChannels.sessionEvent, event)
-    if (event.kind === "state" && event.state === "closing") dependencies.monitoring.clear(event.sessionId)
   })
   return () => {
     unsubscribe()

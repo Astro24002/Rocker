@@ -63,6 +63,13 @@ describe("registerIpcHandlers", () => {
     expect(harness.other.webContents.send).not.toHaveBeenCalled()
   })
 
+  it("does not register a host-monitoring IPC channel", () => {
+    const harness = createHarness()
+    registerIpcHandlers(harness.dependencies)
+
+    expect([...electron.handlers.keys()]).not.toContain("rocker:monitor:sample")
+  })
+
   it("does not deliver a session event from an old renderer generation", () => {
     const harness = createHarness()
     harness.windows.currentOwnerForWebContents.mockReturnValue(owner21Generation2)
@@ -507,7 +514,6 @@ function createHarness() {
     connections,
     ports: { scan: vi.fn() },
     forwarding: { start: vi.fn(), stop: vi.fn(), list: vi.fn(), get: vi.fn(), resume: vi.fn(), ownerForForwarding: vi.fn(), releaseOwner: vi.fn() },
-    monitoring: { sample: vi.fn(), clear: vi.fn() },
     history,
     settings,
     diagnostics,

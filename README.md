@@ -1,7 +1,7 @@
 # Rocker
 
 Rocker is a local-first SSH desktop client for Windows and macOS. It combines
-host management, multiple terminal sessions, Linux host monitoring, and a
+host management, multiple terminal sessions, and a
 TRAE-style Ports view where remote services are checked only when requested
 and forwarded only after an explicit user action.
 
@@ -18,7 +18,6 @@ React, xterm.js, and `ssh2`.
 - Matching sessions in one window reuse a verified SSH connection; new windows
   always create an independent connection.
 - User-triggered Linux `ss`/`netstat` port recommendations and controlled local forwarding.
-- Expandable CPU, memory, disk, network, and latency summary for the active host.
 - Local connection history.
 - English UI by default with optional Simplified Chinese.
 
@@ -70,8 +69,8 @@ npm run build
 ```
 
 The test suite includes connection and terminal lifecycle fakes, host-key
-verification, encrypted storage boundaries, Linux port/metric parsing,
-forwarding lifecycle, state models, localization, and packaging metadata.
+verification, encrypted storage boundaries, port parsing, forwarding lifecycle,
+state models, localization, and packaging metadata.
 
 ## Packaging
 
@@ -105,7 +104,7 @@ not copied into Rocker; only their paths are stored.
 ## Project structure
 
 ```text
-electron/        Electron main/preload, SSH, ports, monitoring, storage, IPC
+electron/        Electron main/preload, SSH, ports, storage, and IPC
 src/             React renderer, features, localization, and desktop styles
 tests/           Main-process, parser, storage, and packaging tests
 build/           Rocker application icon resources
