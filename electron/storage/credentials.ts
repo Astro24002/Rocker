@@ -150,6 +150,32 @@ export class CredentialVault {
     this.lockVault()
   }
 
+  public async exportValues(): Promise<CredentialValueMap> {
+    if (await this.currentMode() === "vault") return { ...this.requireUnlockedVault() }
+    this.assertKeychainAvailable()
+    return this.decryptEntries(await this.readEntries())
+  }
+
+  public async assertWritable(): Promise<void> {
+    if (await this.currentMode() === "vault") {
+      this.requireUnlockedVault()
+      return
+    }
+    this.assertKeychainAvailable()
+  }
+
+  public async importValues(values: CredentialValueMap): Promise<void> {
+    await this.assertWritable()
+    if (await this.currentMode() === "vault") {
+      await this.writeVault({ ...this.requireUnlockedVault(), ...values })
+      return
+    }
+    const current = await this.readEntries()
+    const encrypted: CredentialValueMap = { ...current }
+    for (const [key, value] of Object.entries(values)) encrypted[key] = this.cipher.encrypt(value)
+    await this.replaceEntries(encrypted)
+  }
+
   private key(hostId: string, kind: CredentialKind): string {
     return `${hostId}:${kind}`
   }
