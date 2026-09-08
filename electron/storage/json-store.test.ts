@@ -121,6 +121,44 @@ describe("JsonStore", () => {
     expect(await readFile(filePath, "utf8")).toBe("{primary is corrupt")
   })
 
+  it("allows writes after a later recovery can quarantine the corrupt primary", async () => {
+    const filePath = await temporaryFilePath()
+    await writeFile(filePath, "{primary is corrupt", "utf8")
+    await writeFile(`${filePath}.bak`, JSON.stringify({ count: 17 }), "utf8")
+    let quarantineBlocked = true
+    renameMock.mockImplementation(async (source, destination) => {
+      if (quarantineBlocked && source === filePath && typeof destination === "string" && destination.endsWith(".corrupt")) {
+        throw withCode("EACCES")
+      }
+      return defaultRename(source, destination)
+    })
+    const store = createCounterStore(filePath)
+
+    await expect(store.load()).resolves.toMatchObject({ status: "recovered", value: { count: 17 } })
+    quarantineBlocked = false
+    await expect(store.update((current) => ({ count: current.count + 1 }))).resolves.toEqual({ count: 18 })
+    expect(JSON.parse(await readFile(filePath, "utf8"))).toEqual({ count: 18 })
+  })
+
+  it("allows a new document after a read-only recovery is explicitly removed", async () => {
+    const filePath = await temporaryFilePath()
+    await writeFile(filePath, "{primary is corrupt", "utf8")
+    await writeFile(`${filePath}.bak`, JSON.stringify({ count: 17 }), "utf8")
+    renameMock.mockImplementation(async (source, destination) => {
+      if (source === filePath && typeof destination === "string" && destination.endsWith(".corrupt")) {
+        throw withCode("EACCES")
+      }
+      return defaultRename(source, destination)
+    })
+    const store = createCounterStore(filePath)
+
+    await expect(store.load()).resolves.toMatchObject({ status: "recovered", value: { count: 17 } })
+    await rm(filePath)
+    await rm(`${filePath}.bak`)
+    await expect(store.write({ count: 1 })).resolves.toBeUndefined()
+    expect(JSON.parse(await readFile(filePath, "utf8"))).toEqual({ count: 1 })
+  })
+
   it("keeps the backup readable when primary restoration fails after quarantine", async () => {
     const filePath = await temporaryFilePath()
     await writeFile(filePath, "{primary is corrupt", "utf8")

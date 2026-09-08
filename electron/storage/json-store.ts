@@ -153,6 +153,7 @@ export class JsonStore<T> {
     if (corrupt && this.recovery === "blocked") {
       return this.block(this.issue("corrupt"))
     }
+    this.readOnlyRecovery = false
     if (corrupt) return this.finishLoad({ status: "defaulted", value: this.defaultValue, reason: "corrupt" }, consumeHealth)
     return this.finishLoad({ status: "defaulted", value: this.defaultValue, reason: "missing" }, consumeHealth)
   }
