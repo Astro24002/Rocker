@@ -7,7 +7,7 @@ import { ipcChannels } from "./ipc/bridge-contract"
 import { ForwardingManager, type ForwardingEvent } from "./ports/forwarding-manager"
 import { PortService } from "./ports/port-service"
 import { CredentialVault } from "./storage/credentials"
-import { JsonCredentialValueStore } from "./storage/credential-store"
+import { JsonCredentialValueStore, JsonVaultStore } from "./storage/credential-store"
 import { HistoryStore } from "./storage/history-store"
 import { createHostStore } from "./storage/host-store"
 import { createSafeStorageCipher } from "./storage/safe-storage"
@@ -70,7 +70,8 @@ async function startApplication(): Promise<void> {
   const hosts = createHostStore(userDataPath)
   const credentials = new CredentialVault(
     new JsonCredentialValueStore(join(userDataPath, "credentials.json")),
-    createSafeStorageCipher()
+    createSafeStorageCipher(),
+    new JsonVaultStore(join(userDataPath, "vault.json"))
   )
   const settings = new SettingsStore(join(userDataPath, "settings.json"))
   const initialSettingsResult = await loadInitialSettings(settings)

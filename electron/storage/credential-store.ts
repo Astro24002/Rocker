@@ -1,6 +1,7 @@
-import type { CredentialValueStore } from "./credentials"
+import type { CredentialValueMap, CredentialValueStore, EncryptedVaultStore } from "./credentials"
 import { JsonStore } from "./json-store"
-import type { LoadResult, StorageHealth } from "./storage-result"
+import { StorageBlockedError, type LoadResult, type StorageHealth } from "./storage-result"
+import { validateEncryptedVault, type EncryptedVault } from "./vault-format"
 
 interface CredentialDocument {
   values: Record<string, string>
@@ -39,12 +40,61 @@ export class JsonCredentialValueStore implements CredentialValueStore {
     })
   }
 
+  public async entries(): Promise<CredentialValueMap> {
+    return { ...(await this.readDocument()).values }
+  }
+
+  public async replace(values: CredentialValueMap): Promise<void> {
+    const normalized = normalizeCredentialDocument({ values })
+    if (!normalized) throw new Error("Credential values are invalid")
+    await this.store.write(normalized)
+  }
+
   public async health(options: { consumeHealth?: boolean } = {}): Promise<StorageHealth> {
     return healthFromLoad(await this.store.load(options))
   }
 
   private async readDocument(): Promise<CredentialDocument> {
     return this.store.read()
+  }
+}
+
+interface VaultDocument {
+  vault?: EncryptedVault
+}
+
+export class JsonVaultStore implements EncryptedVaultStore {
+  private readonly store: JsonStore<VaultDocument>
+
+  public constructor(filePath: string) {
+    this.store = new JsonStore({
+      filePath,
+      store: "credentials",
+      defaultValue: {},
+      recovery: "blocked",
+      normalize: normalizeVaultDocument,
+      sensitive: true
+    })
+  }
+
+  public async get(): Promise<EncryptedVault | undefined> {
+    const result = await this.store.load()
+    if (result.status === "blocked") throw new StorageBlockedError(result.issue)
+    return result.value.vault ? structuredClone(result.value.vault) : undefined
+  }
+
+  public async set(vault: EncryptedVault): Promise<void> {
+    const normalized = validateEncryptedVault(vault)
+    if (!normalized) throw new Error("Credential Vault is invalid")
+    await this.store.write({ vault: normalized })
+  }
+
+  public async clear(): Promise<void> {
+    await this.store.write({})
+  }
+
+  public async health(options: { consumeHealth?: boolean } = {}): Promise<StorageHealth> {
+    return healthFromLoad(await this.store.load(options))
   }
 }
 
@@ -58,7 +108,7 @@ export function normalizeCredentialDocument(value: unknown): CredentialDocument 
   return { values }
 }
 
-function healthFromLoad(result: LoadResult<CredentialDocument>): StorageHealth {
+function healthFromLoad<T>(result: LoadResult<T>): StorageHealth {
   if (result.status === "blocked") {
     return {
       store: result.issue.store,
@@ -72,6 +122,13 @@ function healthFromLoad(result: LoadResult<CredentialDocument>): StorageHealth {
     return { store: "credentials", status: "defaulted", reason: "corrupt" }
   }
   return { store: "credentials", status: "ok" }
+}
+
+function normalizeVaultDocument(value: unknown): VaultDocument | undefined {
+  if (!isRecord(value)) return undefined
+  if (value.vault === undefined) return {}
+  const vault = validateEncryptedVault(value.vault)
+  return vault ? { vault } : undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

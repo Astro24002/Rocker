@@ -3,6 +3,9 @@ import type { CredentialCipher } from "./credentials"
 
 export function createSafeStorageCipher(): CredentialCipher {
   return {
+    isAvailable() {
+      return safeStorage.isEncryptionAvailable()
+    },
     encrypt(value) {
       if (!safeStorage.isEncryptionAvailable()) {
         throw new Error("Platform credential encryption is unavailable")
