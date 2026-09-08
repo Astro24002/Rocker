@@ -84,6 +84,26 @@ describe("JsonStore", () => {
     expect(store.health()).toEqual({ store: "settings", status: "ok" })
   })
 
+  it("reads a valid backup when a locked corrupt primary cannot be repaired", async () => {
+    const filePath = await temporaryFilePath()
+    await writeFile(filePath, "{primary is corrupt", "utf8")
+    await writeFile(`${filePath}.bak`, JSON.stringify({ count: 13 }), "utf8")
+    renameMock.mockImplementation(async (source, destination) => {
+      if (
+        (source === filePath && typeof destination === "string" && destination.endsWith(".corrupt")) ||
+        (destination === filePath && typeof source === "string" && source.includes(".tmp."))
+      ) {
+        throw withCode("EACCES")
+      }
+      return defaultRename(source, destination)
+    })
+    const store = createCounterStore(filePath)
+
+    expect(await store.load()).toEqual({ status: "recovered", value: { count: 13 }, source: "backup" })
+    expect(await readFile(filePath, "utf8")).toBe("{primary is corrupt")
+    expect(JSON.parse(await readFile(`${filePath}.bak`, "utf8"))).toEqual({ count: 13 })
+  })
+
   it("quarantines a corrupt primary and defaults an unprotected store", async () => {
     const filePath = await temporaryFilePath()
     const corruptContents = "{not valid json"

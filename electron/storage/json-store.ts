@@ -125,20 +125,20 @@ export class JsonStore<T> {
       return this.block(blockedHealth ?? this.issueFromError(primary.error, "unavailable"))
     }
 
+    const backup = await this.readDocument(this.backupPath)
+    if (backup.kind === "valid") {
+      const quarantineIssue = primary.kind === "corrupt" ? await this.quarantinePrimary() : undefined
+      if (!quarantineIssue) {
+        await this.restorePrimary(backup.value).catch(() => undefined)
+      }
+      return this.finishLoad({ status: "recovered", value: backup.value, source: "backup" }, consumeHealth)
+    }
+
     if (primary.kind === "corrupt") {
       const quarantineIssue = await this.quarantinePrimary()
       if (quarantineIssue) return this.block(blockedHealth ?? quarantineIssue)
     }
 
-    const backup = await this.readDocument(this.backupPath)
-    if (backup.kind === "valid") {
-      try {
-        await this.restorePrimary(backup.value)
-      } catch (error) {
-        return this.block(this.issueFromError(error, "recovery-failed"))
-      }
-      return this.finishLoad({ status: "recovered", value: backup.value, source: "backup" }, consumeHealth)
-    }
     if (backup.kind === "error") return this.block(blockedHealth ?? this.issueFromError(backup.error, "unavailable"))
 
     const hasQuarantine = await this.hasMatchingQuarantine()
