@@ -3,6 +3,7 @@ import {
   ConfigBundleService,
   exportEncryptedBundle,
   exportTemplate,
+  hostKeysForHosts,
   inspectBundle,
   type ConfigImportTarget,
   type ExportSnapshot
@@ -63,6 +64,24 @@ describe("configuration bundles", () => {
     await expect(inspectBundle(new TextEncoder().encode(JSON.stringify(duplicate)))).rejects.toThrow("Configuration hosts are invalid")
   })
 
+  it("rejects Host Keys that do not belong to an exported host endpoint", async () => {
+    const invalid = {
+      ...snapshot(),
+      hostKeys: [{ host: "unrelated.example", port: 22, fingerprint: "unrelated-fingerprint" }]
+    }
+
+    await expect(exportEncryptedBundle(invalid, "migration password")).rejects.toThrow("Configuration Host Keys are invalid")
+  })
+
+  it("filters stored Host Keys to endpoints represented in an encrypted migration", () => {
+    expect(hostKeysForHosts(snapshot().hosts, [
+      { host: "server.example", port: 22, fingerprint: "host-fingerprint" },
+      { host: "unrelated.example", port: 2222, fingerprint: "unrelated-fingerprint" }
+    ])).toEqual([
+      { host: "server.example", port: 22, fingerprint: "host-fingerprint" }
+    ])
+  })
+
   it("requires explicit resolutions for host and Host Key conflicts", async () => {
     const target = createTarget()
     const service = new ConfigBundleService(target)
@@ -71,7 +90,15 @@ describe("configuration bundles", () => {
     await expect(service.preview(bundle, "migration password")).resolves.toMatchObject({
       hosts: { conflicts: 1 },
       hostKeys: { conflicts: 1 },
-      credentials: { total: 1 }
+      credentials: { total: 1 },
+      hostConflicts: [{ id: "host-a", name: "Imported", host: "server.example", port: 22, username: "root" }],
+      hostKeyConflicts: [{
+        id: "server.example:22",
+        host: "server.example",
+        port: 22,
+        localFingerprint: "old-fingerprint",
+        importedFingerprint: "host-fingerprint"
+      }]
     })
     await expect(service.import(bundle, "migration password", { importCredentials: true })).rejects.toThrow("Import conflict requires resolution")
     expect(target.hosts[0].name).toBe("Existing")
@@ -79,12 +106,45 @@ describe("configuration bundles", () => {
 
     await expect(service.import(bundle, "migration password", {
       importCredentials: true,
+      importHostKeys: true,
       hosts: { "host-a": "use-imported" },
       hostKeys: { "server.example:22": "replace-host-key" }
-    })).resolves.toMatchObject({ replacedHosts: 1, replacedHostKeys: 1, importedCredentials: 1 })
+    })).resolves.toMatchObject({ replacedHosts: 1, replacedHostKeys: 1, skippedHostKeys: 0, importedCredentials: 1, skippedCredentials: 0 })
     expect(target.hosts[0].name).toBe("Imported")
     expect(target.hostKeys.get("server.example:22")).toBe("host-fingerprint")
     expect(target.credentials.get("host-a:password")).toBe("password-value")
+  })
+
+  it("rolls back earlier store changes when a later import operation fails", async () => {
+    const target = createTarget()
+    const service = new ConfigBundleService(target)
+    const bundle = await exportEncryptedBundle(snapshot(), "migration password")
+    target.replaceHostKey = async () => { throw new Error("disk failure") }
+
+    await expect(service.import(bundle, "migration password", {
+      applySettings: true,
+      importHostKeys: true,
+      hosts: { "host-a": "use-imported" },
+      hostKeys: { "server.example:22": "replace-host-key" }
+    })).rejects.toThrow("Configuration import could not be completed")
+
+    expect(target.hosts[0]).toMatchObject({ name: "Existing", host: "old.example" })
+    expect(target.settings).toEqual(settings)
+    expect(target.hostKeys.get("server.example:22")).toBe("old-fingerprint")
+  })
+
+  it("never replaces an existing local credential during migration", async () => {
+    const target = createTarget()
+    target.credentials.set("host-a:password", "local-password")
+    const service = new ConfigBundleService(target)
+    const bundle = await exportEncryptedBundle(snapshot(), "migration password")
+
+    await expect(service.import(bundle, "migration password", {
+      importCredentials: true,
+      hosts: { "host-a": "use-imported" }
+    })).resolves.toMatchObject({ importedCredentials: 0, skippedCredentials: 1 })
+
+    expect(target.credentials.get("host-a:password")).toBe("local-password")
   })
 })
 
@@ -111,6 +171,7 @@ function createTarget(): ConfigImportTarget & {
   hosts: HostProfile[]
   hostKeys: Map<string, string>
   credentials: Map<string, string>
+  settings: AppSettings
 } {
   const hosts: HostProfile[] = [{
     id: "host-a",
@@ -124,27 +185,46 @@ function createTarget(): ConfigImportTarget & {
   }]
   const hostKeys = new Map([["server.example:22", "old-fingerprint"]])
   const credentials = new Map<string, string>()
+  let currentSettings = { ...settings }
   return {
     hosts,
     hostKeys,
     credentials,
+    get settings() { return { ...currentSettings } },
     listHosts: async () => hosts.map((host) => ({ ...host })),
     saveHost: async (profile) => {
       const index = hosts.findIndex((host) => host.id === profile.id)
       if (index === -1) hosts.push({ ...profile })
       else hosts[index] = { ...profile }
     },
-    getSettings: async () => ({ ...settings }),
-    updateSettings: async () => undefined,
+    removeHost: async (id) => {
+      const index = hosts.findIndex((host) => host.id === id)
+      if (index !== -1) hosts.splice(index, 1)
+    },
+    getSettings: async () => ({ ...currentSettings }),
+    updateSettings: async (next) => { currentSettings = { ...next } },
     getHostKey: async (host, port) => hostKeys.get(`${host}:${port}`),
     trustHostKey: async (host, port, fingerprint) => { hostKeys.set(`${host}:${port}`, fingerprint) },
     replaceHostKey: async (host, port, expected, replacement) => {
       if (hostKeys.get(`${host}:${port}`) !== expected) throw new Error("Host Key changed")
       hostKeys.set(`${host}:${port}`, replacement)
     },
+    removeHostKey: async (host, port, expected) => {
+      if (hostKeys.get(`${host}:${port}`) !== expected) throw new Error("Host Key changed")
+      hostKeys.delete(`${host}:${port}`)
+    },
     assertCredentialsWritable: async () => undefined,
     importCredentials: async (values) => {
-      for (const [key, value] of Object.entries(values)) credentials.set(key, value)
+      const imported: string[] = []
+      const skippedExisting: string[] = []
+      for (const [key, value] of Object.entries(values)) {
+        if (credentials.has(key)) skippedExisting.push(key)
+        else {
+          credentials.set(key, value)
+          imported.push(key)
+        }
+      }
+      return { imported, skippedExisting }
     }
   }
 }

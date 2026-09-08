@@ -174,6 +174,24 @@ function createBrowserPreviewBridge(): RockerBridge {
     diagnostics: {
       export: async () => ({ canceled: true })
     },
+    configuration: {
+      exportTemplate: async () => ({ canceled: true }),
+      exportBundle: async () => ({ canceled: true }),
+      chooseImport: async () => ({ canceled: true }),
+      previewImport: async () => {
+        throw new Error("Configuration import is unavailable in browser preview")
+      },
+      applyImport: async () => {
+        throw new Error("Configuration import is unavailable in browser preview")
+      }
+    },
+    credentials: {
+      protectionStatus: async () => ({ mode: "keychain", keychainAvailable: true, vaultState: "not-configured" }),
+      enableVault: async () => ({ mode: "vault", keychainAvailable: true, vaultState: "unlocked" }),
+      unlockVault: async () => ({ mode: "vault", keychainAvailable: true, vaultState: "unlocked" }),
+      lockVault: async () => ({ mode: "vault", keychainAvailable: true, vaultState: "locked" }),
+      disableVault: async () => ({ mode: "keychain", keychainAvailable: true, vaultState: "not-configured" })
+    },
     events: {
       onSessionEvent: (listener) => {
         mockListeners.add(listener)

@@ -1,7 +1,7 @@
 import { resolve } from "node:path"
 import { JsonStore } from "../storage/json-store"
 import type { LoadResult, StorageHealth } from "../storage/storage-result"
-import { normalizeFingerprint, type HostKeyStore } from "./host-keys"
+import { normalizeFingerprint, type HostKeyStore, type StoredHostKeyRecord } from "./host-keys"
 
 interface HostKeyDocument {
   fingerprints: Record<string, string>
@@ -56,6 +56,33 @@ export class JsonHostKeyStore implements HostKeyStore {
     })
   }
 
+  public async remove(host: string, port: number, expectedFingerprint?: string): Promise<void> {
+    const normalizedExpected = expectedFingerprint === undefined
+      ? undefined
+      : normalizeStoredFingerprint(expectedFingerprint)
+    if (expectedFingerprint !== undefined && normalizedExpected === undefined) return
+    await this.store.update((document) => {
+      const key = this.key(host, port)
+      const stored = document.fingerprints[key]
+      if (stored === undefined) return document
+      if (normalizedExpected !== undefined && normalizeFingerprint(stored) !== normalizedExpected) {
+        throw new Error("Host Key changed while awaiting removal confirmation")
+      }
+      const fingerprints = { ...document.fingerprints }
+      delete fingerprints[key]
+      return { fingerprints }
+    })
+  }
+
+  public async entries(): Promise<StoredHostKeyRecord[]> {
+    const document = await this.store.read()
+    return Object.entries(document.fingerprints).map(([key, fingerprint]) => {
+      const parsed = parseHostKeyStorageKey(key)
+      if (!parsed) throw new Error("Stored Host Key is invalid")
+      return { ...parsed, fingerprint }
+    })
+  }
+
   public async health(options: { consumeHealth?: boolean } = {}): Promise<StorageHealth> {
     return healthFromLoad(await this.store.load(options))
   }
@@ -70,11 +97,21 @@ export function normalizeHostKeyDocument(value: unknown): HostKeyDocument | unde
   if (!isRecord(value) || !isRecord(value.fingerprints)) return undefined
   const fingerprints: Record<string, string> = {}
   for (const [key, fingerprint] of Object.entries(value.fingerprints)) {
+    if (!parseHostKeyStorageKey(key)) return undefined
     const normalized = normalizeStoredFingerprint(fingerprint)
     if (normalized === undefined) return undefined
     fingerprints[key] = normalized
   }
   return { fingerprints }
+}
+
+function parseHostKeyStorageKey(value: string): Pick<StoredHostKeyRecord, "host" | "port"> | undefined {
+  const separator = value.lastIndexOf(":")
+  if (separator <= 0) return undefined
+  const host = value.slice(0, separator)
+  const port = Number(value.slice(separator + 1))
+  if (host.length === 0 || host.length > 512 || !Number.isInteger(port) || port < 1 || port > 65_535) return undefined
+  return { host, port }
 }
 
 function normalizeStoredFingerprint(value: unknown): string | undefined {

@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron"
-import { ipcChannels, type AppBootstrapSnapshot, type BootstrapResourceName, type RockerBridge } from "./ipc/bridge-contract"
+import {
+  ipcChannels,
+  type AppBootstrapSnapshot,
+  type BootstrapResourceName,
+  type ConfigurationImportRequest,
+  type RockerBridge
+} from "./ipc/bridge-contract"
 import type { TerminalSessionEvent } from "./ssh/types"
 import type { SessionLaunchRequest } from "./ipc/bridge-contract"
 
@@ -54,6 +60,20 @@ const bridge: RockerBridge = {
   },
   diagnostics: {
     export: () => ipcRenderer.invoke(ipcChannels.diagnosticsExport)
+  },
+  configuration: {
+    exportTemplate: () => ipcRenderer.invoke(ipcChannels.configExportTemplate),
+    exportBundle: (password) => ipcRenderer.invoke(ipcChannels.configExportBundle, password),
+    chooseImport: () => ipcRenderer.invoke(ipcChannels.configImportChoose),
+    previewImport: (importId, password) => ipcRenderer.invoke(ipcChannels.configImportPreview, { importId, password }),
+    applyImport: (request: ConfigurationImportRequest) => ipcRenderer.invoke(ipcChannels.configImportApply, request)
+  },
+  credentials: {
+    protectionStatus: () => ipcRenderer.invoke(ipcChannels.credentialProtectionStatus),
+    enableVault: (password) => ipcRenderer.invoke(ipcChannels.credentialVaultEnable, password),
+    unlockVault: (password) => ipcRenderer.invoke(ipcChannels.credentialVaultUnlock, password),
+    lockVault: () => ipcRenderer.invoke(ipcChannels.credentialVaultLock),
+    disableVault: () => ipcRenderer.invoke(ipcChannels.credentialVaultDisable)
   },
   events: {
     onSessionEvent: (listener) => {

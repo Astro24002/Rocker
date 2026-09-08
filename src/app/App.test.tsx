@@ -1,7 +1,14 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { AppBootstrapSnapshot, BootstrapHostProfile, RockerBridge } from "../../electron/ipc/bridge-contract"
+import type {
+  AppBootstrapSnapshot,
+  BootstrapHostProfile,
+  ConfigurationExportResult,
+  ConfigurationImportChooseResult,
+  RockerBridge
+} from "../../electron/ipc/bridge-contract"
+import type { ImportPreview, ImportResult } from "../../electron/storage/config-bundle"
 import type { StorageHealth } from "../../electron/storage/storage-result"
 import type { TerminalSessionEvent } from "../../electron/ssh/types"
 import { clampSidebarWidth } from "../components/Sidebar"
@@ -949,6 +956,58 @@ describe("desktop workspace shell", () => {
     expect(bridge.settings.update).not.toHaveBeenCalled()
   })
 
+  it("refreshes imported hosts and settings after a configuration migration", async () => {
+    const importedHost: HostProfile = {
+      id: "imported-host",
+      name: "Imported host",
+      host: "imported.example",
+      port: 22,
+      username: "admin",
+      authMethod: "agent",
+      favorite: false,
+      notes: ""
+    }
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], undefined))
+    bridge.configuration.chooseImport.mockResolvedValue({
+      canceled: false,
+      importId: "11111111-1111-4111-8111-111111111111",
+      preview: {
+        format: "rocker-config",
+        encrypted: false,
+        requiresPassword: false,
+        createdAt: "2026-09-08T00:00:00.000Z",
+        hosts: { total: 1, new: 1, matching: 0, conflicts: 0 },
+        hostKeys: { total: 0, new: 0, matching: 0, conflicts: 0 },
+        hostConflicts: [],
+        hostKeyConflicts: [],
+        credentials: { total: 0 },
+        hasSettings: true
+      }
+    })
+    bridge.configuration.applyImport.mockResolvedValue({
+      importedHosts: 1,
+      replacedHosts: 0,
+      copiedHosts: 0,
+      importedHostKeys: 0,
+      replacedHostKeys: 0,
+      skippedHostKeys: 0,
+      importedCredentials: 0,
+      skippedCredentials: 0,
+      settingsApplied: true
+    })
+    bridge.hosts.list.mockResolvedValue([importedHost])
+    bridge.settings.get.mockResolvedValue(settingsSnapshot({ scrollback: 50000, terminalFontSize: 16 }))
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }))
+    fireEvent.click(screen.getByRole("button", { name: "Import configuration" }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "Apply import" })).toBeEnabled())
+    fireEvent.click(screen.getByRole("button", { name: "Apply import" }))
+
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Scrollback lines" })).toHaveValue("50000"))
+    expect(bridge.hosts.list).toHaveBeenCalled()
+  })
+
   it("serializes delayed settings writes and preserves newer edits across full responses", async () => {
     vi.useFakeTimers()
     try {
@@ -1228,6 +1287,40 @@ function createBridge() {
       update: vi.fn(async (update: object): Promise<AppSettings> => ({ locale: "en", sidebarWidth: 220, terminalFont: "JetBrains Mono", terminalFontSize: 13, scrollback: 10000, cursorStyle: "bar", cursorBlink: true, terminalBell: true, connectionTimeout: 15, autoReconnect: true, reconnectMode: "limited", restorePreviousWorkspace: true, confirmMultilinePaste: true, bindAddress: "127.0.0.1", ...update }))
     },
     diagnostics: { export: vi.fn(async () => ({ canceled: true })) },
+    configuration: {
+      exportTemplate: vi.fn(async (): Promise<ConfigurationExportResult> => ({ canceled: true })),
+      exportBundle: vi.fn(async (): Promise<ConfigurationExportResult> => ({ canceled: true })),
+      chooseImport: vi.fn(async (): Promise<ConfigurationImportChooseResult> => ({ canceled: true })),
+      previewImport: vi.fn(async (): Promise<ImportPreview> => ({
+        format: "rocker-config",
+        encrypted: false,
+        requiresPassword: false,
+        hosts: { total: 0, new: 0, matching: 0, conflicts: 0 },
+        hostKeys: { total: 0, new: 0, matching: 0, conflicts: 0 },
+        hostConflicts: [],
+        hostKeyConflicts: [],
+        credentials: { total: 0 },
+        hasSettings: false
+      })),
+      applyImport: vi.fn(async (): Promise<ImportResult> => ({
+        importedHosts: 0,
+        replacedHosts: 0,
+        copiedHosts: 0,
+        importedHostKeys: 0,
+        replacedHostKeys: 0,
+        skippedHostKeys: 0,
+        importedCredentials: 0,
+        skippedCredentials: 0,
+        settingsApplied: false
+      }))
+    },
+    credentials: {
+      protectionStatus: vi.fn(async () => ({ mode: "keychain" as const, keychainAvailable: true, vaultState: "not-configured" as const })),
+      enableVault: vi.fn(async () => ({ mode: "vault" as const, keychainAvailable: true, vaultState: "unlocked" as const })),
+      unlockVault: vi.fn(async () => ({ mode: "vault" as const, keychainAvailable: true, vaultState: "unlocked" as const })),
+      lockVault: vi.fn(async () => ({ mode: "vault" as const, keychainAvailable: true, vaultState: "locked" as const })),
+      disableVault: vi.fn(async () => ({ mode: "keychain" as const, keychainAvailable: true, vaultState: "not-configured" as const }))
+    },
     events: {
       onSessionEvent: vi.fn((listener: (event: TerminalSessionEvent) => void) => {
         sessionListener = listener

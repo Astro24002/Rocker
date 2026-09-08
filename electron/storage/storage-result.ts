@@ -5,6 +5,7 @@ export type StorageKind =
   | "hosts"
   | "credentials"
   | "hostKeys"
+  | "imports"
 
 export type StorageFailureReason = "corrupt" | "permission" | "unavailable" | "recovery-failed"
 

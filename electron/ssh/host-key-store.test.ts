@@ -55,4 +55,26 @@ describe("JsonHostKeyStore", () => {
     await expect(secondReplacement).rejects.toThrow("Host Key changed while awaiting replacement confirmation")
     await expect(absoluteStore.get("host.example", 22)).resolves.toBe("new-fingerprint-a")
   })
+
+  it("exports validated Host Key records for encrypted migration", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-host-key-store-"))
+    temporaryPaths.push(directory)
+    const store = new JsonHostKeyStore(join(directory, "host-keys.json"))
+    await store.trust("2001:db8::1", 2222, "SHA256:fingerprint")
+
+    await expect(store.entries()).resolves.toEqual([
+      { host: "2001:db8::1", port: 2222, fingerprint: "fingerprint" }
+    ])
+  })
+
+  it("removes only the Host Key fingerprint expected by a rollback", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-host-key-store-"))
+    temporaryPaths.push(directory)
+    const store = new JsonHostKeyStore(join(directory, "host-keys.json"))
+    await store.trust("host.example", 22, "trusted-fingerprint")
+
+    await expect(store.remove("host.example", 22, "different-fingerprint")).rejects.toThrow("Host Key changed while awaiting removal confirmation")
+    await expect(store.remove("host.example", 22, "trusted-fingerprint")).resolves.toBeUndefined()
+    await expect(store.get("host.example", 22)).resolves.toBeUndefined()
+  })
 })

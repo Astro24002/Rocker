@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
-import { readFile } from "node:fs/promises"
+import { chmod, open, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { basename, dirname, join } from "node:path"
 import { BrowserWindow, dialog, ipcMain, shell } from "electron"
 import type { OpenDialogOptions } from "electron"
 import type { DiagnosticLogger } from "../diagnostics/diagnostic-logger"
@@ -10,6 +11,14 @@ import type { ForwardingManager } from "../ports/forwarding-manager"
 import type { PortService } from "../ports/port-service"
 import type { ForwardingSpec } from "../ports/types"
 import type { CredentialVault } from "../storage/credentials"
+import type { SerializedOperationQueue } from "../storage/operation-queue"
+import {
+  ConfigBundleService,
+  exportEncryptedBundle,
+  exportTemplate,
+  type ConflictResolution,
+  type ExportSnapshot
+} from "../storage/config-bundle"
 import type { HistoryStore } from "../storage/history-store"
 import type { HostStore } from "../storage/host-store"
 import type { SettingsStore } from "../storage/settings-store"
@@ -52,6 +61,9 @@ export interface IpcDependencies {
   history: HistoryStore
   settings: SettingsStore
   diagnostics: DiagnosticLogger
+  mutations: SerializedOperationQueue
+  configuration: Pick<ConfigBundleService, "preview" | "import">
+  createConfigurationExportSnapshot(includeCredentials: boolean): Promise<ExportSnapshot>
   diagnosticsAppVersion?: string
   diagnosticsBuildChannel?: DiagnosticRuntimeMetadata["buildChannel"]
   diagnosticsRuntimeMode?: DiagnosticRuntimeMetadata["runtimeMode"]
@@ -63,6 +75,12 @@ interface BootstrapHealthStore {
   health(options?: { consumeHealth?: boolean }): Promise<StorageHealth>
 }
 
+interface PendingConfigurationImport {
+  owner: RuntimeOwner
+  bytes: Uint8Array
+  inFlight: boolean
+}
+
 const bootstrapResourceNames: BootstrapResourceName[] = [
   "settings",
   "history",
@@ -71,28 +89,33 @@ const bootstrapResourceNames: BootstrapResourceName[] = [
   "credentials",
   "hostKeys"
 ]
+const maximumPendingConfigurationImports = 8
+const maximumConfigurationImportBytes = 12 * 1024 * 1024
 
 export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   let hostSaveQueue = Promise.resolve()
+  const pendingConfigurationImports = new Map<string, PendingConfigurationImport>()
   ipcMain.handle(ipcChannels.hostsList, () => dependencies.hosts.list())
   ipcMain.handle(ipcChannels.hostsSave, async (_event, request: HostSaveRequest) => {
     assertHostProfile(request?.profile)
-    const save = hostSaveQueue.then(async () => {
+    const save = hostSaveQueue.then(() => dependencies.mutations.run(async () => {
       if (isRedactedHostProfile(request.profile)) await dependencies.hosts.saveRedacted(request.profile)
       else await dependencies.hosts.save(request.profile)
       if (request.credentials?.password) await dependencies.credentials.set(request.profile.id, "password", request.credentials.password)
       if (request.credentials?.passphrase) await dependencies.credentials.set(request.profile.id, "passphrase", request.credentials.passphrase)
-    })
+    }))
     hostSaveQueue = save.then(() => undefined, () => undefined)
     await save
   })
   ipcMain.handle(ipcChannels.hostsRemove, async (_event, id: unknown) => {
     assertId(id, "host")
-    await dependencies.hosts.remove(id)
-    await Promise.all([
-      dependencies.credentials.clear(id, "password"),
-      dependencies.credentials.clear(id, "passphrase")
-    ])
+    await dependencies.mutations.run(async () => {
+      await dependencies.hosts.remove(id)
+      await Promise.all([
+        dependencies.credentials.clear(id, "password"),
+        dependencies.credentials.clear(id, "passphrase")
+      ])
+    })
   })
   ipcMain.handle(ipcChannels.hostsImport, async (event) => {
     const options: OpenDialogOptions = {
@@ -105,7 +128,8 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
       ? await dialog.showOpenDialog(target, options)
       : await dialog.showOpenDialog(options)
     if (result.canceled || !result.filePaths[0]) return []
-    return dependencies.hosts.importOpenSSHConfig(await readFile(result.filePaths[0], "utf8"))
+    const source = await readFile(result.filePaths[0], "utf8")
+    return dependencies.mutations.run(() => dependencies.hosts.importOpenSSHConfig(source))
   })
 
   ipcMain.handle(ipcChannels.sessionOpen, async (event, value: unknown) => {
@@ -238,9 +262,11 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   ipcMain.handle(ipcChannels.historyClear, () => dependencies.history.clear())
   ipcMain.handle(ipcChannels.settingsGet, () => dependencies.settings.get())
   ipcMain.handle(ipcChannels.settingsUpdate, async (_event, update: unknown) => {
-    const next = await dependencies.settings.update(normalizeSettingsUpdate(update))
-    dependencies.connections.updateRetryPolicy(next)
-    return next
+    return dependencies.mutations.run(async () => {
+      const next = await dependencies.settings.update(normalizeSettingsUpdate(update))
+      dependencies.connections.updateRetryPolicy(next)
+      return next
+    })
   })
   ipcMain.handle(ipcChannels.diagnosticsExport, async (event) => {
     const target = BrowserWindow.fromWebContents(event.sender)
@@ -268,6 +294,146 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
       throw new Error("Diagnostics export failed")
     }
   })
+  ipcMain.handle(ipcChannels.configExportTemplate, async (event) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    const target = BrowserWindow.fromWebContents(event.sender)
+    const result = target
+      ? await dialog.showSaveDialog(target, configurationSaveDialogOptions("template"))
+      : await dialog.showSaveDialog(configurationSaveDialogOptions("template"))
+    if (result.canceled || !result.filePath) return { canceled: true }
+    assertCurrentOwner(dependencies, owner)
+    try {
+      const snapshot = await dependencies.createConfigurationExportSnapshot(false)
+      assertCurrentOwner(dependencies, owner)
+      const output = `${JSON.stringify(exportTemplate(snapshot), null, 2)}\n`
+      await writeConfigurationExport(result.filePath, output)
+      return { canceled: false, path: result.filePath }
+    } catch {
+      throw new Error("Configuration export failed")
+    }
+  })
+  ipcMain.handle(ipcChannels.configExportBundle, async (event, password: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    const bundlePassword = normalizeConfigurationPassword(password)
+    const target = BrowserWindow.fromWebContents(event.sender)
+    const result = target
+      ? await dialog.showSaveDialog(target, configurationSaveDialogOptions("bundle"))
+      : await dialog.showSaveDialog(configurationSaveDialogOptions("bundle"))
+    if (result.canceled || !result.filePath) return { canceled: true }
+    assertCurrentOwner(dependencies, owner)
+    try {
+      const snapshot = await dependencies.createConfigurationExportSnapshot(true)
+      assertCurrentOwner(dependencies, owner)
+      const output = await exportEncryptedBundle(snapshot, bundlePassword)
+      assertCurrentOwner(dependencies, owner)
+      await writeConfigurationExport(result.filePath, output)
+      return { canceled: false, path: result.filePath }
+    } catch {
+      throw new Error("Configuration export failed")
+    }
+  })
+  ipcMain.handle(ipcChannels.configImportChoose, async (event) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    const target = BrowserWindow.fromWebContents(event.sender)
+    const options: OpenDialogOptions = {
+      title: "Import Rocker configuration",
+      properties: ["openFile"],
+      filters: [{ name: "Rocker configuration", extensions: ["json", "bundle"] }]
+    }
+    const result = target
+      ? await dialog.showOpenDialog(target, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || !result.filePaths[0]) return { canceled: true }
+    assertCurrentOwner(dependencies, owner)
+    let bytes: Uint8Array
+    try {
+      bytes = await readConfigurationImport(result.filePaths[0])
+      const preview = await dependencies.configuration.preview(bytes, undefined)
+      assertCurrentOwner(dependencies, owner)
+      const importId = storePendingConfigurationImport(pendingConfigurationImports, owner, bytes)
+      return { canceled: false, importId, preview }
+    } catch {
+      throw new Error("Configuration import could not be opened")
+    }
+  })
+  ipcMain.handle(ipcChannels.configImportPreview, async (event, value: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    const request = normalizeConfigurationImportPreviewRequest(value)
+    const pending = getPendingConfigurationImport(pendingConfigurationImports, owner, request.importId)
+    if (pending.inFlight) throw new Error("Configuration import is already running")
+    const preview = await dependencies.configuration.preview(pending.bytes, request.password)
+    assertCurrentOwner(dependencies, owner)
+    return preview
+  })
+  ipcMain.handle(ipcChannels.configImportApply, async (event, value: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    const request = normalizeConfigurationImportRequest(value)
+    const pending = getPendingConfigurationImport(pendingConfigurationImports, owner, request.importId)
+    if (pending.inFlight) throw new Error("Configuration import is already running")
+    pending.inFlight = true
+    try {
+      const imported = await dependencies.mutations.run(() => dependencies.configuration.import(pending.bytes, request.password, request.resolution))
+      assertCurrentOwner(dependencies, owner)
+      pendingConfigurationImports.delete(request.importId)
+      return imported
+    } catch {
+      pending.inFlight = false
+      throw new Error("Configuration import could not be completed")
+    }
+  })
+  ipcMain.handle(ipcChannels.credentialProtectionStatus, async (event) => {
+    currentOwnerForWebContents(dependencies, event.sender.id)
+    try {
+      return await dependencies.credentials.protectionStatus()
+    } catch {
+      throw new Error("Credential protection status is unavailable")
+    }
+  })
+  ipcMain.handle(ipcChannels.credentialVaultEnable, async (event, password: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    const vaultPassword = normalizeCredentialVaultPassword(password)
+    assertCurrentOwner(dependencies, owner)
+    try {
+      await dependencies.mutations.run(() => dependencies.credentials.enableVault(vaultPassword))
+      assertCurrentOwner(dependencies, owner)
+      return await dependencies.credentials.protectionStatus()
+    } catch {
+      throw new Error("Credential Vault setup failed")
+    }
+  })
+  ipcMain.handle(ipcChannels.credentialVaultUnlock, async (event, password: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    const vaultPassword = normalizeCredentialVaultPassword(password)
+    assertCurrentOwner(dependencies, owner)
+    try {
+      await dependencies.mutations.run(() => dependencies.credentials.unlockVault(vaultPassword))
+      assertCurrentOwner(dependencies, owner)
+      return await dependencies.credentials.protectionStatus()
+    } catch {
+      throw new Error("Credential Vault unlock failed")
+    }
+  })
+  ipcMain.handle(ipcChannels.credentialVaultLock, async (event) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    try {
+      await dependencies.mutations.run(() => dependencies.credentials.lockVault())
+      assertCurrentOwner(dependencies, owner)
+      return await dependencies.credentials.protectionStatus()
+    } catch {
+      throw new Error("Credential Vault lock failed")
+    }
+  })
+  ipcMain.handle(ipcChannels.credentialVaultDisable, async (event) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertCurrentOwner(dependencies, owner)
+    try {
+      await dependencies.mutations.run(() => dependencies.credentials.disableVault())
+      assertCurrentOwner(dependencies, owner)
+      return await dependencies.credentials.protectionStatus()
+    } catch {
+      throw new Error("Credential Vault could not be disabled")
+    }
+  })
   ipcMain.handle(ipcChannels.windowMinimize, (event) => BrowserWindow.fromWebContents(event.sender)?.minimize())
   ipcMain.handle(ipcChannels.windowToggleMaximize, (event) => {
     const target = BrowserWindow.fromWebContents(event.sender)
@@ -281,6 +447,7 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   })
   return () => {
     unsubscribe()
+    pendingConfigurationImports.clear()
     for (const channel of Object.values(ipcChannels)) {
       if (channel !== ipcChannels.sessionEvent && channel !== ipcChannels.sessionLaunch) ipcMain.removeHandler(channel)
     }
@@ -608,6 +775,158 @@ function assertOwnedForwarding(dependencies: IpcDependencies, owner: RuntimeOwne
   }
 }
 
+function configurationSaveDialogOptions(kind: "template" | "bundle"): Electron.SaveDialogOptions {
+  return kind === "template"
+    ? {
+        title: "Export Rocker configuration",
+        defaultPath: "rocker-config.json",
+        filters: [{ name: "Rocker configuration", extensions: ["json"] }]
+      }
+    : {
+        title: "Export encrypted Rocker migration bundle",
+        defaultPath: "rocker-config.bundle",
+        filters: [{ name: "Rocker migration bundle", extensions: ["bundle"] }]
+      }
+}
+
+async function readConfigurationImport(filePath: string): Promise<Uint8Array> {
+  const handle = await open(filePath, "r")
+  try {
+    const initial = await handle.stat()
+    if (!initial.isFile() || initial.size < 1 || initial.size > maximumConfigurationImportBytes) {
+      throw new Error("Configuration import is invalid")
+    }
+    const bytes = Buffer.allocUnsafe(initial.size)
+    let offset = 0
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset)
+      if (bytesRead === 0) throw new Error("Configuration import is invalid")
+      offset += bytesRead
+    }
+    const completed = await handle.stat()
+    if (completed.size !== initial.size) throw new Error("Configuration import is invalid")
+    return bytes
+  } finally {
+    await handle.close().catch(() => undefined)
+  }
+}
+
+async function writeConfigurationExport(filePath: string, output: string | Uint8Array): Promise<void> {
+  const temporaryPath = join(dirname(filePath), `.${basename(filePath)}.${randomUUID()}.tmp`)
+  try {
+    await writeFile(temporaryPath, output, { mode: 0o600 })
+    if (process.platform !== "win32") await chmod(temporaryPath, 0o600)
+    await rename(temporaryPath, filePath)
+    if (process.platform !== "win32") await chmod(filePath, 0o600)
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined)
+  }
+}
+
+function normalizeConfigurationPassword(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value, "utf8") > 4_096) {
+    throw new Error("Configuration password is invalid")
+  }
+  return value
+}
+
+function normalizeCredentialVaultPassword(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value, "utf8") > 4_096) {
+    throw new Error("Credential Vault password is invalid")
+  }
+  return value
+}
+
+function normalizeConfigurationImportPreviewRequest(value: unknown): { importId: string; password?: string } {
+  if (!isPlainRecord(value) || !isValidSessionId(value.importId)) throw new Error("Invalid configuration import request")
+  if (value.password !== undefined && (typeof value.password !== "string" || Buffer.byteLength(value.password, "utf8") > 4_096)) {
+    throw new Error("Configuration password is invalid")
+  }
+  return value.password === undefined
+    ? { importId: value.importId }
+    : { importId: value.importId, password: value.password }
+}
+
+function normalizeConfigurationImportRequest(value: unknown): { importId: string; password?: string; resolution: ConflictResolution } {
+  const preview = normalizeConfigurationImportPreviewRequest(value)
+  if (!isPlainRecord(value) || !("resolution" in value)) throw new Error("Invalid configuration import request")
+  return { ...preview, resolution: normalizeConflictResolution(value.resolution) }
+}
+
+function normalizeConflictResolution(value: unknown): ConflictResolution {
+  if (!isPlainRecord(value)) throw new Error("Invalid configuration import resolution")
+  const allowed = new Set(["hosts", "hostKeys", "importHostKeys", "applySettings", "importCredentials"])
+  if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("Invalid configuration import resolution")
+  const result: ConflictResolution = {}
+  if (value.hosts !== undefined) result.hosts = normalizeResolutionMap(value.hosts, ["keep-local", "use-imported", "create-copy", "skip"], 128)
+  if (value.hostKeys !== undefined) result.hostKeys = normalizeResolutionMap(value.hostKeys, ["keep-local", "replace-host-key", "skip"], 600)
+  if (value.importHostKeys !== undefined) {
+    if (typeof value.importHostKeys !== "boolean") throw new Error("Invalid configuration import resolution")
+    result.importHostKeys = value.importHostKeys
+  }
+  if (value.applySettings !== undefined) {
+    if (typeof value.applySettings !== "boolean") throw new Error("Invalid configuration import resolution")
+    result.applySettings = value.applySettings
+  }
+  if (value.importCredentials !== undefined) {
+    if (typeof value.importCredentials !== "boolean") throw new Error("Invalid configuration import resolution")
+    result.importCredentials = value.importCredentials
+  }
+  return result
+}
+
+function normalizeResolutionMap<T extends string>(
+  value: unknown,
+  allowedActions: readonly T[],
+  maximumKeyLength: number
+): Record<string, T> {
+  if (!isPlainRecord(value) || Object.keys(value).length > 10_000) {
+    throw new Error("Invalid configuration import resolution")
+  }
+  const result: Record<string, T> = {}
+  for (const [key, action] of Object.entries(value)) {
+    if (!isBoundedString(key, maximumKeyLength) || typeof action !== "string" || !allowedActions.includes(action as T)) {
+      throw new Error("Invalid configuration import resolution")
+    }
+    result[key] = action as T
+  }
+  return result
+}
+
+function storePendingConfigurationImport(
+  pendingImports: Map<string, PendingConfigurationImport>,
+  owner: RuntimeOwner,
+  bytes: Uint8Array
+): string {
+  for (const [importId, pending] of pendingImports) {
+    if (pending.owner.webContentsId === owner.webContentsId) pendingImports.delete(importId)
+  }
+  while (pendingImports.size >= maximumPendingConfigurationImports) {
+    const oldest = pendingImports.keys().next().value
+    if (oldest === undefined) break
+    pendingImports.delete(oldest)
+  }
+  const importId = randomUUID()
+  pendingImports.set(importId, { owner, bytes, inFlight: false })
+  return importId
+}
+
+function getPendingConfigurationImport(
+  pendingImports: Map<string, PendingConfigurationImport>,
+  owner: RuntimeOwner,
+  importId: unknown
+): PendingConfigurationImport {
+  if (!isValidSessionId(importId)) throw new Error("Invalid configuration import identifier")
+  const pending = pendingImports.get(importId)
+  if (!pending) throw new Error("Configuration import is unavailable")
+  if (!sameRuntimeOwner(pending.owner, owner)) {
+    throw new Error(pending.owner.webContentsId === owner.webContentsId
+      ? "Import is owned by another renderer generation"
+      : "Import is owned by another window")
+  }
+  return pending
+}
+
 function isRedactedHostProfile(profile: HostSaveProfile): profile is BootstrapHostProfile {
   return typeof (profile as { hasIdentityFile?: unknown }).hasIdentityFile === "boolean"
     && (profile as HostProfile).identityFile === undefined
@@ -652,6 +971,10 @@ function isValidSequence(value: unknown): value is number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && !Array.isArray(value)
 }
 
 function isBoundedString(value: unknown, maximumLength: number): value is string {

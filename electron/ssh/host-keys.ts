@@ -9,7 +9,15 @@ export interface HostKeyStore {
   get(host: string, port: number): Promise<string | undefined>
   trust(host: string, port: number, fingerprint: string): Promise<void>
   replace?(host: string, port: number, expectedFingerprint: string, replacementFingerprint: string): Promise<void>
+  remove?(host: string, port: number, expectedFingerprint?: string): Promise<void>
+  entries?(): Promise<StoredHostKeyRecord[]>
   health?(options?: HostKeyHealthOptions): Promise<StorageHealth>
+}
+
+export interface StoredHostKeyRecord {
+  host: string
+  port: number
+  fingerprint: string
 }
 
 export type HostKeyInspection =

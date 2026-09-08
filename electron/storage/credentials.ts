@@ -9,6 +9,11 @@ export interface CredentialHealthOptions {
 
 export type CredentialValueMap = Record<string, string>
 
+export interface CredentialImportResult {
+  imported: string[]
+  skippedExisting: string[]
+}
+
 export interface CredentialCipher {
   isAvailable?(): boolean
   encrypt(value: string): string
@@ -43,6 +48,7 @@ export class CredentialVault {
   private mode?: CredentialProtectionMode
   private vaultPassword?: string
   private vaultValues?: CredentialValueMap
+  private operationQueue = Promise.resolve()
 
   public constructor(
     private readonly values: Map<string, string> | CredentialValueStore,
@@ -50,134 +56,165 @@ export class CredentialVault {
     private readonly vaultStore?: EncryptedVaultStore
   ) {}
 
-  public async get(hostId: string, kind: CredentialKind): Promise<string | undefined> {
-    const key = this.key(hostId, kind)
-    if (await this.currentMode() === "vault") return this.requireUnlockedVault()[key]
-    this.assertKeychainAvailable()
-    const stored = await this.read(key)
-    return stored === undefined ? undefined : this.cipher.decrypt(stored)
+  public get(hostId: string, kind: CredentialKind): Promise<string | undefined> {
+    return this.run(async () => {
+      const key = this.key(hostId, kind)
+      if (await this.currentMode() === "vault") return this.requireUnlockedVault()[key]
+      this.assertKeychainAvailable()
+      const stored = await this.read(key)
+      return stored === undefined ? undefined : this.cipher.decrypt(stored)
+    })
   }
 
-  public async set(hostId: string, kind: CredentialKind, value: string): Promise<void> {
-    const key = this.key(hostId, kind)
-    if (await this.currentMode() === "vault") {
-      const current = this.requireUnlockedVault()
-      const next = { ...current, [key]: value }
-      await this.writeVault(next)
-      return
-    }
-    this.assertKeychainAvailable()
-    const encrypted = this.cipher.encrypt(value)
-    if (this.values instanceof Map) {
-      this.values.set(key, encrypted)
-    } else {
-      await this.values.set(key, encrypted)
-    }
+  public set(hostId: string, kind: CredentialKind, value: string): Promise<void> {
+    return this.run(async () => {
+      const key = this.key(hostId, kind)
+      if (await this.currentMode() === "vault") {
+        const current = this.requireUnlockedVault()
+        const next = { ...current, [key]: value }
+        await this.writeVault(next)
+        return
+      }
+      this.assertKeychainAvailable()
+      const encrypted = this.cipher.encrypt(value)
+      if (this.values instanceof Map) {
+        this.values.set(key, encrypted)
+      } else {
+        await this.values.set(key, encrypted)
+      }
+    })
   }
 
-  public async clear(hostId: string, kind: CredentialKind): Promise<void> {
-    const key = this.key(hostId, kind)
-    if (await this.currentMode() === "vault") {
-      const current = this.requireUnlockedVault()
-      const next = { ...current }
-      delete next[key]
-      await this.writeVault(next)
-      return
-    }
-    this.assertKeychainAvailable()
-    if (this.values instanceof Map) {
-      this.values.delete(key)
-    } else {
-      await this.values.delete(key)
-    }
+  public clear(hostId: string, kind: CredentialKind): Promise<void> {
+    return this.run(async () => {
+      const key = this.key(hostId, kind)
+      if (await this.currentMode() === "vault") {
+        const current = this.requireUnlockedVault()
+        const next = { ...current }
+        delete next[key]
+        await this.writeVault(next)
+        return
+      }
+      this.assertKeychainAvailable()
+      if (this.values instanceof Map) {
+        this.values.delete(key)
+      } else {
+        await this.values.delete(key)
+      }
+    })
   }
 
-  public async health(options: CredentialHealthOptions = {}): Promise<StorageHealth> {
-    if (await this.currentMode() === "vault" && this.vaultStore?.health) {
-      return this.vaultStore.health(options)
-    }
-    if (this.values instanceof Map || this.values.health === undefined) {
-      return { store: "credentials", status: "ok" }
-    }
-    return this.values.health(options)
+  public health(options: CredentialHealthOptions = {}): Promise<StorageHealth> {
+    return this.run(async () => {
+      if (await this.currentMode() === "vault" && this.vaultStore?.health) {
+        return this.vaultStore.health(options)
+      }
+      if (this.values instanceof Map || this.values.health === undefined) {
+        return { store: "credentials", status: "ok" }
+      }
+      return this.values.health(options)
+    })
   }
 
-  public async protectionStatus(): Promise<CredentialProtectionStatus> {
-    const mode = await this.currentMode()
-    return {
-      mode,
-      keychainAvailable: this.isKeychainAvailable(),
-      vaultState: mode === "vault" ? this.vaultValues ? "unlocked" : "locked" : "not-configured"
-    }
+  public protectionStatus(): Promise<CredentialProtectionStatus> {
+    return this.run(async () => {
+      const mode = await this.currentMode()
+      return {
+        mode,
+        keychainAvailable: this.isKeychainAvailable(),
+        vaultState: mode === "vault" ? this.vaultValues ? "unlocked" : "locked" : "not-configured"
+      }
+    })
   }
 
-  public async enableVault(password: string): Promise<void> {
-    if (!this.vaultStore) throw new Error("Credential Vault is unavailable")
-    if (await this.currentMode() === "vault") throw new Error("Credential Vault is already enabled")
-    const encryptedValues = await this.readEntries()
-    const values = this.decryptEntries(encryptedValues)
-    const encryptedVault = await createVault(password, values)
-    await this.vaultStore.set(encryptedVault)
-    this.mode = "vault"
-    this.vaultPassword = password
-    this.vaultValues = values
-    await this.replaceEntries({})
+  public enableVault(password: string): Promise<void> {
+    return this.run(async () => {
+      if (!this.vaultStore) throw new Error("Credential Vault is unavailable")
+      if (await this.currentMode() === "vault") throw new Error("Credential Vault is already enabled")
+      const encryptedValues = await this.readEntries()
+      const values = this.decryptEntries(encryptedValues)
+      const encryptedVault = await createVault(password, values)
+      await this.vaultStore.set(encryptedVault)
+      this.mode = "vault"
+      this.vaultPassword = password
+      this.vaultValues = values
+      await this.replaceEntries({})
+    })
   }
 
-  public async unlockVault(password: string): Promise<void> {
-    if (!this.vaultStore || await this.currentMode() !== "vault") throw new Error("Credential Vault is not enabled")
-    const encryptedVault = await this.vaultStore.get()
-    if (!encryptedVault) throw new Error("Credential Vault is not enabled")
-    this.vaultValues = await openVault(password, encryptedVault)
-    this.vaultPassword = password
+  public unlockVault(password: string): Promise<void> {
+    return this.run(async () => {
+      if (!this.vaultStore || await this.currentMode() !== "vault") throw new Error("Credential Vault is not enabled")
+      const encryptedVault = await this.vaultStore.get()
+      if (!encryptedVault) throw new Error("Credential Vault is not enabled")
+      this.vaultValues = await openVault(password, encryptedVault)
+      this.vaultPassword = password
+    })
   }
 
-  public lockVault(): void {
-    if (!this.vaultValues) return
-    this.vaultValues = undefined
-    this.vaultPassword = undefined
+  public lockVault(): Promise<void> {
+    return this.run(async () => {
+      if (!this.vaultValues) return
+      this.vaultValues = undefined
+      this.vaultPassword = undefined
+    })
   }
 
-  public async disableVault(): Promise<void> {
-    if (await this.currentMode() !== "vault") throw new Error("Credential Vault is not enabled")
-    this.assertKeychainAvailable()
-    const values = this.requireUnlockedVault()
-    const encryptedValues: CredentialValueMap = {}
-    for (const [key, value] of Object.entries(values)) encryptedValues[key] = this.cipher.encrypt(value)
-    await this.replaceEntries(encryptedValues)
-    await this.vaultStore?.clear()
-    this.mode = "keychain"
-    this.lockVault()
+  public disableVault(): Promise<void> {
+    return this.run(async () => {
+      if (await this.currentMode() !== "vault") throw new Error("Credential Vault is not enabled")
+      this.assertKeychainAvailable()
+      const values = this.requireUnlockedVault()
+      const encryptedValues: CredentialValueMap = {}
+      for (const [key, value] of Object.entries(values)) encryptedValues[key] = this.cipher.encrypt(value)
+      await this.replaceEntries(encryptedValues)
+      await this.vaultStore?.clear()
+      this.mode = "keychain"
+      this.vaultValues = undefined
+      this.vaultPassword = undefined
+    })
   }
 
-  public async exportValues(): Promise<CredentialValueMap> {
-    if (await this.currentMode() === "vault") return { ...this.requireUnlockedVault() }
-    this.assertKeychainAvailable()
-    return this.decryptEntries(await this.readEntries())
+  public exportValues(): Promise<CredentialValueMap> {
+    return this.run(async () => {
+      if (await this.currentMode() === "vault") return { ...this.requireUnlockedVault() }
+      this.assertKeychainAvailable()
+      return this.decryptEntries(await this.readEntries())
+    })
   }
 
-  public async assertWritable(): Promise<void> {
-    if (await this.currentMode() === "vault") {
-      this.requireUnlockedVault()
-      return
-    }
-    this.assertKeychainAvailable()
+  public assertWritable(): Promise<void> {
+    return this.run(async () => this.assertWritableUnlocked())
   }
 
-  public async importValues(values: CredentialValueMap): Promise<void> {
-    await this.assertWritable()
-    if (await this.currentMode() === "vault") {
-      await this.writeVault({ ...this.requireUnlockedVault(), ...values })
-      return
-    }
-    const current = await this.readEntries()
-    const encrypted: CredentialValueMap = { ...current }
-    for (const [key, value] of Object.entries(values)) encrypted[key] = this.cipher.encrypt(value)
-    await this.replaceEntries(encrypted)
+  public importValues(values: CredentialValueMap): Promise<CredentialImportResult> {
+    return this.run(async () => {
+      assertCredentialValueMap(values)
+      await this.assertWritableUnlocked()
+      if (await this.currentMode() === "vault") {
+        const current = this.requireUnlockedVault()
+        const result = splitImportedValues(current, values)
+        if (result.imported.length > 0) await this.writeVault({ ...current, ...result.values })
+        return { imported: result.imported, skippedExisting: result.skippedExisting }
+      }
+      const current = await this.readEntries()
+      const result = splitImportedValues(current, values)
+      if (result.imported.length === 0) return { imported: [], skippedExisting: result.skippedExisting }
+      const encrypted: CredentialValueMap = { ...current }
+      for (const [key, value] of Object.entries(result.values)) encrypted[key] = this.cipher.encrypt(value)
+      await this.replaceEntries(encrypted)
+      return { imported: result.imported, skippedExisting: result.skippedExisting }
+    })
   }
 
   private key(hostId: string, kind: CredentialKind): string {
     return `${hostId}:${kind}`
+  }
+
+  private run<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationQueue.then(operation)
+    this.operationQueue = result.then(() => undefined, () => undefined)
+    return result
   }
 
   private async read(key: string): Promise<string | undefined> {
@@ -189,6 +226,14 @@ export class CredentialVault {
     if (!this.vaultStore) return "keychain"
     this.mode = await this.vaultStore.get() ? "vault" : "keychain"
     return this.mode
+  }
+
+  private async assertWritableUnlocked(): Promise<void> {
+    if (await this.currentMode() === "vault") {
+      this.requireUnlockedVault()
+      return
+    }
+    this.assertKeychainAvailable()
   }
 
   private async readEntries(): Promise<CredentialValueMap> {
@@ -235,5 +280,32 @@ export class CredentialVault {
 
   private assertKeychainAvailable(): void {
     if (!this.isKeychainAvailable()) throw new Error("Platform credential encryption is unavailable")
+  }
+}
+
+function splitImportedValues(
+  current: CredentialValueMap,
+  incoming: CredentialValueMap
+): { values: CredentialValueMap; imported: string[]; skippedExisting: string[] } {
+  const values: CredentialValueMap = {}
+  const imported: string[] = []
+  const skippedExisting: string[] = []
+  for (const [key, value] of Object.entries(incoming)) {
+    if (Object.prototype.hasOwnProperty.call(current, key)) {
+      skippedExisting.push(key)
+      continue
+    }
+    values[key] = value
+    imported.push(key)
+  }
+  return { values, imported, skippedExisting }
+}
+
+function assertCredentialValueMap(values: CredentialValueMap): void {
+  if (typeof values !== "object" || values === null || Array.isArray(values)) throw new Error("Credential values are invalid")
+  for (const [key, value] of Object.entries(values)) {
+    if (key.length === 0 || key.length > 512 || key === "__proto__" || key === "constructor" || key === "prototype" || typeof value !== "string" || value.length > 2_000_000) {
+      throw new Error("Credential values are invalid")
+    }
   }
 }

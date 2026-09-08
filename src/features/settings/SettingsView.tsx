@@ -1,9 +1,11 @@
 import { useState, type ReactNode } from "react"
 import { AlertTriangle, CheckCircle2, Download } from "lucide-react"
 import type { AppSettings } from "../../app/types"
+import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import type { Locale } from "../../i18n"
 import { useI18n } from "../../i18n"
 import { ThemePreview } from "./ThemePreview"
+import { DataProtectionSettings } from "./DataProtectionSettings"
 
 interface SettingsViewProps {
   locale: Locale
@@ -14,6 +16,8 @@ interface SettingsViewProps {
   settings: AppSettings
   onUpdate(update: Partial<AppSettings>): void
   onExportDiagnostics(): Promise<{ canceled: boolean; path?: string }>
+  bridge?: Pick<RockerBridge, "configuration" | "credentials">
+  onConfigurationImported?(): void
 }
 
 type ExportStatus =
@@ -22,7 +26,7 @@ type ExportStatus =
   | { kind: "cancelled" }
   | { kind: "error" }
 
-export function SettingsView({ locale, disabled = false, terminalAppearanceDisabled = disabled, persistenceUnavailable = false, onLocaleChange, settings, onUpdate, onExportDiagnostics }: SettingsViewProps) {
+export function SettingsView({ locale, disabled = false, terminalAppearanceDisabled = disabled, persistenceUnavailable = false, onLocaleChange, settings, onUpdate, onExportDiagnostics, bridge, onConfigurationImported }: SettingsViewProps) {
   const { t } = useI18n()
   const [exporting, setExporting] = useState(false)
   const [exportStatus, setExportStatus] = useState<ExportStatus>({ kind: "idle" })
@@ -73,6 +77,7 @@ export function SettingsView({ locale, disabled = false, terminalAppearanceDisab
             {exportStatus.kind === "error" && <span className="settings-action-status settings-action-status-error" role="status"><AlertTriangle size={14} aria-hidden="true" />{t("settings.diagnosticsExportError")}</span>}
           </div>
         </SettingRow>
+        {bridge && <DataProtectionSettings bridge={bridge} onImported={onConfigurationImported} />}
       </div>
     </section>
   )

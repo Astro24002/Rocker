@@ -9,10 +9,29 @@ import type {
 import type { DiscoveredPort, ForwardingInfo, ForwardingSpec } from "../ports/types"
 import type { TerminalSessionEvent, TerminalSessionInfo } from "../ssh/types"
 import type { StorageHealth } from "../storage/storage-result"
+import type { ConflictResolution, ImportPreview, ImportResult } from "../storage/config-bundle"
+import type { CredentialProtectionStatus } from "../storage/credentials"
 
 export interface DiagnosticsExportResult {
   canceled: boolean
   path?: string
+}
+
+export interface ConfigurationExportResult {
+  canceled: boolean
+  path?: string
+}
+
+export interface ConfigurationImportChooseResult {
+  canceled: boolean
+  importId?: string
+  preview?: ImportPreview
+}
+
+export interface ConfigurationImportRequest {
+  importId: string
+  password?: string
+  resolution: ConflictResolution
 }
 
 export type BootstrapHostProfile = Omit<HostProfile, "identityFile"> & {
@@ -122,6 +141,20 @@ export interface RockerBridge {
   diagnostics: {
     export(): Promise<DiagnosticsExportResult>
   }
+  configuration: {
+    exportTemplate(): Promise<ConfigurationExportResult>
+    exportBundle(password: string): Promise<ConfigurationExportResult>
+    chooseImport(): Promise<ConfigurationImportChooseResult>
+    previewImport(importId: string, password?: string): Promise<ImportPreview>
+    applyImport(request: ConfigurationImportRequest): Promise<ImportResult>
+  }
+  credentials: {
+    protectionStatus(): Promise<CredentialProtectionStatus>
+    enableVault(password: string): Promise<CredentialProtectionStatus>
+    unlockVault(password: string): Promise<CredentialProtectionStatus>
+    lockVault(): Promise<CredentialProtectionStatus>
+    disableVault(): Promise<CredentialProtectionStatus>
+  }
   events: {
     onSessionEvent(listener: (event: TerminalSessionEvent) => void): () => void
     onSessionLaunch(listener: (request: SessionLaunchRequest) => void): () => void
@@ -159,6 +192,16 @@ export const ipcChannels = {
   settingsGet: "rocker:settings:get",
   settingsUpdate: "rocker:settings:update",
   diagnosticsExport: "rocker:diagnostics:export",
+  configExportTemplate: "rocker:config:export-template",
+  configExportBundle: "rocker:config:export-bundle",
+  configImportChoose: "rocker:config:import-choose",
+  configImportPreview: "rocker:config:import-preview",
+  configImportApply: "rocker:config:import-apply",
+  credentialProtectionStatus: "rocker:credentials:protection-status",
+  credentialVaultEnable: "rocker:credentials:vault-enable",
+  credentialVaultUnlock: "rocker:credentials:vault-unlock",
+  credentialVaultLock: "rocker:credentials:vault-lock",
+  credentialVaultDisable: "rocker:credentials:vault-disable",
   windowMinimize: "rocker:window:minimize",
   windowToggleMaximize: "rocker:window:toggle-maximize",
   windowClose: "rocker:window:close",

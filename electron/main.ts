@@ -8,10 +8,13 @@ import { ForwardingManager, type ForwardingEvent } from "./ports/forwarding-mana
 import { PortService } from "./ports/port-service"
 import { CredentialVault } from "./storage/credentials"
 import { JsonCredentialValueStore, JsonVaultStore } from "./storage/credential-store"
+import { ConfigBundleService, credentialsForHosts, hostKeysForHosts } from "./storage/config-bundle"
+import { ConfigImportJournalStore } from "./storage/config-import-journal"
 import { HistoryStore } from "./storage/history-store"
 import { createHostStore } from "./storage/host-store"
 import { createSafeStorageCipher } from "./storage/safe-storage"
 import { defaultSettings, SettingsStore } from "./storage/settings-store"
+import { SerializedOperationQueue } from "./storage/operation-queue"
 import type { AppSettings } from "./storage/types"
 import { WorkspaceSnapshotStore } from "./storage/workspace-store"
 import { SshConnectionManager, type ConnectionEvent, type HostKeyPromptRequest } from "./ssh/connection-manager"
@@ -67,6 +70,7 @@ function createNativeWindow(options: WorkspaceWindowOptions = {}): BrowserWindow
 async function startApplication(): Promise<void> {
   const userDataPath = app.getPath("userData")
   const diagnostics = new DiagnosticLogger(userDataPath)
+  const mutations = new SerializedOperationQueue()
   const hosts = createHostStore(userDataPath)
   const credentials = new CredentialVault(
     new JsonCredentialValueStore(join(userDataPath, "credentials.json")),
@@ -74,9 +78,20 @@ async function startApplication(): Promise<void> {
     new JsonVaultStore(join(userDataPath, "vault.json"))
   )
   const settings = new SettingsStore(join(userDataPath, "settings.json"))
+  const hostKeys = new JsonHostKeyStore(join(userDataPath, "host-keys.json"))
+  const importJournal = new ConfigImportJournalStore(join(userDataPath, "config-import.json"))
+  await importJournal.recover({
+    listHosts: () => hosts.list(),
+    saveHost: (profile) => hosts.save(profile),
+    removeHost: (id) => hosts.remove(id),
+    getSettings: () => settings.get(),
+    updateSettings: (nextSettings) => settings.update(nextSettings).then(() => undefined),
+    getHostKey: (host, port) => hostKeys.get(host, port),
+    replaceHostKey: (host, port, expected, replacement) => hostKeys.replace(host, port, expected, replacement),
+    removeHostKey: (host, port, expected) => hostKeys.remove(host, port, expected)
+  })
   const initialSettingsResult = await loadInitialSettings(settings)
   const initialSettings = initialSettingsResult.status === "blocked" ? defaultSettings : initialSettingsResult.value
-  const hostKeys = new JsonHostKeyStore(join(userDataPath, "host-keys.json"))
   const snapshots = new WorkspaceSnapshotStore(join(userDataPath, "workspace.json"))
   const initialWorkspaceResult = await loadInitialWorkspace(snapshots)
   let windows: WorkspaceWindowManager
@@ -93,6 +108,23 @@ async function startApplication(): Promise<void> {
   })
   const forwarding = new ForwardingManager(connections, {
     onEvent: (event) => recordForwardingDiagnostic(diagnostics, event)
+  })
+  const configuration = new ConfigBundleService({
+    listHosts: () => hosts.list(),
+    saveHost: (profile) => hosts.save(profile),
+    removeHost: (id) => hosts.remove(id),
+    getSettings: () => settings.get(),
+    updateSettings: async (nextSettings) => {
+      const applied = await settings.update(nextSettings)
+      connections.updateRetryPolicy(applied)
+    },
+    getHostKey: (host, port) => hostKeys.get(host, port),
+    trustHostKey: (host, port, fingerprint) => hostKeys.trust(host, port, fingerprint),
+    replaceHostKey: (host, port, expected, replacement) => hostKeys.replace(host, port, expected, replacement),
+    removeHostKey: (host, port, expected) => hostKeys.remove(host, port, expected),
+    assertCredentialsWritable: () => credentials.assertWritable(),
+    importCredentials: (values) => credentials.importValues(values),
+    journal: importJournal
   })
   windows = new WorkspaceWindowManager({
     snapshots,
@@ -122,6 +154,24 @@ async function startApplication(): Promise<void> {
     history: new HistoryStore(join(userDataPath, "history.json")),
     settings,
     diagnostics,
+    mutations,
+    configuration,
+    createConfigurationExportSnapshot: (includeCredentials) => mutations.run(async () => {
+      const [profiles, currentSettings] = await Promise.all([hosts.list(), settings.get()])
+      if (!includeCredentials) {
+        return { hosts: profiles, settings: currentSettings }
+      }
+      const [hostKeyEntries, credentialValues] = await Promise.all([
+        hostKeys.entries(),
+        credentials.exportValues()
+      ])
+      return {
+        hosts: profiles,
+        settings: currentSettings,
+        hostKeys: hostKeysForHosts(profiles, hostKeyEntries),
+        credentials: credentialsForHosts(profiles, credentialValues)
+      }
+    }),
     diagnosticsAppVersion: app.getVersion(),
     diagnosticsBuildChannel: app.isPackaged ? "release" : "development",
     diagnosticsRuntimeMode: app.isPackaged ? "packaged" : "development",

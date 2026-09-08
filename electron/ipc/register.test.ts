@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -34,6 +34,7 @@ import { registerIpcHandlers, type IpcDependencies } from "./register"
 import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import { HostStore } from "../storage/host-store"
 import type { HostProfile } from "../storage/types"
+import type { AppSettings } from "../storage/types"
 
 const sessionId = "11111111-1111-4111-8111-111111111111"
 const connectionId = "22222222-2222-4222-8222-222222222222"
@@ -187,6 +188,116 @@ describe("registerIpcHandlers", () => {
       defaultPath: expect.stringMatching(/^rocker-diagnostics-\d{8}-\d{6}\.json$/)
     }))
     expect(harness.diagnostics.snapshot).not.toHaveBeenCalled()
+  })
+
+  it("exports a non-sensitive configuration template without loading credentials", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-config-export-"))
+    try {
+      const output = join(directory, "rocker-config.json")
+      const harness = createHarness()
+      harness.createConfigurationExportSnapshot.mockResolvedValue(configurationSnapshot())
+      electron.dialog.showSaveDialog.mockResolvedValue({ canceled: false, filePath: output })
+      registerIpcHandlers(harness.dependencies)
+
+      await expect(invokeFrom(21, ipcChannels.configExportTemplate)).resolves.toEqual({ canceled: false, path: output })
+
+      expect(harness.createConfigurationExportSnapshot).toHaveBeenCalledWith(false)
+      const serialized = await readFile(output, "utf8")
+      expect(serialized).not.toContain("password-value")
+      expect(JSON.parse(serialized)).toMatchObject({ format: "rocker-config", containsSecrets: false })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it("exports an encrypted migration bundle without plaintext credentials", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-config-export-"))
+    try {
+      const output = join(directory, "rocker-config.bundle")
+      const harness = createHarness()
+      harness.createConfigurationExportSnapshot.mockResolvedValue(configurationSnapshot())
+      electron.dialog.showSaveDialog.mockResolvedValue({ canceled: false, filePath: output })
+      registerIpcHandlers(harness.dependencies)
+
+      await expect(invokeFrom(21, ipcChannels.configExportBundle, "migration password"))
+        .resolves.toEqual({ canceled: false, path: output })
+
+      expect(harness.createConfigurationExportSnapshot).toHaveBeenCalledWith(true)
+      expect(await readFile(output, "utf8")).not.toContain("password-value")
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it("keeps selected import bytes in Main and binds the ticket to its owner", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-config-import-"))
+    try {
+      const input = join(directory, "rocker-config.json")
+      await writeFile(input, '{"format":"rocker-config","version":1,"containsSecrets":false,"createdAt":"2026-09-08T00:00:00.000Z","hosts":[],"settings":{}}', "utf8")
+      const harness = createHarness()
+      harness.configuration.preview.mockResolvedValue({ encrypted: false, requiresPassword: false })
+      harness.configuration.import.mockResolvedValue({ importedHosts: 0 })
+      electron.dialog.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [input] })
+      registerIpcHandlers(harness.dependencies)
+
+      const selected = await invokeFrom(21, ipcChannels.configImportChoose) as { canceled: boolean; importId?: string }
+      expect(selected).toMatchObject({ canceled: false })
+      expect(selected.importId).toEqual(expect.any(String))
+      expect(harness.configuration.preview).toHaveBeenCalledWith(expect.any(Uint8Array), undefined)
+
+      await expect(invokeFrom(22, ipcChannels.configImportApply, { importId: selected.importId, resolution: {} }))
+        .rejects.toThrow("Import is owned by another window")
+      await expect(invokeFrom(21, ipcChannels.configImportApply, { importId: selected.importId, resolution: {} }))
+        .resolves.toEqual({ importedHosts: 0 })
+      expect(harness.configuration.import).toHaveBeenCalledWith(expect.any(Uint8Array), undefined, {})
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it("does not apply the same import ticket concurrently", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-config-import-"))
+    try {
+      const input = join(directory, "rocker-config.json")
+      await writeFile(input, '{"format":"rocker-config","version":1,"containsSecrets":false,"createdAt":"2026-09-08T00:00:00.000Z","hosts":[],"settings":{}}', "utf8")
+      const harness = createHarness()
+      let resolveImport!: (value: { importedHosts: number }) => void
+      harness.configuration.preview.mockResolvedValue({ encrypted: false, requiresPassword: false })
+      harness.configuration.import.mockReturnValue(new Promise((resolve) => { resolveImport = resolve }))
+      electron.dialog.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [input] })
+      registerIpcHandlers(harness.dependencies)
+      const selected = await invokeFrom(21, ipcChannels.configImportChoose) as { importId: string }
+
+      const first = invokeFrom(21, ipcChannels.configImportApply, { importId: selected.importId, resolution: {} })
+      await flush()
+      await expect(invokeFrom(21, ipcChannels.configImportApply, { importId: selected.importId, resolution: {} }))
+        .rejects.toThrow("Configuration import is already running")
+      resolveImport({ importedHosts: 0 })
+      await expect(first).resolves.toEqual({ importedHosts: 0 })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it("exposes sanitized credential protection state and validates Vault passwords", async () => {
+    const harness = createHarness()
+    harness.credentials.protectionStatus.mockResolvedValue({ mode: "keychain", keychainAvailable: true, vaultState: "not-configured" })
+    harness.credentials.enableVault.mockResolvedValue(undefined)
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.credentialProtectionStatus)).resolves.toEqual({
+      mode: "keychain",
+      keychainAvailable: true,
+      vaultState: "not-configured"
+    })
+    await expect(invokeFrom(21, ipcChannels.credentialVaultEnable, "vault password")).resolves.toEqual({
+      mode: "keychain",
+      keychainAvailable: true,
+      vaultState: "not-configured"
+    })
+    expect(harness.credentials.enableVault).toHaveBeenCalledWith("vault password")
+    await expect(invokeFrom(21, ipcChannels.credentialVaultEnable, "")).rejects.toThrow("Credential Vault password is invalid")
+    expect(JSON.stringify(harness.credentials.protectionStatus.mock.results)).not.toContain("vault password")
   })
 
   it("writes a versioned diagnostics export selected by the owning window", async () => {
@@ -483,9 +594,22 @@ function createHarness() {
   }
   const settings = { get: vi.fn(), update: vi.fn(), loadWithStatus: vi.fn() }
   const history = { add: vi.fn(), list: vi.fn(), clear: vi.fn(), loadWithStatus: vi.fn() }
-  const credentials = { get: vi.fn(), set: vi.fn(), clear: vi.fn(), health: vi.fn() }
+  const credentials = {
+    get: vi.fn(),
+    set: vi.fn(),
+    clear: vi.fn(),
+    health: vi.fn(),
+    protectionStatus: vi.fn(),
+    enableVault: vi.fn(),
+    unlockVault: vi.fn(),
+    lockVault: vi.fn(),
+    disableVault: vi.fn()
+  }
   const hostKeys = { health: vi.fn() }
   const diagnostics = { snapshot: vi.fn(() => [{ at: "2026-08-28T12:00:00.000Z", category: "session", action: "connected" }]) }
+  const mutations = { run: vi.fn(async <T>(operation: () => Promise<T> | T) => operation()) }
+  const configuration = { preview: vi.fn(), import: vi.fn() }
+  const createConfigurationExportSnapshot = vi.fn()
   const hosts = { list: vi.fn(), save: vi.fn(), saveRedacted: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn(), loadWithStatus: vi.fn() }
   const currentOwnerForWebContents = vi.fn((id: number) => id === owner21.webContentsId ? owner21 : id === owner22.webContentsId ? owner22 : undefined)
   const windowForWebContents = vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined)
@@ -517,6 +641,9 @@ function createHarness() {
     history,
     settings,
     diagnostics,
+    mutations,
+    configuration,
+    createConfigurationExportSnapshot,
     diagnosticsAppVersion: "0.3.1",
     diagnosticsBuildChannel: "release",
     diagnosticsRuntimeMode: "packaged",
@@ -537,11 +664,52 @@ function createHarness() {
     credentials,
     hostKeys,
     diagnostics,
+    mutations,
+    configuration,
+    createConfigurationExportSnapshot,
     ports: dependencies.ports,
     emitSession(event: unknown): void {
       if (!sessionListener) throw new Error("Session listener was not registered")
       sessionListener(event)
     }
+  }
+}
+
+function configurationSnapshot() {
+  return {
+    createdAt: "2026-09-08T00:00:00.000Z",
+    hosts: [{
+      id: "host-a",
+      name: "Host A",
+      host: "server.example",
+      port: 22,
+      username: "root",
+      authMethod: "password",
+      favorite: false,
+      notes: ""
+    }],
+    settings: settingsSnapshot(),
+    hostKeys: [],
+    credentials: [{ hostId: "host-a", kind: "password", value: "password-value" }]
+  }
+}
+
+function settingsSnapshot(): AppSettings {
+  return {
+    locale: "en",
+    sidebarWidth: 220,
+    terminalFont: "JetBrains Mono",
+    terminalFontSize: 13,
+    scrollback: 10000,
+    cursorStyle: "bar",
+    cursorBlink: true,
+    terminalBell: true,
+    connectionTimeout: 15,
+    autoReconnect: true,
+    reconnectMode: "limited",
+    restorePreviousWorkspace: true,
+    confirmMultilinePaste: true,
+    bindAddress: "127.0.0.1"
   }
 }
 

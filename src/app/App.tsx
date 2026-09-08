@@ -634,6 +634,34 @@ function Workspace() {
     }, 300)
   }
 
+  const refreshConfigurationAfterImport = useCallback((): void => {
+    if (settingsPersistTimer.current !== undefined) {
+      window.clearTimeout(settingsPersistTimer.current)
+      settingsPersistTimer.current = undefined
+    }
+    pendingAppearanceUpdate.current = {}
+    settingsWriteQueue.current = []
+    const importMutationVersion = ++settingsMutationVersion.current
+    for (const key of settingsKeys) settingsFieldVersions.current[key] = importMutationVersion
+    dirtySettingsKeys.current.clear()
+    latestSettingsStatusVersion.current += 1
+
+    void Promise.all([bridge.hosts.list(), bridge.settings.get()]).then(([importedHosts, importedSettings]) => {
+      if (!bootstrapMounted.current) return
+      settingsRef.current = importedSettings
+      setHosts(importedHosts)
+      setSettings(importedSettings)
+      setLocale(importedSettings.locale)
+      localStorage.setItem("rocker.sidebarWidth", String(normalizeSidebarWidth(importedSettings.sidebarWidth)))
+      setSidebarWidth(normalizeSidebarWidth(importedSettings.sidebarWidth))
+      const preferences = terminalPreferencesForSettings(importedSettings)
+      for (const controller of controllers.current.values()) controller.applyPreferences(preferences)
+      setSettingsPersistenceFailed(false)
+    }).catch(() => {
+      if (bootstrapMounted.current) setSettingsPersistenceFailed(true)
+    })
+  }, [bridge, setLocale])
+
   const connectHost = (host: HostProfile): void => {
     if (!capabilities.sshAvailable) return
     queueSessionOpen(host, host.name)
@@ -1011,7 +1039,7 @@ function Workspace() {
             </div>
           )}
           {activeNav === "settings" ? (
-            <SettingsView locale={locale} settings={settings} disabled={!settingsMutationsAvailable} terminalAppearanceDisabled={false} persistenceUnavailable={!settingsMutationsAvailable || settingsPersistenceFailed} onLocaleChange={(next) => {
+            <SettingsView locale={locale} settings={settings} bridge={hasDataProtectionBridge(bridge) ? bridge : undefined} onConfigurationImported={refreshConfigurationAfterImport} disabled={!settingsMutationsAvailable} terminalAppearanceDisabled={false} persistenceUnavailable={!settingsMutationsAvailable || settingsPersistenceFailed} onLocaleChange={(next) => {
               if (!settingsMutationsAvailable) return
               setLocale(next)
               updateSettings({ locale: next })
@@ -1137,6 +1165,13 @@ function terminalPreferencesForSettings(settings: AppSettings): TerminalPreferen
     cursorBlink: settings.cursorBlink,
     terminalBell: settings.terminalBell
   }
+}
+
+function hasDataProtectionBridge(bridge: { configuration?: unknown; credentials?: unknown }): bridge is typeof bridge & {
+  configuration: NonNullable<typeof bridge.configuration>
+  credentials: NonNullable<typeof bridge.credentials>
+} {
+  return bridge.configuration !== undefined && bridge.credentials !== undefined
 }
 
 function clampTerminalFontSize(value: number): number {
