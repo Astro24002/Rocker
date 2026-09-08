@@ -83,10 +83,10 @@ const APPROVED_DEV_DEPENDENCY_KEYS = [
 const sortedKeys = (dependencies: DependencyMap | undefined) => Object.keys(dependencies ?? {}).sort()
 
 describe("desktop packaging metadata", () => {
-  it("prepares the 0.4.2 release version in package and lock metadata", () => {
-    expect(packageJson.version).toBe("0.4.2")
-    expect(lockfile.version).toBe("0.4.2")
-    expect(lockfile.packages[""].version).toBe("0.4.2")
+  it("keeps package and lock metadata on the same release version", () => {
+    expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(lockfile.version).toBe(packageJson.version)
+    expect(lockfile.packages[""].version).toBe(packageJson.version)
   })
 
   it("targets only Rocker for Windows and macOS", () => {
