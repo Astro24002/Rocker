@@ -104,6 +104,40 @@ describe("JsonStore", () => {
     expect(JSON.parse(await readFile(`${filePath}.bak`, "utf8"))).toEqual({ count: 13 })
   })
 
+  it("does not overwrite an unquarantined corrupt primary after recovery", async () => {
+    const filePath = await temporaryFilePath()
+    await writeFile(filePath, "{primary is corrupt", "utf8")
+    await writeFile(`${filePath}.bak`, JSON.stringify({ count: 17 }), "utf8")
+    renameMock.mockImplementation(async (source, destination) => {
+      if (source === filePath && typeof destination === "string" && destination.endsWith(".corrupt")) {
+        throw withCode("EACCES")
+      }
+      return defaultRename(source, destination)
+    })
+    const store = createCounterStore(filePath)
+
+    await expect(store.load()).resolves.toMatchObject({ status: "recovered", value: { count: 17 } })
+    await expect(store.update((current) => ({ count: current.count + 1 }))).rejects.toBeInstanceOf(StorageBlockedError)
+    expect(await readFile(filePath, "utf8")).toBe("{primary is corrupt")
+  })
+
+  it("keeps the backup readable when primary restoration fails after quarantine", async () => {
+    const filePath = await temporaryFilePath()
+    await writeFile(filePath, "{primary is corrupt", "utf8")
+    await writeFile(`${filePath}.bak`, JSON.stringify({ count: 19 }), "utf8")
+    renameMock.mockImplementation(async (source, destination) => {
+      if (destination === filePath && typeof source === "string" && source.includes(".tmp.")) {
+        throw withCode("EIO")
+      }
+      return defaultRename(source, destination)
+    })
+    const store = createCounterStore(filePath)
+
+    await expect(store.load()).resolves.toMatchObject({ status: "recovered", value: { count: 19 } })
+    expect(await findQuarantine(filePath)).toBeTruthy()
+    expect(JSON.parse(await readFile(`${filePath}.bak`, "utf8"))).toEqual({ count: 19 })
+  })
+
   it("quarantines a corrupt primary and defaults an unprotected store", async () => {
     const filePath = await temporaryFilePath()
     const corruptContents = "{not valid json"

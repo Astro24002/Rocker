@@ -45,6 +45,7 @@ export class JsonStore<T> {
   private readonly clock: () => Date
   private readonly nextOperationId: () => string
   private latchedHealth?: StorageHealth
+  private readOnlyRecovery = false
 
   public constructor(options: JsonStoreOptions<T>)
   public constructor(filePath: string, defaultValue?: T)
@@ -87,6 +88,7 @@ export class JsonStore<T> {
     return this.enqueue(async () => {
       const loaded = await this.loadUnlocked(false)
       if (loaded.status === "blocked") throw new StorageBlockedError(loaded.issue)
+      if (this.readOnlyRecovery) throw new StorageBlockedError(this.issue("permission"))
       const current = cloneValue(loaded.value)
       let next: T
       try {
@@ -104,6 +106,7 @@ export class JsonStore<T> {
     return this.enqueue(async () => {
       const loaded = await this.loadUnlocked(false)
       if (loaded.status === "blocked") throw new StorageBlockedError(loaded.issue)
+      if (this.readOnlyRecovery) throw new StorageBlockedError(this.issue("permission"))
       const prepared = this.prepareValue(value)
       await this.writePrepared(prepared, loaded)
     })
@@ -120,7 +123,10 @@ export class JsonStore<T> {
       message: this.latchedHealth.message
     } satisfies StorageIssue : undefined
     const primary = await this.readDocument(this.filePath)
-    if (primary.kind === "valid") return this.finishLoad({ status: "ok", value: primary.value }, consumeHealth)
+    if (primary.kind === "valid") {
+      this.readOnlyRecovery = false
+      return this.finishLoad({ status: "ok", value: primary.value }, consumeHealth)
+    }
     if (primary.kind === "error") {
       return this.block(blockedHealth ?? this.issueFromError(primary.error, "unavailable"))
     }
@@ -128,9 +134,8 @@ export class JsonStore<T> {
     const backup = await this.readDocument(this.backupPath)
     if (backup.kind === "valid") {
       const quarantineIssue = primary.kind === "corrupt" ? await this.quarantinePrimary() : undefined
-      if (!quarantineIssue) {
-        await this.restorePrimary(backup.value).catch(() => undefined)
-      }
+      this.readOnlyRecovery = quarantineIssue !== undefined
+      if (!quarantineIssue) await this.restorePrimary(backup.value).catch(() => undefined)
       return this.finishLoad({ status: "recovered", value: backup.value, source: "backup" }, consumeHealth)
     }
 
