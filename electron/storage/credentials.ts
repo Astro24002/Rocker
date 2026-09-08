@@ -5,6 +5,8 @@ export interface CredentialHealthOptions {
   consumeHealth?: boolean
 }
 
+export type CredentialValueMap = Record<string, string>
+
 export interface CredentialCipher {
   encrypt(value: string): string
   decrypt(value: string): string
