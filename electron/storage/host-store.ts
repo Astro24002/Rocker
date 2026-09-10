@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { JsonStore } from "./json-store"
 import { StorageBlockedError, type LoadResult } from "./storage-result"
-import type { HostProfile, StoredHostDocument } from "./types"
+import type { HostCharset, HostPlatform, HostProfile, HostThemeColor, StoredHostDocument } from "./types"
 
 const defaultDocument: StoredHostDocument = { hosts: [] }
 
@@ -26,7 +26,7 @@ export class HostStore {
 
   public async save(profile: HostProfile): Promise<void> {
     const normalized = normalizeHostProfile(profile)
-    if (!normalized) return
+    if (!normalized) throw new Error("Host profile is invalid")
     await this.store.update((document) => {
       const next = normalizeHostDocument(document) ?? structuredClone(defaultDocument)
       const index = next.hosts.findIndex((host) => host.id === normalized.id)
@@ -48,12 +48,55 @@ export class HostStore {
         candidate = { ...profile, identityFile: current.identityFile }
       }
       const normalized = normalizeHostProfile(candidate)
-      if (!normalized) return next
+      if (!normalized) throw new Error("Host profile is invalid")
       const index = next.hosts.findIndex((host) => host.id === normalized.id)
       if (index === -1) next.hosts.push(normalized)
       else next.hosts[index] = normalized
       return next
     })
+  }
+
+  public async duplicate(id: string): Promise<HostProfile> {
+    let duplicate: HostProfile | undefined
+    await this.store.update((document) => {
+      const next = normalizeHostDocument(document) ?? structuredClone(defaultDocument)
+      const source = next.hosts.find((host) => host.id === id)
+      if (!source) throw new Error("Host profile was not found")
+      duplicate = {
+        id: randomUUID(),
+        name: `${source.name} copy`,
+        host: source.host,
+        port: source.port,
+        username: source.username,
+        authMethod: "agent",
+        ...(source.platform ? { platform: source.platform } : {}),
+        ...(source.group ? { group: source.group } : {}),
+        charset: source.charset ?? "utf-8",
+        themeColor: source.themeColor ?? "rocker",
+        publicKeyEnabled: false,
+        snippetsEnabled: false,
+        favorite: false,
+        notes: source.notes
+      }
+      next.hosts.push(duplicate)
+      return next
+    })
+    if (!duplicate) throw new Error("Host profile duplication failed")
+    return { ...duplicate }
+  }
+
+  public async setFavorite(id: string, favorite: boolean): Promise<HostProfile> {
+    let updated: HostProfile | undefined
+    await this.store.update((document) => {
+      const next = normalizeHostDocument(document) ?? structuredClone(defaultDocument)
+      const index = next.hosts.findIndex((host) => host.id === id)
+      if (index === -1) throw new Error("Host profile was not found")
+      updated = { ...next.hosts[index], favorite }
+      next.hosts[index] = updated
+      return next
+    })
+    if (!updated) throw new Error("Host favorite update failed")
+    return { ...updated }
   }
 
   public async remove(id: string): Promise<void> {
@@ -107,8 +150,12 @@ export function normalizeHostProfile(value: unknown): HostProfile | undefined {
   if (!isPort(value.port) || !isString(value.username, 256) || !isString(value.notes, 10_000)) return undefined
   if (value.authMethod !== "password" && value.authMethod !== "privateKey" && value.authMethod !== "agent") return undefined
   if (typeof value.favorite !== "boolean") return undefined
-  if (value.identityFile !== undefined && !isBoundedString(value.identityFile, 4_096)) return undefined
-  if (value.group !== undefined && !isBoundedString(value.group, 256)) return undefined
+  if (value.identityFile !== undefined && !isString(value.identityFile, 4_096)) return undefined
+  if (value.group !== undefined && !isString(value.group, 256)) return undefined
+  const identityFile = typeof value.identityFile === "string" && value.identityFile.trim() ? value.identityFile : undefined
+  const group = typeof value.group === "string" ? value.group.trim() : undefined
+  const publicKeyEnabled = value.authMethod === "privateKey"
+  const snippetsEnabled = value.snippetsEnabled === true && isBoundedString(value.snippetCollection, 256)
   return {
     id: value.id,
     name: value.name,
@@ -116,11 +163,29 @@ export function normalizeHostProfile(value: unknown): HostProfile | undefined {
     port: value.port,
     username: value.username,
     authMethod: value.authMethod,
-    ...(value.identityFile === undefined ? {} : { identityFile: value.identityFile }),
-    ...(value.group === undefined ? {} : { group: value.group }),
+    ...(isHostPlatform(value.platform) ? { platform: value.platform } : {}),
+    ...(identityFile ? { identityFile } : {}),
+    ...(group ? { group } : {}),
+    publicKeyEnabled,
+    snippetsEnabled,
+    ...(snippetsEnabled ? { snippetCollection: value.snippetCollection as string } : {}),
+    charset: isHostCharset(value.charset) ? value.charset : "utf-8",
+    themeColor: isHostThemeColor(value.themeColor) ? value.themeColor : "rocker",
     favorite: value.favorite,
     notes: value.notes
   }
+}
+
+function isHostPlatform(value: unknown): value is HostPlatform {
+  return value === "ubuntu" || value === "debian" || value === "linux"
+}
+
+function isHostCharset(value: unknown): value is HostCharset {
+  return value === "utf-8" || value === "gb18030" || value === "iso-8859-1"
+}
+
+function isHostThemeColor(value: unknown): value is HostThemeColor {
+  return value === "rocker" || value === "amber" || value === "ocean" || value === "slate"
 }
 
 function mapLoadResult<T, U>(result: LoadResult<T>, map: (value: T) => U): LoadResult<U> {
