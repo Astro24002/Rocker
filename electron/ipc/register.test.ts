@@ -415,6 +415,142 @@ describe("registerIpcHandlers", () => {
     expect(harness.hosts.save).not.toHaveBeenCalled()
   })
 
+  it("duplicates a host through the serialized mutation queue", async () => {
+    const harness = createHarness()
+    const duplicate = { id: "host-copy", name: "Host A copy", authMethod: "agent", favorite: false, notes: "" }
+    harness.hosts.duplicate.mockResolvedValue(duplicate)
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostsDuplicate, "host-a")).resolves.toEqual(duplicate)
+    expect(harness.mutations.run).toHaveBeenCalled()
+    expect(harness.hosts.duplicate).toHaveBeenCalledWith("host-a")
+  })
+
+  it("rejects non-boolean favorite values before storage", async () => {
+    const harness = createHarness()
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostsSetFavorite, "host-a", "yes"))
+      .rejects.toThrow("Invalid favorite setting")
+    expect(harness.hosts.setFavorite).not.toHaveBeenCalled()
+  })
+
+  it("updates a host favorite through the serialized mutation queue", async () => {
+    const harness = createHarness()
+    harness.hosts.setFavorite.mockResolvedValue({ id: "host-a", name: "Host A", favorite: true })
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostsSetFavorite, "host-a", true)).resolves.toMatchObject({ favorite: true })
+    expect(harness.mutations.run).toHaveBeenCalled()
+    expect(harness.hosts.setFavorite).toHaveBeenCalledWith("host-a", true)
+  })
+
+  it("accepts valid optional Host Profile editor metadata", async () => {
+    const harness = createHarness()
+    registerIpcHandlers(harness.dependencies)
+
+    await invokeFrom(21, ipcChannels.hostsSave, {
+      profile: {
+        id: "host-a",
+        name: "Host A",
+        host: "127.0.0.1",
+        port: 22,
+        username: "rock",
+        authMethod: "password",
+        publicKeyEnabled: false,
+        snippetsEnabled: true,
+        snippetCollection: "Deployment",
+        charset: "gb18030",
+        themeColor: "amber",
+        favorite: false,
+        notes: ""
+      }
+    })
+
+    expect(harness.hosts.save).toHaveBeenCalledWith(expect.objectContaining({
+      publicKeyEnabled: false,
+      snippetsEnabled: true,
+      snippetCollection: "Deployment",
+      charset: "gb18030",
+      themeColor: "amber"
+    }))
+  })
+
+  it("accepts empty optional values while their capabilities are disabled", async () => {
+    const harness = createHarness()
+    registerIpcHandlers(harness.dependencies)
+
+    await invokeFrom(21, ipcChannels.hostsSave, {
+      profile: {
+        id: "host-a",
+        name: "Host A",
+        host: "127.0.0.1",
+        port: 22,
+        username: "rock",
+        authMethod: "password",
+        publicKeyEnabled: false,
+        snippetsEnabled: false,
+        snippetCollection: "",
+        favorite: false,
+        notes: ""
+      }
+    })
+
+    expect(harness.hosts.save).toHaveBeenCalledWith(expect.objectContaining({
+      publicKeyEnabled: false,
+      snippetsEnabled: false
+    }))
+  })
+
+  it("rejects enabled optional capabilities without their required values", async () => {
+    const harness = createHarness()
+    registerIpcHandlers(harness.dependencies)
+
+    const base = {
+      id: "host-a",
+      name: "Host A",
+      host: "127.0.0.1",
+      port: 22,
+      username: "rock",
+      authMethod: "password" as const,
+      favorite: false,
+      notes: ""
+    }
+
+    await expect(invokeFrom(21, ipcChannels.hostsSave, {
+      profile: { ...base, snippetsEnabled: true }
+    })).rejects.toThrow("Snippet collection is required")
+    await expect(invokeFrom(21, ipcChannels.hostsSave, {
+      profile: { ...base, publicKeyEnabled: true, authMethod: "privateKey" }
+    })).rejects.toThrow("Private key path is required")
+    expect(harness.hosts.save).not.toHaveBeenCalled()
+  })
+
+  it("rejects an overlong private key path before saving credentials", async () => {
+    const harness = createHarness()
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostsSave, {
+      profile: {
+        id: "host-a",
+        name: "Host A",
+        host: "127.0.0.1",
+        port: 22,
+        username: "rock",
+        authMethod: "privateKey",
+        publicKeyEnabled: true,
+        identityFile: "x".repeat(4_097),
+        favorite: false,
+        notes: ""
+      },
+      credentials: { passphrase: "should-not-be-persisted" }
+    })).rejects.toThrow("Invalid private key path")
+
+    expect(harness.hosts.save).not.toHaveBeenCalled()
+    expect(harness.hosts.saveRedacted).not.toHaveBeenCalled()
+    expect(harness.credentials.set).not.toHaveBeenCalled()
+  })
+
   it("serializes redacted host saves so a stale identity file cannot overwrite a newer save", async () => {
     const directory = await mkdtemp(join(tmpdir(), "rocker-ipc-hosts-"))
     try {
@@ -610,7 +746,7 @@ function createHarness() {
   const mutations = { run: vi.fn(async <T>(operation: () => Promise<T> | T) => operation()) }
   const configuration = { preview: vi.fn(), import: vi.fn() }
   const createConfigurationExportSnapshot = vi.fn()
-  const hosts = { list: vi.fn(), save: vi.fn(), saveRedacted: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn(), loadWithStatus: vi.fn() }
+  const hosts = { list: vi.fn(), save: vi.fn(), saveRedacted: vi.fn(), duplicate: vi.fn(), setFavorite: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn(), loadWithStatus: vi.fn() }
   const currentOwnerForWebContents = vi.fn((id: number) => id === owner21.webContentsId ? owner21 : id === owner22.webContentsId ? owner22 : undefined)
   const windowForWebContents = vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined)
   const sendToOwner = vi.fn((targetOwner: RuntimeOwner, channel: string, ...args: unknown[]): boolean => {

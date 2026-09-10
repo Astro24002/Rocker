@@ -107,6 +107,15 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     hostSaveQueue = save.then(() => undefined, () => undefined)
     await save
   })
+  ipcMain.handle(ipcChannels.hostsDuplicate, async (_event, id: unknown) => {
+    assertId(id, "host")
+    return dependencies.mutations.run(() => dependencies.hosts.duplicate(id))
+  })
+  ipcMain.handle(ipcChannels.hostsSetFavorite, async (_event, id: unknown, favorite: unknown) => {
+    assertId(id, "host")
+    if (typeof favorite !== "boolean") throw new Error("Invalid favorite setting")
+    return dependencies.mutations.run(() => dependencies.hosts.setFavorite(id, favorite))
+  })
   ipcMain.handle(ipcChannels.hostsRemove, async (_event, id: unknown) => {
     assertId(id, "host")
     await dependencies.mutations.run(async () => {
@@ -933,7 +942,7 @@ function isRedactedHostProfile(profile: HostSaveProfile): profile is BootstrapHo
 }
 
 function assertHostProfile(profile: HostSaveProfile | undefined): asserts profile is HostSaveProfile {
-  if (!profile || !profile.id || !profile.name.trim() || !profile.host.trim() || !profile.username.trim()) {
+  if (!profile || !isRecord(profile) || !isNonBlankBoundedString(profile.id, 128) || !isNonBlankBoundedString(profile.name, 256) || !isNonBlankBoundedString(profile.host, 512) || !isNonBlankBoundedString(profile.username, 256)) {
     throw new Error("Host name, address, and username are required")
   }
   if (!Number.isInteger(profile.port) || profile.port < 1 || profile.port > 65535) {
@@ -942,6 +951,58 @@ function assertHostProfile(profile: HostSaveProfile | undefined): asserts profil
   if (!(["password", "privateKey", "agent"] as const).includes(profile.authMethod)) {
     throw new Error("Unsupported authentication method")
   }
+  if (profile.publicKeyEnabled !== undefined && typeof profile.publicKeyEnabled !== "boolean") {
+    throw new Error("Invalid public key setting")
+  }
+  if (profile.snippetsEnabled !== undefined && typeof profile.snippetsEnabled !== "boolean") {
+    throw new Error("Invalid snippets setting")
+  }
+  if (profile.snippetCollection !== undefined && (typeof profile.snippetCollection !== "string" || profile.snippetCollection.length > 256)) {
+    throw new Error("Invalid snippet collection")
+  }
+  if (profile.group !== undefined && (typeof profile.group !== "string" || profile.group.length > 256)) {
+    throw new Error("Invalid host group")
+  }
+  if ("identityFile" in profile && profile.identityFile !== undefined && (typeof profile.identityFile !== "string" || profile.identityFile.length > 4_096)) {
+    throw new Error("Invalid private key path")
+  }
+  if (profile.charset !== undefined && !isHostCharsetValue(profile.charset)) {
+    throw new Error("Invalid host charset")
+  }
+  if (profile.themeColor !== undefined && !isHostThemeColorValue(profile.themeColor)) {
+    throw new Error("Invalid host theme color")
+  }
+  if ("hasIdentityFile" in profile && typeof profile.hasIdentityFile !== "boolean") {
+    throw new Error("Invalid identity file state")
+  }
+
+  const publicKeyEnabled = profile.publicKeyEnabled ?? profile.authMethod === "privateKey"
+  if (publicKeyEnabled) {
+    if (profile.authMethod !== "privateKey") {
+      throw new Error("Public key login requires private key authentication")
+    }
+    const identityFile = "identityFile" in profile ? profile.identityFile : undefined
+    const hasPath = isNonBlankBoundedString(identityFile, 4_096)
+    const hasRetainedPath = isRedactedHostProfile(profile) && profile.hasIdentityFile
+    if (!hasPath && !hasRetainedPath) throw new Error("Private key path is required")
+  } else if (profile.authMethod === "privateKey") {
+    throw new Error("Public key login must be enabled for private key authentication")
+  }
+  if (profile.snippetsEnabled === true && !isNonBlankBoundedString(profile.snippetCollection, 256)) {
+    throw new Error("Snippet collection is required")
+  }
+}
+
+function isHostCharsetValue(value: unknown): value is "utf-8" | "gb18030" | "iso-8859-1" {
+  return value === "utf-8" || value === "gb18030" || value === "iso-8859-1"
+}
+
+function isHostThemeColorValue(value: unknown): value is "rocker" | "amber" | "ocean" | "slate" {
+  return value === "rocker" || value === "amber" || value === "ocean" || value === "slate"
+}
+
+function isNonBlankBoundedString(value: unknown, maximumLength: number): value is string {
+  return isBoundedString(value, maximumLength) && value.trim().length > 0
 }
 
 function assertId(value: unknown, kind: string): asserts value is string {
