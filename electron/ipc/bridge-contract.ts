@@ -99,6 +99,8 @@ export interface RockerBridge {
   hosts: {
     list(): Promise<HostProfile[]>
     save(request: HostSaveRequest): Promise<void>
+    duplicate(id: string): Promise<HostProfile>
+    setFavorite(id: string, favorite: boolean): Promise<HostProfile>
     remove(id: string): Promise<void>
     importSshConfig(): Promise<HostProfile[]>
   }
@@ -164,6 +166,8 @@ export interface RockerBridge {
 export const ipcChannels = {
   hostsList: "rocker:hosts:list",
   hostsSave: "rocker:hosts:save",
+  hostsDuplicate: "rocker:hosts:duplicate",
+  hostsSetFavorite: "rocker:hosts:set-favorite",
   hostsRemove: "rocker:hosts:remove",
   hostsImport: "rocker:hosts:import",
   sessionOpen: "rocker:sessions:open",

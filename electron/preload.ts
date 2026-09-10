@@ -19,6 +19,8 @@ const bridge: RockerBridge = {
   hosts: {
     list: () => ipcRenderer.invoke(ipcChannels.hostsList),
     save: (request) => ipcRenderer.invoke(ipcChannels.hostsSave, request),
+    duplicate: (id) => ipcRenderer.invoke(ipcChannels.hostsDuplicate, id),
+    setFavorite: (id, favorite) => ipcRenderer.invoke(ipcChannels.hostsSetFavorite, id, favorite),
     remove: (id) => ipcRenderer.invoke(ipcChannels.hostsRemove, id),
     importSshConfig: () => ipcRenderer.invoke(ipcChannels.hostsImport)
   },

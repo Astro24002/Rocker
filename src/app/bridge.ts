@@ -6,11 +6,11 @@ import type {
   HostSaveProfile
 } from "../../electron/ipc/bridge-contract"
 import type { StorageHealth, StorageKind } from "../../electron/storage/storage-result"
-import type { AppSettings, ForwardingInfo, HostProfile, StoredWorkspaceWindow } from "./types"
+import type { AppSettings, ForwardingInfo, HostCharset, HostProfile, HostThemeColor, StoredWorkspaceWindow } from "./types"
 
 const demoHosts: HostProfile[] = [
-  { id: "demo-g11", name: "G11", host: "47.97.162.53", port: 22, username: "root", authMethod: "agent", group: "Personal", favorite: true, notes: "" },
-  { id: "demo-adcp", name: "WH-ADCP", host: "10.24.18.21", port: 22, username: "deploy", authMethod: "privateKey", group: "Production", favorite: false, notes: "" },
+  { id: "demo-g11", name: "G11", host: "47.97.162.53", port: 22, username: "root", authMethod: "agent", platform: "ubuntu", group: "Personal", favorite: true, notes: "" },
+  { id: "demo-adcp", name: "WH-ADCP", host: "10.24.18.21", port: 22, username: "deploy", authMethod: "privateKey", platform: "debian", group: "Production", favorite: false, notes: "" },
   { id: "demo-db", name: "Database", host: "db.internal", port: 2222, username: "ops", authMethod: "password", group: "Production", favorite: false, notes: "" }
 ]
 
@@ -61,6 +61,35 @@ function createBrowserPreviewBridge(): RockerBridge {
         mockHosts = mockHosts.some((host) => host.id === profile.id)
           ? mockHosts.map((host) => host.id === nextProfile.id ? nextProfile : host)
           : [...mockHosts, nextProfile]
+      },
+      duplicate: async (id) => {
+        const source = mockHosts.find((host) => host.id === id)
+        if (!source) throw new Error("Host profile was not found")
+        const duplicate: HostProfile = {
+          id: crypto.randomUUID(),
+          name: `${source.name} copy`,
+          host: source.host,
+          port: source.port,
+          username: source.username,
+          authMethod: "agent",
+          ...(source.platform ? { platform: source.platform } : {}),
+          ...(source.group ? { group: source.group } : {}),
+          charset: source.charset ?? "utf-8",
+          themeColor: source.themeColor ?? "rocker",
+          publicKeyEnabled: false,
+          snippetsEnabled: false,
+          favorite: false,
+          notes: source.notes
+        }
+        mockHosts = [...mockHosts, duplicate]
+        return duplicate
+      },
+      setFavorite: async (id, favorite) => {
+        const source = mockHosts.find((host) => host.id === id)
+        if (!source) throw new Error("Host profile was not found")
+        const updated = { ...source, favorite }
+        mockHosts = mockHosts.map((host) => host.id === id ? updated : host)
+        return updated
       },
       remove: async (id) => { mockHosts = mockHosts.filter((host) => host.id !== id) },
       importSshConfig: async () => []
@@ -224,11 +253,37 @@ function toPreviewBootstrapHostProfile(profile: HostProfile): BootstrapHostProfi
 }
 
 function normalizePreviewHostProfile(profile: HostSaveProfile, existing: HostProfile | undefined): HostProfile {
-  if (!isRedactedHostProfile(profile)) return profile
-  const { hasIdentityFile: _hasIdentityFile, ...safeProfile } = profile
-  return profile.hasIdentityFile && existing?.identityFile
-    ? { ...safeProfile, identityFile: existing.identityFile }
-    : safeProfile
+  const source = isRedactedHostProfile(profile)
+    ? (() => {
+      const { hasIdentityFile: _hasIdentityFile, ...safeProfile } = profile
+      return profile.hasIdentityFile && existing?.identityFile
+        ? { ...safeProfile, identityFile: existing.identityFile }
+        : safeProfile
+    })()
+    : profile
+  const publicKeyEnabled = source.publicKeyEnabled === true || source.authMethod === "privateKey"
+  const snippetCollection = isNonBlankString(source.snippetCollection, 256) ? source.snippetCollection.trim() : undefined
+  const snippetsEnabled = source.snippetsEnabled === true && snippetCollection !== undefined
+  const { snippetCollection: _snippetCollection, ...withoutSnippetCollection } = source
+  return {
+    ...(snippetsEnabled ? { ...withoutSnippetCollection, snippetCollection } : withoutSnippetCollection),
+    publicKeyEnabled,
+    snippetsEnabled,
+    charset: isPreviewCharset(source.charset) ? source.charset : "utf-8",
+    themeColor: isPreviewThemeColor(source.themeColor) ? source.themeColor : "rocker"
+  }
+}
+
+function isNonBlankString(value: unknown, maximum: number): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maximum
+}
+
+function isPreviewCharset(value: unknown): value is HostCharset {
+  return value === "utf-8" || value === "gb18030" || value === "iso-8859-1"
+}
+
+function isPreviewThemeColor(value: unknown): value is HostThemeColor {
+  return value === "rocker" || value === "amber" || value === "ocean" || value === "slate"
 }
 
 function isRedactedHostProfile(profile: HostSaveProfile): profile is BootstrapHostProfile {

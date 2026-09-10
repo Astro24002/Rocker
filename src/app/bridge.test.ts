@@ -73,6 +73,44 @@ describe("browser preview bridge", () => {
       await bridge.hosts.remove(profile.id)
     }
   })
+
+  it("duplicates hosts without carrying authentication material and toggles favorites", async () => {
+    setPreviewWindowBridge(undefined)
+    const bridge = getRockerBridge()
+    const profile: HostProfile = {
+      id: "preview-duplicate",
+      name: "Preview duplicate",
+      host: "preview.example.test",
+      port: 22,
+      username: "rock",
+      authMethod: "privateKey",
+      identityFile: "/private/user-data/.ssh/id_ed25519",
+      snippetsEnabled: true,
+      snippetCollection: "Release",
+      favorite: true,
+      notes: "preview"
+    }
+
+    let duplicate: HostProfile | undefined
+    try {
+      await bridge.hosts.save({ profile })
+      duplicate = await bridge.hosts.duplicate(profile.id)
+
+      expect(duplicate).toMatchObject({
+        name: "Preview duplicate copy",
+        authMethod: "agent",
+        favorite: false,
+        snippetsEnabled: false
+      })
+      expect(duplicate).not.toHaveProperty("identityFile")
+      expect(duplicate).not.toHaveProperty("snippetCollection")
+
+      await expect(bridge.hosts.setFavorite(duplicate.id, true)).resolves.toMatchObject({ favorite: true })
+    } finally {
+      await bridge.hosts.remove(profile.id)
+      if (duplicate) await bridge.hosts.remove(duplicate.id)
+    }
+  })
 })
 
 function setPreviewWindowBridge(bridge: Window["rocker"] | undefined): void {
