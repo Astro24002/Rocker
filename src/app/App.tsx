@@ -6,7 +6,7 @@ import { WorkspaceResizeHandle } from "../components/WorkspaceResizeHandle"
 import { WindowChrome } from "../components/WindowChrome"
 import { HostEditor } from "../features/hosts/HostEditor"
 import { HostList } from "../features/hosts/HostList"
-import { toggleFavorite, upsertHost } from "../features/hosts/host-state"
+import { hostForSshTarget, parseSshCommand, recentHostIds as deriveRecentHostIds, upsertHost } from "../features/hosts/host-state"
 import { HistoryView } from "../features/history/HistoryView"
 import { PortsView } from "../features/ports/PortsView"
 import { SettingsView } from "../features/settings/SettingsView"
@@ -35,7 +35,7 @@ import { I18nProvider, useI18n } from "../i18n"
 import { normalizeSidebarWidth } from "../shared/sidebar-width"
 import { bootstrapReducer, createBootstrapState, deriveBootstrapCapabilities, retryableBootstrapResources } from "./bootstrap-state"
 import { getRockerBridge } from "./bridge"
-import type { BootstrapResourceName } from "../../electron/ipc/bridge-contract"
+import type { BootstrapResourceName, HostSaveProfile } from "../../electron/ipc/bridge-contract"
 import type {
   AppSettings,
   ConnectionHistoryItem,
@@ -128,6 +128,7 @@ function Workspace() {
   const [activeNav, setActiveNav] = useState<WorkspaceNavKey>("hosts")
   const [hosts, setHosts] = useState<HostProfile[]>([])
   const [history, setHistory] = useState<ConnectionHistoryItem[]>([])
+  const recentHostIdSet = useMemo(() => new Set(deriveRecentHostIds(history)), [history])
   const [editor, setEditor] = useState<{ open: boolean; profile?: HostProfile }>({ open: false })
   const [workspace, setWorkspace] = useState<TerminalWorkspaceState>(createTerminalWorkspaceState)
   const [bootstrapState, dispatchBootstrap] = useReducer(bootstrapReducer, undefined, createBootstrapState)
@@ -667,6 +668,48 @@ function Workspace() {
     queueSessionOpen(host, host.name)
   }
 
+  const connectSshCommand = async (command: string): Promise<void> => {
+    if (!capabilities.hostMutationsAvailable) return
+    const target = parseSshCommand(command)
+    if (!target) return
+    const saved = hostForSshTarget(hosts, target)
+    if (saved) {
+      connectHost(saved)
+      return
+    }
+    if (!target.username) {
+      setEditor({
+        open: true,
+        profile: {
+          id: crypto.randomUUID(),
+          name: target.host,
+          host: target.host,
+          port: target.port,
+          username: "",
+          authMethod: "agent",
+          group: "Personal",
+          favorite: false,
+          notes: "Created from direct SSH command."
+        }
+      })
+      return
+    }
+    const profile: HostProfile = {
+      id: crypto.randomUUID(),
+      name: `${target.username}@${target.host}`,
+      host: target.host,
+      port: target.port,
+      username: target.username,
+      authMethod: "agent",
+      group: "Personal",
+      favorite: false,
+      notes: "Created from direct SSH command."
+    }
+    await bridge.hosts.save({ profile })
+    setHosts((current) => [...current, profile])
+    connectHost(profile)
+  }
+
   const activateExistingSession = useCallback((sessionOrId: WorkspaceSession | string): void => {
     const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId.id
     if (!workspaceRef.current.sessions.some((session) => session.id === sessionId)) return
@@ -960,18 +1003,31 @@ function Workspace() {
     setSearchOpen(false)
   }, [activeNav, activeSession?.id])
 
-  const saveHost = async (profile: HostProfile, credentials: { password?: string; passphrase?: string }): Promise<void> => {
-    if (!capabilities.hostMutationsAvailable) return
+  const saveHost = async (profile: HostSaveProfile, credentials: { password?: string; passphrase?: string }): Promise<void> => {
+    if (!capabilities.hostMutationsAvailable) throw new Error("Host mutations are unavailable")
     await bridge.hosts.save({ profile, credentials })
-    setHosts((current) => upsertHost(current, profile))
+    setHosts((current) => upsertHost(current, profile as HostProfile))
     setEditor({ open: false })
   }
 
-  const favoriteHost = async (host: HostProfile): Promise<void> => {
-    if (!capabilities.hostMutationsAvailable) return
-    const updated = { ...host, favorite: !host.favorite }
-    await bridge.hosts.save({ profile: updated })
-    setHosts((current) => toggleFavorite(current, host.id))
+  const duplicateHost = async (host: HostProfile): Promise<HostProfile> => {
+    if (!capabilities.hostMutationsAvailable) throw new Error("Host mutations are unavailable")
+    const duplicate = await bridge.hosts.duplicate(host.id)
+    setHosts((current) => upsertHost(current, duplicate))
+    return duplicate
+  }
+
+  const toggleHostFavorite = async (host: HostProfile): Promise<HostProfile> => {
+    if (!capabilities.hostMutationsAvailable) throw new Error("Host mutations are unavailable")
+    const updated = await bridge.hosts.setFavorite(host.id, !host.favorite)
+    setHosts((current) => upsertHost(current, updated))
+    return updated
+  }
+
+  const removeHost = async (host: HostProfile): Promise<void> => {
+    if (!capabilities.hostMutationsAvailable) throw new Error("Host mutations are unavailable")
+    await bridge.hosts.remove(host.id)
+    setHosts((current) => current.filter((candidate) => candidate.id !== host.id))
   }
 
   const hostList = (
@@ -979,13 +1035,17 @@ function Workspace() {
       hosts={hosts}
       disabled={!capabilities.hostMutationsAvailable}
       onConnect={connectHost}
+      onConnectCommand={(command) => void connectSshCommand(command)}
       onAdd={() => setEditor({ open: true })}
       onEdit={(profile) => setEditor({ open: true, profile })}
+      onDuplicate={duplicateHost}
+      onToggleFavorite={toggleHostFavorite}
+      onRemove={removeHost}
+      recentHostIds={recentHostIdSet}
       onImport={() => {
         if (!capabilities.hostMutationsAvailable) return
         void bridge.hosts.importSshConfig().then(() => bridge.hosts.list()).then(setHosts).catch(() => undefined)
       }}
-      onFavorite={(host) => void favoriteHost(host)}
     />
   )
 
@@ -1060,7 +1120,7 @@ function Workspace() {
           )}
           </div>
       </main>
-      <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={(profile, credentials) => void saveHost(profile, credentials)} />
+      <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={saveHost} />
       <CommandPalette open={paletteOpen} context={commandContext} onClose={() => setPaletteOpen(false)} onRestoreFocus={restorePaletteFocus} />
       {!paletteOpen && terminalContextMenu && terminalMenuSession && <TerminalContextMenu open x={terminalContextMenu.x} y={terminalContextMenu.y} context={terminalMenuContext} onClose={closeTerminalContextMenu} onRestoreFocus={(request) => {
         if (request === "terminal.focus") return

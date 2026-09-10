@@ -283,6 +283,46 @@ describe("desktop workspace shell", () => {
     expect(surface.focus).not.toHaveBeenCalled()
   })
 
+  it("routes selected host actions through the typed bridge", async () => {
+    const duplicate = { ...host, id: "host-copy", name: "G11 copy" }
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
+    bridge.hosts.duplicate.mockResolvedValue(duplicate)
+    bridge.hosts.setFavorite.mockResolvedValue({ ...host, favorite: true })
+    bridge.hosts.remove.mockResolvedValue(undefined)
+    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(true)
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "G11, SSH, root" })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole("button", { name: "G11, SSH, root" }))
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate host" }))
+    await waitFor(() => expect(bridge.hosts.duplicate).toHaveBeenCalledWith(host.id))
+    await waitFor(() => expect(screen.getByText("G11 copy")).toBeInTheDocument())
+    expect(screen.getByRole("button", { name: "G11 copy, SSH, root" })).toHaveAttribute("aria-pressed", "true")
+
+    fireEvent.click(screen.getByRole("button", { name: "Favorite host" }))
+    await waitFor(() => expect(bridge.hosts.setFavorite).toHaveBeenCalledWith(duplicate.id, true))
+    fireEvent.click(screen.getByRole("button", { name: "Delete host" }))
+    await waitFor(() => expect(bridge.hosts.remove).toHaveBeenCalledWith(duplicate.id))
+    expect(confirmation).toHaveBeenCalled()
+    confirmation.mockRestore()
+  })
+
+  it("keeps HostEditor save errors when the host mutation rejects", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
+    bridge.hosts.save.mockRejectedValue(new Error("storage details"))
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add host" })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole("button", { name: "Add host" }))
+    fireEvent.change(screen.getByLabelText("Label"), { target: { value: "New host" } })
+    fireEvent.change(screen.getByLabelText("Address"), { target: { value: "new.example" } })
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "root" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save host" }))
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Couldn't save this host"))
+    expect(screen.queryByText("storage details")).not.toBeInTheDocument()
+  })
+
   it("restores palette focus to the new active terminal after duplicate", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
     render(<App />)
@@ -1250,6 +1290,8 @@ function createBridge() {
     hosts: {
       list: vi.fn(async (): Promise<HostProfile[]> => []),
       save: vi.fn(async () => undefined),
+      duplicate: vi.fn(async (id: string): Promise<HostProfile> => ({ ...host, id, name: `${host.name} copy` })),
+      setFavorite: vi.fn(async (id: string, favorite: boolean): Promise<HostProfile> => ({ ...host, id, favorite })),
       remove: vi.fn(async () => undefined),
       importSshConfig: vi.fn(async () => [])
     },
