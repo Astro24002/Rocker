@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { HostProfile } from "../../app/types"
-import { duplicateHost, filterHosts, removeHost, toggleFavorite, upsertHost } from "./host-state"
+import { filterHosts, getHostPlatform, hostForSshTarget, isCompleteSshCommand, parseSshCommand, recentHostIds, removeHost, toggleFavorite, upsertHost } from "./host-state"
 
 const host: HostProfile = {
   id: "one",
@@ -23,14 +23,47 @@ describe("host state", () => {
     expect(removeHost(created, host.id)).toHaveLength(0)
   })
 
-  it("duplicates with a distinct identifier and copy label", () => {
-    const duplicate = duplicateHost(host, "two")
-    expect(duplicate).toMatchObject({ id: "two", name: "G11 copy", favorite: false })
-  })
-
   it("filters by group and search query", () => {
     const other = { ...host, id: "two", name: "Database", group: "Production", host: "db.internal" }
-    expect(filterHosts([host, other], "prod", "")).toEqual([other])
-    expect(filterHosts([host, other], "all", "g11")).toEqual([host])
+    expect(filterHosts([host, other], { group: "prod", query: "" })).toEqual([])
+    expect(filterHosts([host, other], { group: "Production", query: "" })).toEqual([other])
+    expect(filterHosts([host, other], { group: "all", query: "g11" })).toEqual([host])
+  })
+
+  it("derives unique recent hosts from successful history in newest-first order", () => {
+    const recent = recentHostIds([
+      { hostId: "old", connectedAt: "2026-01-01T00:00:00.000Z", outcome: "connected" },
+      { hostId: "new", connectedAt: "2026-01-03T00:00:00.000Z", outcome: "disconnected" },
+      { hostId: "failed", connectedAt: "2026-01-04T00:00:00.000Z", outcome: "failed" },
+      { hostId: "new", connectedAt: "2026-01-02T00:00:00.000Z", outcome: "connected" },
+      { hostId: "middle", connectedAt: "2026-01-02T12:00:00.000Z", outcome: "connected" }
+    ], 2)
+
+    expect(recent).toEqual(["new", "middle"])
+    expect(filterHosts([
+      { ...host, id: "old" },
+      { ...host, id: "new", name: "New host" },
+      { ...host, id: "middle", name: "Middle host" }
+    ], { group: "all", query: "", recentOnly: true, recentHostIds: new Set(recent) })).toHaveLength(2)
+  })
+
+  it("uses Rocker as the fallback icon and preserves known Linux platforms", () => {
+    expect(getHostPlatform(host)).toBe("rocker")
+    expect(getHostPlatform({ ...host, platform: "ubuntu" } as never)).toBe("ubuntu")
+    expect(getHostPlatform({ ...host, platform: "debian" } as never)).toBe("debian")
+    expect(getHostPlatform({ ...host, platform: "unknown" } as never)).toBe("rocker")
+  })
+
+  it("recognizes only complete direct SSH commands", () => {
+    expect(isCompleteSshCommand("ssh root@127.0.0.1")).toBe(true)
+    expect(isCompleteSshCommand("ssh root@127.0.0.1 -p 27001")).toBe(true)
+    expect(isCompleteSshCommand("ssh 127.0.0.1 -p 65535")).toBe(true)
+    expect(isCompleteSshCommand("ssh root@127.0.0.1 -p")).toBe(false)
+    expect(isCompleteSshCommand("ssh root@127.0.0.1 -p 0")).toBe(false)
+    expect(isCompleteSshCommand("ssh root@127.0.0.1 -p 65536")).toBe(false)
+    expect(isCompleteSshCommand("Find a host")).toBe(false)
+    expect(parseSshCommand("ssh root@127.0.0.1 -p 27001")).toEqual({ username: "root", host: "127.0.0.1", port: 27001 })
+    expect(parseSshCommand("ssh 127.0.0.1")).toEqual({ host: "127.0.0.1", port: 22 })
+    expect(hostForSshTarget([host], { username: "rock", host: "10.0.0.11", port: 22 })).toBe(host)
   })
 })
