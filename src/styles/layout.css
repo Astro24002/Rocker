@@ -133,6 +133,11 @@
   flex: 1;
 }
 
+/* Keep destination views out of the flex track while they are cached. */
+.workspace-stage > [hidden] {
+  display: none !important;
+}
+
 .workspace-destination {
   display: flex;
   min-width: 0;

@@ -14,6 +14,10 @@ describe("UI quality stylesheet contract", () => {
     expect(componentStyles).toMatch(/\.header-actions,[\s\S]*?\.empty-actions\s*\{[\s\S]*?min-width:\s*0;/)
   })
 
+  it("keeps inactive workspace destinations out of the flex layout", () => {
+    expect(layoutStyles).toMatch(/\.workspace-stage\s*>\s*\[hidden\]\s*\{[\s\S]*?display:\s*none\s*!important;/)
+  })
+
   it("defines reduced-motion behavior for transitions and refresh indicators", () => {
     expect(componentStyles).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?transition-duration:\s*0\.01ms/)
     expect(componentStyles).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.is-spinning[\s\S]*?animation:\s*none/)

@@ -832,6 +832,20 @@ describe("desktop workspace shell", () => {
     expect(bridge.sessions.open).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps the cached Hosts destination out of the active terminal layout", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const stage = screen.getByTestId("workspace-stage")
+    const terminalHost = stage.querySelector<HTMLElement>(".terminal-workspace-host")
+    const hostsDestination = stage.querySelector<HTMLElement>(".workspace-destination")
+
+    expect(terminalHost).not.toHaveAttribute("hidden")
+    expect(hostsDestination).toHaveAttribute("hidden")
+    expect([...stage.children].filter((child) => !(child as HTMLElement).hidden)).toHaveLength(1)
+  })
+
   it("keeps the terminal event subscription stable while switching locale", async () => {
     render(<App />)
     await waitFor(() => expect(bridge.events.onSessionEvent).toHaveBeenCalledTimes(1))
