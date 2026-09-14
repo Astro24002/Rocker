@@ -1,10 +1,9 @@
-import { Copy, Import, Pencil, PlugZap, Plus, Search, Server, Star, StarOff, Trash2 } from "lucide-react"
-import { useMemo, useState } from "react"
+import { Copy, Import, Pencil, Plus, Search, Server, Star, StarOff, Trash2 } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import ubuntuMark from "../../assets/platforms/ubuntu.svg"
 import debianMark from "../../assets/platforms/debian.svg"
-import type { ConnectionTestResult, HostEnvironment, HostProfile } from "../../app/types"
+import type { HostEnvironment, HostProfile } from "../../app/types"
 import { useI18n } from "../../i18n"
-import type { TranslationKey } from "../../i18n/en"
 import { filterHosts, getHostPlatform, isCompleteSshCommand } from "./host-state"
 
 interface HostListProps {
@@ -18,9 +17,17 @@ interface HostListProps {
   onDuplicate(host: HostProfile): Promise<HostProfile>
   onToggleFavorite(host: HostProfile): Promise<HostProfile>
   onRemove(host: HostProfile): Promise<void>
-  onTestConnection?(host: HostProfile): Promise<ConnectionTestResult>
   recentHostIds?: ReadonlySet<string>
 }
+
+interface HostContextMenuState {
+  hostId: string
+  x: number
+  y: number
+}
+
+const hostContextMenuWidth = 224
+const hostContextMenuHeight = 156
 
 export function HostList({
   hosts,
@@ -33,7 +40,6 @@ export function HostList({
   onDuplicate,
   onToggleFavorite,
   onRemove,
-  onTestConnection,
   recentHostIds,
 }: HostListProps) {
   const { t } = useI18n()
@@ -45,7 +51,9 @@ export function HostList({
   const [selectedHostId, setSelectedHostId] = useState<string>()
   const [actionBusy, setActionBusy] = useState(false)
   const [actionError, setActionError] = useState(false)
-  const [connectionTest, setConnectionTest] = useState<{ hostId: string; result: ConnectionTestResult }>()
+  const [hostContextMenu, setHostContextMenu] = useState<HostContextMenuState>()
+  const hostContextMenuRef = useRef<HTMLDivElement>(null)
+  const hostContextMenuTriggerRef = useRef<HTMLButtonElement>(null)
   const groups = useMemo(() => [...new Set(hosts.map((host) => host.group).filter(Boolean))] as string[], [hosts])
   const environments = useMemo(() => environmentOrder.filter((candidate) => hosts.some((host) => host.environment === candidate)), [hosts])
   const tags = useMemo(() => {
@@ -63,7 +71,7 @@ export function HostList({
     personal: t("hosts.environment.personal")
   }
   const commandReady = isCompleteSshCommand(query)
-  const selectedHost = selectedHostId ? hosts.find((host) => host.id === selectedHostId) : undefined
+  const contextHost = hostContextMenu ? hosts.find((host) => host.id === hostContextMenu.hostId) : undefined
   const filtered = useMemo(() => {
     const filter = { group, query: /^ssh(?:\s|$)/i.test(query.trim()) ? "" : query, recentOnly, recentHostIds, environment, tag }
     return filterHosts(hosts, filter)
@@ -72,7 +80,6 @@ export function HostList({
   const selectHost = (host: HostProfile): void => {
     if (!disabled) {
       setSelectedHostId(host.id)
-      setConnectionTest(undefined)
     }
   }
 
@@ -94,35 +101,78 @@ export function HostList({
     }
   }
 
-  const testSelectedConnection = (): void => {
-    if (!selectedHost || !onTestConnection) return
-    void runHostAction(async () => {
-      setConnectionTest(undefined)
-      const result = await onTestConnection(selectedHost)
-      setConnectionTest({ hostId: selectedHost.id, result })
+  const closeHostContextMenu = (restoreFocus = true): void => {
+    setHostContextMenu(undefined)
+    if (restoreFocus) hostContextMenuTriggerRef.current?.focus()
+  }
+
+  const openHostContextMenu = (host: HostProfile, trigger: HTMLButtonElement, point?: { x: number; y: number }): void => {
+    if (disabled) return
+    const bounds = trigger.getBoundingClientRect()
+    const requestedX = point?.x ?? bounds.left + Math.min(bounds.width, 16)
+    const requestedY = point?.y ?? bounds.bottom
+    const maxX = Math.max(8, window.innerWidth - hostContextMenuWidth - 8)
+    const maxY = Math.max(8, window.innerHeight - hostContextMenuHeight - 8)
+    hostContextMenuTriggerRef.current = trigger
+    setSelectedHostId(host.id)
+    setHostContextMenu({
+      hostId: host.id,
+      x: Math.max(8, Math.min(requestedX, maxX)),
+      y: Math.max(8, Math.min(requestedY, maxY))
     })
   }
 
-  const duplicateSelected = (): void => {
-    if (!selectedHost) return
+  useEffect(() => {
+    if (!hostContextMenu) return
+    if (disabled || !contextHost) {
+      setHostContextMenu(undefined)
+      return
+    }
+    hostContextMenuRef.current?.focus()
+    const closeOnOutsideClick = (event: MouseEvent): void => {
+      if (event.target instanceof Node && hostContextMenuRef.current?.contains(event.target)) return
+      closeHostContextMenu()
+    }
+    window.addEventListener("click", closeOnOutsideClick)
+    return () => window.removeEventListener("click", closeOnOutsideClick)
+  }, [contextHost, disabled, hostContextMenu])
+
+  const editContextHost = (): void => {
+    if (!contextHost || disabled || actionBusy) return
+    const host = contextHost
+    closeHostContextMenu(false)
+    onEdit(host)
+  }
+
+  const duplicateContextHost = (): void => {
+    if (!contextHost) return
+    const host = contextHost
+    closeHostContextMenu(false)
     void runHostAction(async () => {
-      const duplicate = await onDuplicate(selectedHost)
+      const duplicate = await onDuplicate(host)
       setSelectedHostId(duplicate.id)
     })
   }
 
-  const toggleSelectedFavorite = (): void => {
-    if (!selectedHost) return
-    void runHostAction(async () => { await onToggleFavorite(selectedHost) })
+  const toggleContextHostFavorite = (): void => {
+    if (!contextHost) return
+    const host = contextHost
+    closeHostContextMenu(false)
+    void runHostAction(async () => { await onToggleFavorite(host) })
   }
 
-  const removeSelected = (): void => {
-    if (!selectedHost) return
-    const confirmationKey = selectedHost.environment === "production" ? "hosts.action.deleteProductionConfirm" : "hosts.action.deleteConfirm"
-    if (!window.confirm(t(confirmationKey).replace("{name}", selectedHost.name))) return
+  const removeContextHost = (): void => {
+    if (!contextHost) return
+    const host = contextHost
+    const confirmationKey = host.environment === "production" ? "hosts.action.deleteProductionConfirm" : "hosts.action.deleteConfirm"
+    if (!window.confirm(t(confirmationKey).replace("{name}", host.name))) {
+      closeHostContextMenu()
+      return
+    }
+    closeHostContextMenu(false)
     void runHostAction(async () => {
-      await onRemove(selectedHost)
-      setSelectedHostId(undefined)
+      await onRemove(host)
+      if (selectedHostId === host.id) setSelectedHostId(undefined)
     })
   }
 
@@ -135,22 +185,12 @@ export function HostList({
           <p>{t("hosts.subtitle")}</p>
         </div>
         <div className="header-actions">
-          {selectedHost ? (
-            <div className="host-selection-actions" aria-label={t("hosts.action.namedActions").replace("{name}", selectedHost.name)}>
-              <button className="host-context-action" type="button" aria-label={t("hosts.action.editNamed").replace("{name}", selectedHost.name)} title={t("hosts.action.edit")} disabled={disabled || actionBusy} onClick={() => onEdit(selectedHost)}><Pencil size={14} /></button>
-              <button className="host-context-action" type="button" aria-label={t("hosts.action.duplicate")} title={t("hosts.action.duplicate")} disabled={disabled || actionBusy} onClick={duplicateSelected}><Copy size={14} /></button>
-              {onTestConnection ? <button className="host-context-action" type="button" aria-label={t("hosts.action.testConnection")} title={t("hosts.action.testConnection")} disabled={disabled || actionBusy} onClick={testSelectedConnection}><PlugZap size={14} /></button> : null}
-              <button className="host-context-action" type="button" aria-label={selectedHost.favorite ? t("hosts.action.unfavorite") : t("hosts.action.favorite")} title={selectedHost.favorite ? t("hosts.action.unfavorite") : t("hosts.action.favorite")} disabled={disabled || actionBusy} onClick={toggleSelectedFavorite}>{selectedHost.favorite ? <StarOff size={14} /> : <Star size={14} />}</button>
-              <button className="host-context-action host-context-danger" type="button" aria-label={t("hosts.action.delete")} title={t("hosts.action.delete")} disabled={disabled || actionBusy} onClick={removeSelected}><Trash2 size={14} /></button>
-            </div>
-          ) : null}
           <button className="secondary-command" type="button" disabled={disabled} onClick={() => { if (!disabled) onImport() }}><Import size={15} />{t("hosts.import")}</button>
           <button className="primary-command" type="button" disabled={disabled} onClick={() => { if (!disabled) onAdd() }}><Plus size={15} />{t("hosts.add")}</button>
         </div>
       </header>
 
       {actionError ? <p className="host-action-error" role="status" aria-live="polite">{t("hosts.action.failed")}</p> : null}
-      {connectionTest ? <p className={`host-connection-test-result ${connectionTest.result.status === "reachable" ? "is-success" : "is-failure"}`} role="status" aria-live="polite">{formatConnectionTestResult(connectionTest.result, t)}</p> : null}
 
       <div className="host-content host-card-content">
         <div className="host-search-row">
@@ -205,10 +245,24 @@ export function HostList({
                   data-selected={selectedHostId === host.id}
                   aria-label={t("hosts.cardLabel").replace("{name}", host.name).replace("{username}", host.username)}
                   aria-pressed={selectedHostId === host.id}
+                  aria-expanded={hostContextMenu?.hostId === host.id}
+                  aria-haspopup="menu"
                   disabled={disabled}
                   onClick={() => selectHost(host)}
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    openHostContextMenu(host, event.currentTarget, { x: event.clientX, y: event.clientY })
+                  }}
                   onKeyDown={(event) => {
                     if (disabled || event.repeat) return
+                    const opensMenu = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)
+                    if (opensMenu) {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      openHostContextMenu(host, event.currentTarget)
+                      return
+                    }
                     if (event.key === " ") {
                       event.preventDefault()
                       selectHost(host)
@@ -222,12 +276,33 @@ export function HostList({
                   <HostPlatformMark host={host} />
                   <span className="host-card-copy"><strong>{host.name}</strong><small><b>SSH</b> · {host.username}</small></span>
                 </button>
-                <button className="host-card-edit" type="button" aria-label={t("hosts.action.editNamed").replace("{name}", host.name)} disabled={disabled} onClick={() => { if (!disabled) onEdit(host) }}><Pencil size={14} /></button>
               </div>
             ))}
           </div>
         )}
       </div>
+      {hostContextMenu && contextHost ? (
+        <div
+          ref={hostContextMenuRef}
+          aria-label={t("hosts.action.namedActions").replace("{name}", contextHost.name)}
+          className="terminal-context-menu host-context-menu"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return
+            event.preventDefault()
+            closeHostContextMenu()
+          }}
+          role="menu"
+          style={{ left: hostContextMenu.x, top: hostContextMenu.y }}
+          tabIndex={-1}
+        >
+          <button type="button" role="menuitem" disabled={disabled || actionBusy} onClick={editContextHost}><Pencil aria-hidden="true" size={14} /><span>{t("hosts.action.edit")}</span></button>
+          <button type="button" role="menuitem" disabled={disabled || actionBusy} onClick={duplicateContextHost}><Copy aria-hidden="true" size={14} /><span>{t("hosts.action.duplicate")}</span></button>
+          <button type="button" role="menuitem" disabled={disabled || actionBusy} onClick={toggleContextHostFavorite}>{contextHost.favorite ? <StarOff aria-hidden="true" size={14} /> : <Star aria-hidden="true" size={14} />}<span>{contextHost.favorite ? t("hosts.action.unfavorite") : t("hosts.action.favorite")}</span></button>
+          <div className="session-menu-separator" />
+          <button className="host-context-danger" type="button" role="menuitem" disabled={disabled || actionBusy} onClick={removeContextHost}><Trash2 aria-hidden="true" size={14} /><span>{t("hosts.action.delete")}</span></button>
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -243,10 +318,4 @@ function HostPlatformMark({ host }: { host: HostProfile }) {
       {image ? <img src={image} alt="" /> : platform === "rocker" ? "R" : "L"}
     </span>
   )
-}
-
-function formatConnectionTestResult(result: ConnectionTestResult, translate: (key: TranslationKey) => string): string {
-  if (result.status === "reachable") return translate("hosts.action.connectionReachable").replace("{latency}", String(result.latencyMs))
-  if (result.reason === "cancelled") return translate("hosts.action.connectionCancelled")
-  return translate("hosts.action.connectionFailed")
 }

@@ -39,7 +39,6 @@ import { getRockerBridge } from "./bridge"
 import type { BootstrapResourceName, HostKeyInventoryEntry, HostKeyInventorySnapshot, HostSaveProfile } from "../../electron/ipc/bridge-contract"
 import type {
   AppSettings,
-  ConnectionTestResult,
   ConnectionHistoryItem,
   HostProfile,
   StoredWorkspaceWindow,
@@ -1069,11 +1068,6 @@ function Workspace() {
     setHosts((current) => current.filter((candidate) => candidate.id !== host.id))
   }
 
-  const testHostConnection = async (host: HostProfile): Promise<ConnectionTestResult> => {
-    if (!capabilities.sshAvailable) throw new Error("SSH is unavailable")
-    return bridge.hosts.testConnection(host.id)
-  }
-
   const removeHostKey = async (entry: HostKeyInventoryEntry): Promise<void> => {
     if (!hostKeysAvailable) throw new Error("Host Key storage is unavailable")
     await bridge.hostKeys.remove(entry)
@@ -1091,7 +1085,6 @@ function Workspace() {
       onDuplicate={duplicateHost}
       onToggleFavorite={toggleHostFavorite}
       onRemove={removeHost}
-      onTestConnection={testHostConnection}
       recentHostIds={recentHostIdSet}
       onImport={() => {
         if (!capabilities.hostMutationsAvailable) return

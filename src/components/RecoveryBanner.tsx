@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, Download, RotateCw, X } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import type { BootstrapResourceName } from "../../electron/ipc/bridge-contract"
+import type { StorageFailureReason } from "../../electron/storage/storage-result"
 import { deriveBootstrapCapabilities, retryableBootstrapResources, type BootstrapState } from "../app/bootstrap-state"
 import { useI18n } from "../i18n"
 
@@ -19,6 +20,20 @@ const resourceLabels: Record<BootstrapResourceName, "bootstrap.settings" | "boot
   hostKeys: "bootstrap.hostKeys"
 }
 
+type RecoveryReasonKey =
+  | "bootstrap.reason.corrupt"
+  | "bootstrap.reason.permission"
+  | "bootstrap.reason.unavailable"
+  | "bootstrap.reason.recoveryFailed"
+  | "bootstrap.reason.recoveredBackup"
+
+const blockedReasonLabels: Record<StorageFailureReason, RecoveryReasonKey> = {
+  corrupt: "bootstrap.reason.corrupt",
+  permission: "bootstrap.reason.permission",
+  unavailable: "bootstrap.reason.unavailable",
+  "recovery-failed": "bootstrap.reason.recoveryFailed"
+}
+
 export function RecoveryBanner({ state, onRetry, onExportDiagnostics }: RecoveryBannerProps) {
   const { t } = useI18n()
   const capabilities = deriveBootstrapCapabilities(state)
@@ -30,6 +45,13 @@ export function RecoveryBanner({ state, onRetry, onExportDiagnostics }: Recovery
   const affected = useMemo(() => isError
     ? [...retryableBootstrapResources(state)]
     : [...new Set([...capabilities.blocked, ...capabilities.notices])], [capabilities.blocked, capabilities.notices, isError, state])
+  const reasonDetails = useMemo(() => affected.flatMap((resource) => {
+    const health = state.resources[resource]?.health
+    if (health?.status === "blocked") return [{ resource, key: blockedReasonLabels[health.reason] }]
+    if (health?.status === "recovered") return [{ resource, key: "bootstrap.reason.recoveredBackup" as const }]
+    if (health?.status === "defaulted" && health.reason === "corrupt") return [{ resource, key: "bootstrap.reason.corrupt" as const }]
+    return []
+  }), [affected, state.resources])
   const issueKey = `${state.phase}:${affected.join(",")}`
 
   useEffect(() => {
@@ -62,6 +84,13 @@ export function RecoveryBanner({ state, onRetry, onExportDiagnostics }: Recovery
         {blocked ? <AlertTriangle aria-hidden="true" size={16} /> : <CheckCircle2 aria-hidden="true" size={16} />}
         <span><strong>{blocked ? t("bootstrap.blocked") : t("bootstrap.recovered")}</strong><span>{labels}</span></span>
         {blocked && <small>{t("bootstrap.dataNotReset")}</small>}
+        {reasonDetails.length > 0 && (
+          <span className="recovery-banner-reasons">
+            <small>{t("bootstrap.reasonLabel")}:</small>
+            {reasonDetails.map((detail) => <small key={`${detail.resource}:${detail.key}`}><strong>{t(resourceLabels[detail.resource])}:</strong> {t(detail.key)}</small>)}
+          </span>
+        )}
+        {isError && reasonDetails.length === 0 && <small>{t("bootstrap.reasonLabel")}: {t("bootstrap.reason.bootstrapRequest")}</small>}
         {exported && <small>{t("bootstrap.diagnosticsExported")}</small>}
       </div>
       <div className="recovery-banner-actions">

@@ -9,7 +9,6 @@
 .sidebar-session-list button:focus-visible,
 .session-menu button:focus-visible,
 .host-filter-row > button:focus-visible,
-.host-card-edit:focus-visible,
 .window-controls button:focus-visible,
 .secondary-command:focus-visible,
 .primary-command:focus-visible,
@@ -85,6 +84,21 @@ textarea:focus-visible {
 
 .recovery-banner-copy small {
   color: var(--text-muted);
+}
+
+.recovery-banner-reasons {
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.recovery-banner-reasons small:first-child {
+  color: var(--text-secondary);
+  font-weight: 650;
+}
+
+.recovery-banner-reasons strong {
+  color: var(--text-secondary);
+  font-weight: 600;
 }
 
 .recovery-banner-actions {
@@ -456,6 +470,15 @@ textarea:focus-visible {
   color: currentColor;
 }
 
+.host-context-menu .host-context-danger {
+  color: var(--danger);
+}
+
+.host-context-menu .host-context-danger:hover {
+  color: var(--danger);
+  background: var(--danger-hover);
+}
+
 .terminal-context-menu-status {
   margin: 5px 8px 2px;
   border-top: 1px solid var(--line);
@@ -518,56 +541,10 @@ textarea:focus-visible {
   min-width: 0;
 }
 
-.host-selection-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--workspace-raised);
-}
-
-.host-context-action {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border: 0;
-  border-radius: 4px;
-  color: var(--text-secondary);
-  background: transparent;
-  cursor: pointer;
-}
-
-.host-context-action:hover:not(:disabled),
-.host-context-action:focus-visible {
-  color: var(--text-primary);
-  background: var(--workspace-hover);
-}
-
-.host-context-action.host-context-danger:hover:not(:disabled),
-.host-context-action.host-context-danger:focus-visible {
-  color: var(--danger);
-}
-
 .host-action-error {
   margin: -8px 28px 10px;
   color: var(--danger);
   font-size: 12px;
-}
-
-.host-connection-test-result {
-  margin: -8px 28px 10px;
-  font-size: 12px;
-}
-
-.host-connection-test-result.is-success {
-  color: var(--accent);
-}
-
-.host-connection-test-result.is-failure {
-  color: var(--danger);
 }
 
 .empty-actions {
@@ -928,34 +905,6 @@ textarea:focus-visible {
 .host-card-copy small b {
   color: var(--text-secondary);
   font-weight: 700;
-}
-
-.host-card-edit {
-  position: absolute;
-  top: 9px;
-  right: 9px;
-  display: grid;
-  width: 25px;
-  height: 25px;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  color: var(--text-secondary);
-  background: var(--workspace-bg);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 140ms ease, color 140ms ease, background 140ms ease;
-}
-
-.host-card-shell:hover .host-card-edit,
-.host-card-shell:focus-within .host-card-edit,
-.host-card-edit:focus-visible {
-  opacity: 1;
-}
-
-.host-card-edit:hover:not(:disabled) {
-  color: var(--text-primary);
-  background: var(--workspace-hover);
 }
 
 @media (max-width: 1100px) {

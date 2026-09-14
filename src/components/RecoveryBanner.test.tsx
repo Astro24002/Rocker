@@ -41,6 +41,25 @@ describe("RecoveryBanner", () => {
     expect(onRetry).toHaveBeenCalledWith(["credentials"])
   })
 
+  it("shows a localized reason for each blocked resource without exposing the raw message", () => {
+    const state = bootstrapReducer(createBootstrapState(), {
+      type: "load-success",
+      snapshot: snapshot({
+        hosts: { health: { store: "hosts", status: "blocked", reason: "permission", message: "raw filesystem detail" } },
+        workspace: { health: { store: "workspace", status: "blocked", reason: "unavailable", message: "raw workspace detail" } }
+      })
+    })
+
+    render(<I18nProvider><RecoveryBanner state={state} onRetry={vi.fn()} onExportDiagnostics={vi.fn(async () => ({ canceled: true }))} /></I18nProvider>)
+
+    const alert = screen.getByRole("alert")
+    expect(alert).toHaveTextContent("Reason")
+    expect(alert).toHaveTextContent("Hosts: Access was denied by file permissions.")
+    expect(alert).toHaveTextContent("Workspace: The data file or directory could not be accessed.")
+    expect(alert).not.toHaveTextContent("raw filesystem detail")
+    expect(alert).not.toHaveTextContent("raw workspace detail")
+  })
+
   it("supports the translated recoverable notice", () => {
     const state = bootstrapReducer(createBootstrapState(), {
       type: "load-success",
@@ -51,6 +70,7 @@ describe("RecoveryBanner", () => {
     render(<I18nProvider><RecoveryBanner state={state} onRetry={vi.fn()} onExportDiagnostics={vi.fn(async () => ({ canceled: true }))} /></I18nProvider>)
 
     expect(screen.getByRole("status")).toHaveTextContent("历史记录")
+    expect(screen.getByRole("status")).toHaveTextContent(/原因:.*历史记录: 存储数据已损坏。/)
     expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument()
   })
 
@@ -70,6 +90,7 @@ describe("RecoveryBanner", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Local data unavailable")
     expect(screen.getByRole("alert")).toHaveTextContent("Data was not reset")
+    expect(screen.getByRole("alert")).toHaveTextContent("Reason: The startup data request failed before individual stores could be checked.")
     expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled()
     expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled()
     expect(screen.getByRole("alert")).not.toHaveTextContent("Error")

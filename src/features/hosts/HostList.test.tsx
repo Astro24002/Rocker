@@ -40,16 +40,15 @@ describe("HostList", () => {
     /></I18nProvider>)
 
     const connect = screen.getByRole("button", { name: "Server A, SSH, root" })
-    const edit = screen.getByRole("button", { name: "Edit Server A" })
     expect(screen.getByRole("button", { name: "Add host" })).toBeDisabled()
     expect(screen.getByRole("button", { name: "Import SSH config" })).toBeDisabled()
     expect(connect).toBeDisabled()
-    expect(edit).toBeDisabled()
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument()
 
     fireEvent.click(connect)
     fireEvent.click(screen.getByRole("button", { name: "Add host" }))
     fireEvent.click(screen.getByRole("button", { name: "Import SSH config" }))
-    fireEvent.click(edit)
+    fireEvent.contextMenu(connect, { clientX: 120, clientY: 80 })
 
     expect(onConnect).not.toHaveBeenCalled()
     expect(onAdd).not.toHaveBeenCalled()
@@ -131,25 +130,55 @@ describe("HostList", () => {
     expect(screen.getByRole("button", { name: "连接" })).toBeDisabled()
   })
 
-  it("shows contextual host actions only after selecting a card", () => {
+  it("opens host actions from the card context menu", () => {
     render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
 
+    const card = screen.getByRole("button", { name: "Server A, SSH, root" })
+    expect(screen.queryByRole("button", { name: "Edit host" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Edit Server A" })).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Duplicate host" })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "Server A, SSH, root" }))
+    fireEvent.contextMenu(card, { clientX: 120, clientY: 80 })
 
-    expect(screen.getByRole("button", { name: "Duplicate host" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Favorite host" })).toBeInTheDocument()
-    expect(screen.queryByText("⋯")).not.toBeInTheDocument()
+    expect(card).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByRole("menu", { name: "Server A actions" })).toBeInTheDocument()
+    expect(screen.getByRole("menuitem", { name: "Edit host" })).toBeInTheDocument()
+    expect(screen.getByRole("menuitem", { name: "Duplicate host" })).toBeInTheDocument()
+    expect(screen.getByRole("menuitem", { name: "Favorite host" })).toBeInTheDocument()
+    expect(screen.getByRole("menuitem", { name: "Delete host" })).toBeInTheDocument()
+    expect(screen.queryByRole("menuitem", { name: "Test connection" })).not.toBeInTheDocument()
   })
 
-  it("tests the selected Host and reports a safe reachable result", async () => {
-    const onTestConnection = vi.fn().mockResolvedValue({ status: "reachable", latencyMs: 18 })
-    render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onTestConnection={onTestConnection} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
-    fireEvent.click(screen.getByRole("button", { name: "Server A, SSH, root" }))
+  it("runs edit from the host context menu", () => {
+    const onEdit = vi.fn()
+    render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={onEdit} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
 
-    fireEvent.click(screen.getByRole("button", { name: "Test connection" }))
-    await waitFor(() => expect(onTestConnection).toHaveBeenCalledWith(host))
-    expect(screen.getByRole("status")).toHaveTextContent("Reachable in 18 ms")
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Server A, SSH, root" }), { clientX: 120, clientY: 80 })
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit host" }))
+
+    expect(onEdit).toHaveBeenCalledWith(host)
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument()
+  })
+
+  it.each(["ContextMenu", "F10"] as const)("opens host actions with %s keyboard input", (key) => {
+    render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
+
+    const card = screen.getByRole("button", { name: "Server A, SSH, root" })
+    card.focus()
+    fireEvent.keyDown(card, { key, shiftKey: key === "F10" })
+
+    expect(screen.getByRole("menu", { name: "Server A actions" })).toBeInTheDocument()
+    expect(screen.getByRole("menu")).toHaveFocus()
+  })
+
+  it("closes the host context menu and restores card focus", () => {
+    render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
+
+    const card = screen.getByRole("button", { name: "Server A, SSH, root" })
+    fireEvent.contextMenu(card, { clientX: 120, clientY: 80 })
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" })
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument()
+    expect(card).toHaveFocus()
   })
 
   it("filters cards by environment and tag selectors", () => {
@@ -171,11 +200,12 @@ describe("HostList", () => {
     const onDuplicate = vi.fn().mockResolvedValue({ ...host, id: "host-copy", name: "Server A copy" })
     const onToggleFavorite = vi.fn().mockResolvedValue({ ...host, favorite: true })
     render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={onDuplicate} onToggleFavorite={onToggleFavorite} onRemove={vi.fn()} /></I18nProvider>)
-    fireEvent.click(screen.getByRole("button", { name: "Server A, SSH, root" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Server A, SSH, root" }), { clientX: 120, clientY: 80 })
 
-    fireEvent.click(screen.getByRole("button", { name: "Favorite host" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Favorite host" }))
     await waitFor(() => expect(onToggleFavorite).toHaveBeenCalledWith(host))
-    fireEvent.click(screen.getByRole("button", { name: "Duplicate host" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Server A, SSH, root" }), { clientX: 120, clientY: 80 })
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate host" }))
     await waitFor(() => expect(onDuplicate).toHaveBeenCalledWith(host))
   })
 
@@ -183,8 +213,8 @@ describe("HostList", () => {
     const onRemove = vi.fn().mockResolvedValue(undefined)
     const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false)
     render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={onRemove} /></I18nProvider>)
-    fireEvent.click(screen.getByRole("button", { name: "Server A, SSH, root" }))
-    fireEvent.click(screen.getByRole("button", { name: "Delete host" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Server A, SSH, root" }), { clientX: 120, clientY: 80 })
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete host" }))
 
     expect(confirmation).toHaveBeenCalled()
     expect(onRemove).not.toHaveBeenCalled()
@@ -195,8 +225,8 @@ describe("HostList", () => {
     const production = { ...host, environment: "production" as const }
     const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false)
     render(<I18nProvider><HostList hosts={[production]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
-    fireEvent.click(screen.getByRole("button", { name: "Server A, SSH, root" }))
-    fireEvent.click(screen.getByRole("button", { name: "Delete host" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Server A, SSH, root" }), { clientX: 120, clientY: 80 })
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete host" }))
 
     expect(confirmation).toHaveBeenCalledWith(expect.stringContaining("production"))
     confirmation.mockRestore()
@@ -205,8 +235,8 @@ describe("HostList", () => {
   it("shows a safe error when a selected Host action fails", async () => {
     const onToggleFavorite = vi.fn().mockRejectedValue(new Error("storage details"))
     render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={onToggleFavorite} onRemove={vi.fn()} /></I18nProvider>)
-    fireEvent.click(screen.getByRole("button", { name: "Server A, SSH, root" }))
-    fireEvent.click(screen.getByRole("button", { name: "Favorite host" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Server A, SSH, root" }), { clientX: 120, clientY: 80 })
+    fireEvent.click(screen.getByRole("menuitem", { name: "Favorite host" }))
 
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Couldn't update this host"))
     expect(screen.queryByText("storage details")).not.toBeInTheDocument()
