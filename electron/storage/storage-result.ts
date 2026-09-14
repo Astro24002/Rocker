@@ -9,6 +9,18 @@ export type StorageKind =
 
 export type StorageFailureReason = "corrupt" | "permission" | "unavailable" | "recovery-failed"
 
+export type StorageDiagnosticAction = "read-failed" | "write-failed" | "recovery-failed"
+
+export interface StorageDiagnosticEvent {
+  store: StorageKind
+  action: StorageDiagnosticAction
+  phase: string
+  reason: StorageFailureReason
+  code?: string
+}
+
+export type StorageDiagnosticSink = (event: StorageDiagnosticEvent) => void
+
 export interface StorageIssue {
   store: StorageKind
   reason: StorageFailureReason

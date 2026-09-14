@@ -1,6 +1,6 @@
 import { resolve } from "node:path"
 import { JsonStore } from "../storage/json-store"
-import type { LoadResult, StorageHealth } from "../storage/storage-result"
+import type { LoadResult, StorageDiagnosticSink, StorageHealth } from "../storage/storage-result"
 import { normalizeFingerprint, type HostKeyAuditRecord, type HostKeyStore, type StoredHostKeyRecord } from "./host-keys"
 
 interface HostKeyDocument {
@@ -13,7 +13,7 @@ const maximumAuditEntries = 500
 export class JsonHostKeyStore implements HostKeyStore {
   private readonly store: JsonStore<HostKeyDocument>
 
-  public constructor(filePath: string) {
+  public constructor(filePath: string, onDiagnostic?: StorageDiagnosticSink) {
     const resolvedPath = resolve(filePath)
     this.store = new JsonStore({
       filePath: resolvedPath,
@@ -21,7 +21,8 @@ export class JsonHostKeyStore implements HostKeyStore {
       defaultValue: { fingerprints: {}, history: [] },
       recovery: "blocked",
       normalize: normalizeHostKeyDocument,
-      sensitive: true
+      sensitive: true,
+      onDiagnostic
     })
   }
 

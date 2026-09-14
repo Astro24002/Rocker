@@ -1,6 +1,7 @@
 import { JsonStore } from "./json-store"
 import { normalizeHostProfile } from "./host-store"
 import { normalizeSettings } from "./settings-store"
+import type { StorageDiagnosticSink } from "./storage-result"
 import type {
   ConfigImportTarget,
   ConfigurationImportHostKeyRollback,
@@ -19,14 +20,15 @@ const maximumJournalEntries = 10_000
 export class ConfigImportJournalStore implements ConfigurationImportJournalStore {
   private readonly store: JsonStore<JournalDocument>
 
-  public constructor(filePath: string) {
+  public constructor(filePath: string, onDiagnostic?: StorageDiagnosticSink) {
     this.store = new JsonStore({
       filePath,
       store: "imports",
       defaultValue: {},
       recovery: "blocked",
       normalize: normalizeJournalDocument,
-      sensitive: true
+      sensitive: true,
+      onDiagnostic
     })
   }
 

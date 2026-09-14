@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { JsonStore } from "./json-store"
-import { StorageBlockedError, type LoadResult } from "./storage-result"
+import { StorageBlockedError, type LoadResult, type StorageDiagnosticSink } from "./storage-result"
 import type { HostCharset, HostEnvironment, HostPlatform, HostProfile, HostThemeColor, StoredHostDocument } from "./types"
 
 const defaultDocument: StoredHostDocument = { hosts: [] }
@@ -10,8 +10,8 @@ const defaultDocument: StoredHostDocument = { hosts: [] }
 export class HostStore {
   private readonly store: JsonStore<StoredHostDocument>
 
-  public constructor(filePath: string) {
-    this.store = createJsonStore(filePath)
+  public constructor(filePath: string, onDiagnostic?: StorageDiagnosticSink) {
+    this.store = createJsonStore(filePath, onDiagnostic)
   }
 
   public async loadWithStatus(options: { consumeHealth?: boolean } = {}): Promise<LoadResult<HostProfile[]>> {
@@ -125,17 +125,18 @@ export class HostStore {
   }
 }
 
-export function createHostStore(userDataPath: string): HostStore {
-  return new HostStore(join(userDataPath, "rocker.json"))
+export function createHostStore(userDataPath: string, onDiagnostic?: StorageDiagnosticSink): HostStore {
+  return new HostStore(join(userDataPath, "rocker.json"), onDiagnostic)
 }
 
-function createJsonStore(filePath: string): JsonStore<StoredHostDocument> {
+function createJsonStore(filePath: string, onDiagnostic?: StorageDiagnosticSink): JsonStore<StoredHostDocument> {
   return new JsonStore({
     filePath,
     store: "hosts",
     defaultValue: defaultDocument,
     recovery: "blocked",
-    normalize: normalizeHostDocument
+    normalize: normalizeHostDocument,
+    onDiagnostic
   })
 }
 

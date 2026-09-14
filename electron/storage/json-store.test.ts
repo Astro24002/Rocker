@@ -4,12 +4,13 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { JsonStore } from "./json-store"
-import { StorageBlockedError, type LoadResult } from "./storage-result"
+import { StorageBlockedError, type LoadResult, type StorageDiagnosticEvent } from "./storage-result"
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>()
   return {
     ...original,
+    readFile: vi.fn(original.readFile),
     rename: vi.fn(original.rename),
     writeFile: vi.fn(original.writeFile)
   }
@@ -23,12 +24,15 @@ const temporaryDirectories: string[] = []
 const fixedDate = new Date("2026-08-31T14:25:30.123Z")
 const writeFileMock = vi.mocked(fs.writeFile)
 const renameMock = vi.mocked(fs.rename)
+const readFileMock = vi.mocked(fs.readFile)
 const defaultWriteFile = writeFileMock.getMockImplementation()!
 const defaultRename = renameMock.getMockImplementation()!
+const defaultReadFile = readFileMock.getMockImplementation()!
 
 afterEach(async () => {
   writeFileMock.mockClear().mockImplementation(defaultWriteFile)
   renameMock.mockClear().mockImplementation(defaultRename)
+  readFileMock.mockClear().mockImplementation(defaultReadFile)
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
 
@@ -163,17 +167,25 @@ describe("JsonStore", () => {
     const filePath = await temporaryFilePath()
     await writeFile(filePath, "{primary is corrupt", "utf8")
     await writeFile(`${filePath}.bak`, JSON.stringify({ count: 19 }), "utf8")
+    const diagnostics: StorageDiagnosticEvent[] = []
     renameMock.mockImplementation(async (source, destination) => {
       if (destination === filePath && typeof source === "string" && source.includes(".tmp.")) {
         throw withCode("EIO")
       }
       return defaultRename(source, destination)
     })
-    const store = createCounterStore(filePath)
+    const store = createCounterStore(filePath, { onDiagnostic: (event) => diagnostics.push(event) })
 
     await expect(store.load()).resolves.toMatchObject({ status: "recovered", value: { count: 19 } })
     expect(await findQuarantine(filePath)).toBeTruthy()
     expect(JSON.parse(await readFile(`${filePath}.bak`, "utf8"))).toEqual({ count: 19 })
+    expect(diagnostics).toContainEqual({
+      store: "settings",
+      action: "recovery-failed",
+      phase: "restore-primary-rename",
+      reason: "recovery-failed",
+      code: "EIO"
+    })
   })
 
   it("quarantines a corrupt primary and defaults an unprotected store", async () => {
@@ -293,50 +305,90 @@ describe("JsonStore", () => {
   it("returns a safe blocked result when quarantining fails", async () => {
     const filePath = await temporaryFilePath()
     await writeFile(filePath, "{primary is corrupt", "utf8")
+    const diagnostics: StorageDiagnosticEvent[] = []
     renameMock.mockImplementation(async (source, destination) => {
       if (source === filePath && typeof destination === "string" && destination.endsWith(".corrupt")) {
         throw withCode("EACCES")
       }
       return defaultRename(source, destination)
     })
-    const store = createCounterStore(filePath)
+    const store = createCounterStore(filePath, { onDiagnostic: (event) => diagnostics.push(event) })
 
     const result = await store.load()
 
     expect(result).toMatchObject({ status: "blocked", issue: { store: "settings", reason: "permission" } })
     expect((result as Extract<LoadResult<Counter>, { status: "blocked" }>).issue.message).not.toContain(filePath)
     expect(await readFile(filePath, "utf8")).toBe("{primary is corrupt")
+    expect(diagnostics).toContainEqual({
+      store: "settings",
+      action: "recovery-failed",
+      phase: "quarantine-primary",
+      reason: "permission",
+      code: "EACCES"
+    })
   })
 
   it("reports a safe blocked error when the final atomic rename fails", async () => {
     const filePath = await temporaryFilePath()
     await writeFile(filePath, JSON.stringify({ count: 1 }), "utf8")
+    const diagnostics: StorageDiagnosticEvent[] = []
     renameMock.mockImplementation(async (source, destination) => {
       if (destination === filePath && typeof source === "string" && source.includes(".tmp.")) {
         throw withCode("EIO")
       }
       return defaultRename(source, destination)
     })
-    const store = createCounterStore(filePath)
+    const store = createCounterStore(filePath, { onDiagnostic: (event) => diagnostics.push(event) })
 
     await expect(store.write({ count: 2 })).rejects.toMatchObject({
       name: "StorageBlockedError",
       issue: { store: "settings", reason: "unavailable" }
     })
     expect(JSON.parse(await readFile(filePath, "utf8"))).toEqual({ count: 1 })
+    expect(diagnostics).toContainEqual({
+      store: "settings",
+      action: "write-failed",
+      phase: "write-primary-rename",
+      reason: "unavailable",
+      code: "EIO"
+    })
+  })
+
+  it("reports the primary read phase and operating-system error code", async () => {
+    const filePath = await temporaryFilePath()
+    const diagnostics: StorageDiagnosticEvent[] = []
+    readFileMock.mockRejectedValueOnce(withCode("EIO"))
+    const store = createCounterStore(filePath, { onDiagnostic: (event) => diagnostics.push(event) })
+
+    await expect(store.load()).resolves.toMatchObject({
+      status: "blocked",
+      issue: { store: "settings", reason: "unavailable" }
+    })
+    expect(diagnostics).toContainEqual({
+      store: "settings",
+      action: "read-failed",
+      phase: "read-primary",
+      reason: "unavailable",
+      code: "EIO"
+    })
   })
 })
 
-function createCounterStore(filePath: string, recovery: "default" | "blocked" = "default"): JsonStore<Counter> {
+function createCounterStore(
+  filePath: string,
+  optionsOrRecovery: { recovery?: "default" | "blocked"; onDiagnostic?: (event: StorageDiagnosticEvent) => void } | "default" | "blocked" = {}
+): JsonStore<Counter> {
+  const options = typeof optionsOrRecovery === "string" ? { recovery: optionsOrRecovery } : optionsOrRecovery
   let operation = 0
   return new JsonStore({
     filePath,
     store: "settings",
     defaultValue: { count: 0 },
-    recovery,
+    recovery: options.recovery ?? "default",
     normalize: normalizeCounter,
     clock: () => fixedDate,
-    nextOperationId: () => `test-${++operation}`
+    nextOperationId: () => `test-${++operation}`,
+    onDiagnostic: options.onDiagnostic
   })
 }
 

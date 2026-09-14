@@ -1,6 +1,6 @@
 import type { CredentialValueMap, CredentialValueStore, EncryptedVaultStore } from "./credentials"
 import { JsonStore } from "./json-store"
-import { StorageBlockedError, type LoadResult, type StorageHealth } from "./storage-result"
+import { StorageBlockedError, type LoadResult, type StorageDiagnosticSink, type StorageHealth } from "./storage-result"
 import { validateEncryptedVault, type EncryptedVault } from "./vault-format"
 
 interface CredentialDocument {
@@ -10,14 +10,15 @@ interface CredentialDocument {
 export class JsonCredentialValueStore implements CredentialValueStore {
   private readonly store: JsonStore<CredentialDocument>
 
-  public constructor(filePath: string) {
+  public constructor(filePath: string, onDiagnostic?: StorageDiagnosticSink) {
     this.store = new JsonStore({
       filePath,
       store: "credentials",
       defaultValue: { values: {} },
       recovery: "blocked",
       normalize: normalizeCredentialDocument,
-      sensitive: true
+      sensitive: true,
+      onDiagnostic
     })
   }
 
@@ -66,14 +67,15 @@ interface VaultDocument {
 export class JsonVaultStore implements EncryptedVaultStore {
   private readonly store: JsonStore<VaultDocument>
 
-  public constructor(filePath: string) {
+  public constructor(filePath: string, onDiagnostic?: StorageDiagnosticSink) {
     this.store = new JsonStore({
       filePath,
       store: "credentials",
       defaultValue: {},
       recovery: "blocked",
       normalize: normalizeVaultDocument,
-      sensitive: true
+      sensitive: true,
+      onDiagnostic
     })
   }
 

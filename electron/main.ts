@@ -15,6 +15,7 @@ import { createHostStore } from "./storage/host-store"
 import { createSafeStorageCipher } from "./storage/safe-storage"
 import { defaultSettings, SettingsStore } from "./storage/settings-store"
 import { SerializedOperationQueue } from "./storage/operation-queue"
+import { StorageBlockedError, type StorageDiagnosticEvent, type StorageDiagnosticSink } from "./storage/storage-result"
 import type { AppSettings } from "./storage/types"
 import { productUserDataDirectory } from "./storage/user-data-directory"
 import { WorkspaceSnapshotStore } from "./storage/workspace-store"
@@ -75,16 +76,17 @@ async function startApplication(): Promise<void> {
   app.setPath("userData", productUserDataDirectory(appDataPath))
   const resolvedUserDataPath = app.getPath("userData")
   const diagnostics = new DiagnosticLogger(resolvedUserDataPath)
+  const onStorageDiagnostic: StorageDiagnosticSink = (event) => recordStorageDiagnostic(diagnostics, event)
   const mutations = new SerializedOperationQueue()
-  const hosts = createHostStore(resolvedUserDataPath)
+  const hosts = createHostStore(resolvedUserDataPath, onStorageDiagnostic)
   const credentials = new CredentialVault(
-    new JsonCredentialValueStore(join(resolvedUserDataPath, "credentials.json")),
+    new JsonCredentialValueStore(join(resolvedUserDataPath, "credentials.json"), onStorageDiagnostic),
     createSafeStorageCipher(),
-    new JsonVaultStore(join(resolvedUserDataPath, "vault.json"))
+    new JsonVaultStore(join(resolvedUserDataPath, "vault.json"), onStorageDiagnostic)
   )
-  const settings = new SettingsStore(join(resolvedUserDataPath, "settings.json"))
-  const hostKeys = new JsonHostKeyStore(join(resolvedUserDataPath, "host-keys.json"))
-  const importJournal = new ConfigImportJournalStore(join(resolvedUserDataPath, "config-import.json"))
+  const settings = new SettingsStore(join(resolvedUserDataPath, "settings.json"), onStorageDiagnostic)
+  const hostKeys = new JsonHostKeyStore(join(resolvedUserDataPath, "host-keys.json"), onStorageDiagnostic)
+  const importJournal = new ConfigImportJournalStore(join(resolvedUserDataPath, "config-import.json"), onStorageDiagnostic)
   await importJournal.recover({
     listHosts: () => hosts.list(),
     saveHost: (profile) => hosts.save(profile),
@@ -95,10 +97,14 @@ async function startApplication(): Promise<void> {
     replaceHostKey: (host, port, expected, replacement) => hostKeys.replace(host, port, expected, replacement),
     removeHostKey: (host, port, expected) => hostKeys.remove(host, port, expected)
   })
-  const initialSettingsResult = await loadInitialSettings(settings)
+  const initialSettingsResult = await loadInitialSettings(settings, (error) => {
+    recordUnexpectedStorageFailure(diagnostics, "settings", "startup-load", error)
+  })
   const initialSettings = initialSettingsResult.status === "blocked" ? defaultSettings : initialSettingsResult.value
-  const snapshots = new WorkspaceSnapshotStore(join(resolvedUserDataPath, "workspace.json"))
-  const initialWorkspaceResult = await loadInitialWorkspace(snapshots)
+  const snapshots = new WorkspaceSnapshotStore(join(resolvedUserDataPath, "workspace.json"), undefined, onStorageDiagnostic)
+  const initialWorkspaceResult = await loadInitialWorkspace(snapshots, (error) => {
+    recordUnexpectedStorageFailure(diagnostics, "workspace", "startup-load", error)
+  })
   let windows: WorkspaceWindowManager
   const connections = new SshConnectionManager({
     resolve: createConnectionResolver({ hosts, credentials, settings, hostKeys }),
@@ -156,7 +162,7 @@ async function startApplication(): Promise<void> {
     connections,
     ports: new PortService(connections),
     forwarding,
-    history: new HistoryStore(join(resolvedUserDataPath, "history.json")),
+    history: new HistoryStore(join(resolvedUserDataPath, "history.json"), onStorageDiagnostic),
     settings,
     diagnostics,
     mutations,
@@ -206,10 +212,14 @@ async function startApplication(): Promise<void> {
   }
 }
 
-async function loadInitialSettings(settings: SettingsStore): Promise<Awaited<ReturnType<SettingsStore["loadWithStatus"]>>> {
+async function loadInitialSettings(
+  settings: SettingsStore,
+  onFailure?: (error: unknown) => void
+): Promise<Awaited<ReturnType<SettingsStore["loadWithStatus"]>>> {
   try {
     return await settings.loadWithStatus()
-  } catch {
+  } catch (error) {
+    onFailure?.(error)
     return {
       status: "blocked",
       issue: {
@@ -222,11 +232,13 @@ async function loadInitialSettings(settings: SettingsStore): Promise<Awaited<Ret
 }
 
 async function loadInitialWorkspace(
-  snapshots: WorkspaceSnapshotStore
+  snapshots: WorkspaceSnapshotStore,
+  onFailure?: (error: unknown) => void
 ): Promise<Awaited<ReturnType<WorkspaceSnapshotStore["loadWithStatus"]>>> {
   try {
     return await snapshots.loadWithStatus()
-  } catch {
+  } catch (error) {
+    onFailure?.(error)
     return {
       status: "blocked",
       issue: {
@@ -340,6 +352,43 @@ function recordWindowDiagnostic(logger: DiagnosticLogger, event: WindowLifecycle
       rendererGeneration: event.owner.rendererGeneration
     }
   })
+}
+
+function recordStorageDiagnostic(logger: DiagnosticLogger, event: StorageDiagnosticEvent): void {
+  logger.record({
+    category: "storage",
+    action: event.action,
+    reason: event.reason,
+    details: {
+      store: event.store,
+      phase: event.phase,
+      ...(event.code ? { code: event.code } : {})
+    }
+  })
+}
+
+function recordUnexpectedStorageFailure(
+  logger: DiagnosticLogger,
+  store: StorageDiagnosticEvent["store"],
+  phase: string,
+  error: unknown
+): void {
+  const issue = error instanceof StorageBlockedError ? error.issue : undefined
+  const code = storageErrorCode(error)
+  const action = issue?.reason === "recovery-failed" ? "recovery-failed" : "read-failed"
+  recordStorageDiagnostic(logger, {
+    store: issue?.store ?? store,
+    action,
+    phase,
+    reason: issue?.reason ?? "unavailable",
+    ...(code ? { code } : {})
+  })
+}
+
+function storageErrorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined
 }
 
 bootstrapPrimaryInstance(app, {

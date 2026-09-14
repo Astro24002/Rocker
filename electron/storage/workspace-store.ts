@@ -1,5 +1,5 @@
 import { JsonStore } from "./json-store"
-import { StorageBlockedError, type LoadResult, type StorageHealth } from "./storage-result"
+import { StorageBlockedError, type LoadResult, type StorageDiagnosticSink, type StorageHealth } from "./storage-result"
 import type {
   StoredTerminalLayout,
   StoredWorkspaceDocument,
@@ -23,13 +23,14 @@ export class WorkspaceSnapshotStore {
   private writeChain: Promise<void> = Promise.resolve()
   private dirty = false
 
-  public constructor(filePath: string, writeDelayMs = defaultWriteDelayMs) {
+  public constructor(filePath: string, writeDelayMs = defaultWriteDelayMs, onDiagnostic?: StorageDiagnosticSink) {
     this.store = new JsonStore({
       filePath,
       store: "workspace",
       defaultValue: defaultDocument,
       recovery: "default",
-      normalize: normalizeDocument
+      normalize: normalizeDocument,
+      onDiagnostic
     })
     this.writeDelayMs = Math.max(0, Math.floor(writeDelayMs))
   }

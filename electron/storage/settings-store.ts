@@ -1,5 +1,5 @@
 import { JsonStore } from "./json-store"
-import { StorageBlockedError, type LoadResult } from "./storage-result"
+import { StorageBlockedError, type LoadResult, type StorageDiagnosticSink } from "./storage-result"
 import type { AppSettings } from "./types"
 import { normalizeSidebarWidth } from "../../src/shared/sidebar-width"
 
@@ -23,13 +23,14 @@ export const defaultSettings: AppSettings = {
 export class SettingsStore {
   private readonly store: JsonStore<AppSettings>
 
-  public constructor(filePath: string) {
+  public constructor(filePath: string, onDiagnostic?: StorageDiagnosticSink) {
     this.store = new JsonStore({
       filePath,
       store: "settings",
       defaultValue: defaultSettings,
       recovery: "default",
-      normalize: normalizeSettings
+      normalize: normalizeSettings,
+      onDiagnostic
     })
   }
 

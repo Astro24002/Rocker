@@ -539,6 +539,7 @@ describe("desktop workspace shell", () => {
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(1))
     const sessionId = workspace().activeSessionId!
+    await waitFor(() => expect(terminalHarness.surfaces.get(sessionId)).toBeDefined())
     const surface = terminalHarness.surfaces.get(sessionId)!
     const terminal = document.querySelector(`.terminal-surface[data-session-id="${sessionId}"]`)
     expect(terminal).not.toBeNull()

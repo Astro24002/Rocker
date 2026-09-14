@@ -6,6 +6,8 @@ import {
   type StorageFailureReason,
   type StorageHealth,
   type StorageIssue,
+  type StorageDiagnosticAction,
+  type StorageDiagnosticSink,
   type StorageKind
 } from "./storage-result"
 
@@ -18,6 +20,7 @@ export interface JsonStoreOptions<T> {
   sensitive?: boolean
   clock?: () => Date
   nextOperationId?: () => string
+  onDiagnostic?: StorageDiagnosticSink
 }
 
 type ReadOutcome<T> =
@@ -44,6 +47,7 @@ export class JsonStore<T> {
   private readonly sensitive: boolean
   private readonly clock: () => Date
   private readonly nextOperationId: () => string
+  private readonly onDiagnostic?: StorageDiagnosticSink
   private latchedHealth?: StorageHealth
   private readOnlyRecovery = false
 
@@ -60,6 +64,7 @@ export class JsonStore<T> {
       this.sensitive = false
       this.clock = () => new Date()
       this.nextOperationId = () => `${++operationSequence}`
+      this.onDiagnostic = undefined
       return
     }
 
@@ -72,6 +77,7 @@ export class JsonStore<T> {
     this.sensitive = optionsOrFilePath.sensitive === true
     this.clock = optionsOrFilePath.clock ?? (() => new Date())
     this.nextOperationId = optionsOrFilePath.nextOperationId ?? (() => `${++operationSequence}`)
+    this.onDiagnostic = optionsOrFilePath.onDiagnostic
   }
 
   public async load(options: { consumeHealth?: boolean } = {}): Promise<LoadResult<T>> {
@@ -128,7 +134,8 @@ export class JsonStore<T> {
       return this.finishLoad({ status: "ok", value: primary.value }, consumeHealth)
     }
     if (primary.kind === "error") {
-      return this.block(blockedHealth ?? this.issueFromError(primary.error, "unavailable"))
+      const issue = this.issueFromError(primary.error, "unavailable", "read-failed", "read-primary")
+      return this.block(blockedHealth ?? issue)
     }
 
     const backup = await this.readDocument(this.backupPath)
@@ -144,10 +151,16 @@ export class JsonStore<T> {
       if (quarantineIssue) return this.block(blockedHealth ?? quarantineIssue)
     }
 
-    if (backup.kind === "error") return this.block(blockedHealth ?? this.issueFromError(backup.error, "unavailable"))
+    if (backup.kind === "error") {
+      const issue = this.issueFromError(backup.error, "unavailable", "read-failed", "read-backup")
+      return this.block(blockedHealth ?? issue)
+    }
 
     const hasQuarantine = await this.hasMatchingQuarantine()
-    if ("kind" in hasQuarantine) return this.block(blockedHealth ?? this.issueFromError(hasQuarantine.error, "unavailable"))
+    if ("kind" in hasQuarantine) {
+      const issue = this.issueFromError(hasQuarantine.error, "unavailable", "read-failed", "scan-quarantine")
+      return this.block(blockedHealth ?? issue)
+    }
     const corrupt = primary.kind === "corrupt" || backup.kind === "corrupt" || hasQuarantine.exists
     if (blockedHealth) return this.block(blockedHealth)
     if (corrupt && this.recovery === "blocked") {
@@ -200,8 +213,10 @@ export class JsonStore<T> {
     const temporaryPaths: string[] = []
     const primaryTemporaryPath = this.temporaryPath(operationId, "primary")
     temporaryPaths.push(primaryTemporaryPath)
+    let phase = "write-directory"
     try {
       await fs.mkdir(dirname(this.filePath), { recursive: true, mode: this.sensitive ? 0o700 : 0o755 })
+      phase = "write-primary-temp"
       await writeTemporaryFile(primaryTemporaryPath, prepared.serialized, this.sensitive ? 0o600 : 0o644)
 
       const hadValidPrimary = loaded.status === "ok" || loaded.status === "recovered"
@@ -209,11 +224,14 @@ export class JsonStore<T> {
         const current = this.prepareValue(loaded.value)
         const backupTemporaryPath = this.temporaryPath(operationId, "backup")
         temporaryPaths.push(backupTemporaryPath)
+        phase = "write-backup-temp"
         await writeTemporaryFile(backupTemporaryPath, current.serialized, this.sensitive ? 0o600 : 0o644)
+        phase = "write-backup-rename"
         await fs.rename(backupTemporaryPath, this.backupPath)
         temporaryPaths.splice(temporaryPaths.indexOf(backupTemporaryPath), 1)
       }
 
+      phase = "write-primary-rename"
       await fs.rename(primaryTemporaryPath, this.filePath)
       temporaryPaths.splice(temporaryPaths.indexOf(primaryTemporaryPath), 1)
       if (this.sensitive) await bestEffortChmod(this.filePath, 0o600)
@@ -221,13 +239,17 @@ export class JsonStore<T> {
       if (!hadValidPrimary) {
         const backupTemporaryPath = this.temporaryPath(operationId, "backup")
         temporaryPaths.push(backupTemporaryPath)
+        phase = "write-backup-temp-after-primary"
         await writeTemporaryFile(backupTemporaryPath, prepared.serialized, this.sensitive ? 0o600 : 0o644)
+        phase = "write-backup-rename-after-primary"
         await fs.rename(backupTemporaryPath, this.backupPath)
         temporaryPaths.splice(temporaryPaths.indexOf(backupTemporaryPath), 1)
       }
       if (this.sensitive) await bestEffortChmod(this.backupPath, 0o600)
     } catch (error) {
-      const issue = error instanceof StorageBlockedError ? error.issue : this.issueFromError(error, "unavailable")
+      const issue = error instanceof StorageBlockedError
+        ? error.issue
+        : this.issueFromError(error, "unavailable", "write-failed", phase)
       this.latchedHealth = {
         store: this.store,
         status: "blocked",
@@ -243,11 +265,17 @@ export class JsonStore<T> {
   private async restorePrimary(value: T): Promise<void> {
     const prepared = this.prepareValue(value)
     const temporaryPath = this.temporaryPath(this.operationId(), "restore")
+    let phase = "restore-directory"
     try {
       await fs.mkdir(dirname(this.filePath), { recursive: true, mode: this.sensitive ? 0o700 : 0o755 })
+      phase = "restore-primary-temp"
       await writeTemporaryFile(temporaryPath, prepared.serialized, this.sensitive ? 0o600 : 0o644)
+      phase = "restore-primary-rename"
       await fs.rename(temporaryPath, this.filePath)
       if (this.sensitive) await bestEffortChmod(this.filePath, 0o600)
+    } catch (error) {
+      this.issueFromError(error, "recovery-failed", "recovery-failed", phase)
+      throw error
     } finally {
       await fs.rm(temporaryPath, { force: true }).catch(() => undefined)
     }
@@ -260,7 +288,7 @@ export class JsonStore<T> {
       if (this.sensitive) await bestEffortChmod(quarantinePath, 0o600)
       return undefined
     } catch (error) {
-      return this.issueFromError(error, "unavailable")
+      return this.issueFromError(error, "unavailable", "recovery-failed", "quarantine-primary")
     }
   }
 
@@ -350,12 +378,34 @@ export class JsonStore<T> {
     return { store: this.store, reason, message: safeMessage(reason) }
   }
 
-  private issueFromError(error: unknown, fallback: StorageFailureReason): StorageIssue {
+  private issueFromError(
+    error: unknown,
+    fallback: StorageFailureReason,
+    action?: StorageDiagnosticAction,
+    phase?: string
+  ): StorageIssue {
     const code = errorCode(error)
     const reason: StorageFailureReason = code === "EACCES" || code === "EPERM"
       ? "permission"
       : fallback
+    if (action && phase) {
+      this.reportDiagnostic({
+        store: this.store,
+        action,
+        phase,
+        reason,
+        ...(code ? { code } : {})
+      })
+    }
     return this.issue(reason)
+  }
+
+  private reportDiagnostic(event: Parameters<StorageDiagnosticSink>[0]): void {
+    try {
+      this.onDiagnostic?.(event)
+    } catch {
+      // Diagnostic sinks are best effort and must never affect storage behavior.
+    }
   }
 
   private operationId(): string {

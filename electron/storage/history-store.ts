@@ -1,6 +1,6 @@
 import type { ConnectionHistoryItem } from "./types"
 import { JsonStore } from "./json-store"
-import { StorageBlockedError, type LoadResult } from "./storage-result"
+import { StorageBlockedError, type LoadResult, type StorageDiagnosticSink } from "./storage-result"
 
 interface HistoryDocument {
   items: ConnectionHistoryItem[]
@@ -9,13 +9,14 @@ interface HistoryDocument {
 export class HistoryStore {
   private readonly store: JsonStore<HistoryDocument>
 
-  public constructor(filePath: string) {
+  public constructor(filePath: string, onDiagnostic?: StorageDiagnosticSink) {
     this.store = new JsonStore({
       filePath,
       store: "history",
       defaultValue: { items: [] },
       recovery: "default",
-      normalize: normalizeHistoryDocument
+      normalize: normalizeHistoryDocument,
+      onDiagnostic
     })
   }
 

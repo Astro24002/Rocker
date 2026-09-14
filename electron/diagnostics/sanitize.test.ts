@@ -85,9 +85,9 @@ describe("diagnostic sanitization", () => {
     const event = sanitizeDiagnosticEvent({
       at: "2026-08-31T12:00:00.000Z",
       category: "storage",
-      action: "blocked",
+      action: "read-failed",
       reason: "permission",
-      details: { store: "credentials", source: "backup" }
+      details: { store: "credentials", phase: "read-primary", code: "EACCES", source: "backup" }
     })
     const removedMonitoring = sanitizeDiagnosticEvent({
       at: "2026-08-31T12:00:01.000Z",
@@ -96,7 +96,12 @@ describe("diagnostic sanitization", () => {
       reason: "output-limit"
     })
 
-    expect(event).toMatchObject({ category: "storage", reason: "permission" })
+    expect(event).toMatchObject({
+      category: "storage",
+      action: "read-failed",
+      reason: "permission",
+      details: { store: "credentials", phase: "read-primary", code: "EACCES", source: "backup" }
+    })
     expect(removedMonitoring).toMatchObject({ category: "unknown", reason: "output-limit" })
   })
 
