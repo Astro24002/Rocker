@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { normalizeSidebarWidth, stepSidebarWidth, COMPACT_SIDEBAR_WIDTH, EXPANDED_SIDEBAR_MAX_WIDTH } from "../shared/sidebar-width"
+import { useI18n } from "../i18n"
 
 export interface WorkspaceResizeHandleProps {
   width: number
@@ -7,6 +8,7 @@ export interface WorkspaceResizeHandleProps {
 }
 
 export function WorkspaceResizeHandle({ width, onWidthChange }: WorkspaceResizeHandleProps) {
+  const { t } = useI18n()
   const [dragging, setDragging] = useState(false)
   const dragRef = useRef<{ startX: number; startWidth: number } | undefined>(undefined)
 
@@ -49,7 +51,7 @@ export function WorkspaceResizeHandle({ width, onWidthChange }: WorkspaceResizeH
 
   return (
     <div
-      aria-label="Resize sidebar"
+      aria-label={t("workspace.resizeSidebar")}
       aria-orientation="vertical"
       aria-valuemax={EXPANDED_SIDEBAR_MAX_WIDTH}
       aria-valuemin={COMPACT_SIDEBAR_WIDTH}

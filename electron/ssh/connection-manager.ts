@@ -7,13 +7,20 @@ import {
   ConnectionFailureError,
   RemoteOperationError,
   type RemoteExecOptions,
-  type ConnectionFailureReason
+  type ConnectionFailureReason,
+  type ConnectionTestResult
 } from "./types"
 import { inspectHostKey as inspectStoredHostKey, normalizeFingerprint, type HostKeyInspection, type HostKeyStore } from "./host-keys"
 import { retryDelayMs } from "./reconnect-policy"
 import type { ConnectionResourceSnapshot } from "../runtime/resource-snapshot"
 
-export { ConnectionFailureError, RemoteOperationError, type ConnectionFailureReason, type RemoteExecOptions } from "./types"
+export {
+  ConnectionFailureError,
+  RemoteOperationError,
+  type ConnectionFailureReason,
+  type ConnectionTestResult,
+  type RemoteExecOptions
+} from "./types"
 
 export interface ConnectionAcquireRequest {
   hostId: string
@@ -23,8 +30,16 @@ export interface ConnectionAcquireRequest {
   signal?: AbortSignal
 }
 
+export interface ConnectionTestRequest {
+  hostId: string
+  owner: RuntimeOwner
+  signal?: AbortSignal
+}
+
 const DEFAULT_REMOTE_EXEC_TIMEOUT_MS = 10_000
 const DEFAULT_REMOTE_EXEC_MAX_OUTPUT_BYTES = 1_048_576
+const MAX_CONNECTION_TEST_TIMEOUT_MS = 30_000
+const MIN_CONNECTION_TEST_TIMEOUT_MS = 1_000
 
 export interface ResolvedConnectionRequest {
   host: string
@@ -289,6 +304,107 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
       await this.release(lease.id)
       throw withFailureReason(error, failureReason(error, record.connectFailureReason, record.authMethod))
     }
+  }
+
+  public async testConnection(request: ConnectionTestRequest): Promise<ConnectionTestResult> {
+    const probeStartedAt = Date.now()
+    let resolved: ResolvedConnectionRequest
+    try {
+      const resolution = this.resolveRequest({ ...request, kind: "terminal" })
+      let resolutionTimeoutId: ReturnType<typeof setTimeout> | undefined
+      try {
+        const timeout = new Promise<never>((_resolve, reject) => {
+          resolutionTimeoutId = setTimeout(() => reject(new ConnectionFailureError("SSH connection configuration timed out", "timeout")), MAX_CONNECTION_TEST_TIMEOUT_MS)
+        })
+        resolved = await Promise.race([resolution, timeout])
+      } finally {
+        if (resolutionTimeoutId !== undefined) clearTimeout(resolutionTimeoutId)
+      }
+      if (request.signal?.aborted) return { status: "failed", reason: "cancelled" }
+    } catch (error) {
+      return {
+        status: "failed",
+        reason: request.signal?.aborted ? "cancelled" : failureReason(error, "configuration")
+      }
+    }
+
+    const remainingTimeoutMs = MAX_CONNECTION_TEST_TIMEOUT_MS - Math.max(0, Date.now() - probeStartedAt)
+    if (remainingTimeoutMs <= 0) return { status: "failed", reason: "timeout" }
+    const record = this.createRecord(
+      { ...request, kind: "terminal" },
+      resolved,
+      connectionIdentity(request.hostId, resolved)
+    )
+    const client = this.createClient()
+    record.client = client
+    const timeoutMs = Math.min(boundedConnectionTestTimeout(resolved.readyTimeoutMs), remainingTimeoutMs)
+    const startedAt = Date.now()
+
+    return new Promise<ConnectionTestResult>((resolve) => {
+      let settled = false
+      let timeoutId: ReturnType<typeof setTimeout> | undefined
+      let abortListener: (() => void) | undefined
+
+      const cleanup = (): void => {
+        if (timeoutId !== undefined) clearTimeout(timeoutId)
+        timeoutId = undefined
+        if (request.signal && abortListener) request.signal.removeEventListener("abort", abortListener)
+        abortListener = undefined
+        removeEmitterListener(client, "ready", onReady)
+      }
+      const close = (): void => {
+        try {
+          client.end()
+        } catch {
+          // Probe cleanup must not replace its result.
+        }
+      }
+      const settle = (result: ConnectionTestResult): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        close()
+        resolve(result)
+      }
+      const fail = (error: Error): void => {
+        const normalized = normalizeConnectionFailure(error, record.authMethod)
+        settle({
+          status: "failed",
+          reason: failureReason(normalized, record.connectFailureReason, record.authMethod)
+        })
+      }
+      const onReady = (): void => {
+        settle({ status: "reachable", latencyMs: Math.max(0, Date.now() - startedAt) })
+      }
+      const onError = (error: Error): void => fail(error)
+      const onClose = (): void => {
+        if (!settled) fail(new Error("SSH connection closed before it was ready"))
+        removeEmitterListener(client, "error", onError)
+        removeEmitterListener(client, "close", onClose)
+      }
+
+      client.once("ready", onReady)
+      client.on("error", onError)
+      client.on("close", onClose)
+      abortListener = (): void => settle({ status: "failed", reason: "cancelled" })
+      if (request.signal) {
+        request.signal.addEventListener("abort", abortListener, { once: true })
+        if (request.signal.aborted) {
+          abortListener()
+          return
+        }
+      }
+      timeoutId = setTimeout(() => settle({ status: "failed", reason: "timeout" }), timeoutMs)
+
+      void this.connectConfig(record, resolved, fail).then((config) => {
+        if (settled) return
+        try {
+          client.connect(config)
+        } catch (error) {
+          fail(normalizeConnectionFailure(error, record.authMethod))
+        }
+      }).catch((error: unknown) => fail(normalizeConnectionFailure(error, record.authMethod)))
+    })
   }
 
   public retain(connectionId: string, owner: RuntimeOwner, kind: "forward"): ConnectionLease {
@@ -799,6 +915,11 @@ function validateRemoteExecBounds(timeoutMs: number, maxOutputBytes: number): vo
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0) {
     throw new Error("Invalid remote execution bounds")
   }
+}
+
+function boundedConnectionTestTimeout(timeoutMs: number): number {
+  const candidate = Number.isFinite(timeoutMs) ? Math.round(timeoutMs) : 15_000
+  return Math.min(Math.max(candidate, MIN_CONNECTION_TEST_TIMEOUT_MS), MAX_CONNECTION_TEST_TIMEOUT_MS)
 }
 
 function cancelledRemoteOperation(): RemoteOperationError {

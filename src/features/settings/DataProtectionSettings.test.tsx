@@ -70,6 +70,59 @@ describe("DataProtectionSettings", () => {
     expect(screen.queryByText("vault secret")).not.toBeInTheDocument()
   })
 
+  it("associates visible labels with sensitive fields and announces pending work", async () => {
+    let resolveEnable: ((status: CredentialProtectionStatus) => void) | undefined
+    const bridge = createBridge()
+    bridge.credentials.enableVault = vi.fn(() => new Promise<CredentialProtectionStatus>((resolve) => {
+      resolveEnable = resolve
+    }))
+    render(<I18nProvider><DataProtectionSettings bridge={bridge} /></I18nProvider>)
+
+    await waitFor(() => expect(screen.getAllByText("System Keychain").length).toBeGreaterThan(0))
+    const password = screen.getByLabelText("Vault password")
+    const confirmation = screen.getByLabelText("Confirm Vault password")
+    expect(password).toHaveAttribute("id", "vault-password")
+    expect(password).toHaveAttribute("aria-describedby", "vault-password-hint")
+    expect(confirmation).toHaveAttribute("id", "vault-password-confirmation")
+    expect(confirmation).toHaveAttribute("aria-describedby", "vault-password-hint")
+    expect(screen.getByText("The Vault password is never stored by Rocker. Losing it prevents access to credentials saved in the Vault.")).toHaveAttribute("id", "vault-password-hint")
+    expect(screen.getByLabelText("Migration password")).toHaveAttribute("aria-describedby", "migration-password-hint")
+    expect(screen.getByLabelText("Confirm migration password")).toHaveAttribute("aria-describedby", "migration-password-hint")
+
+    fireEvent.change(password, { target: { value: "vault secret" } })
+    fireEvent.change(confirmation, { target: { value: "vault secret" } })
+    fireEvent.click(screen.getByRole("button", { name: "Enable Vault" }))
+
+    expect(screen.getByRole("status")).toHaveTextContent("Working...")
+    expect(screen.getByRole("status")).toHaveClass("data-protection-operation-status-pending")
+    resolveEnable?.({ mode: "vault", keychainAvailable: true, vaultState: "unlocked" })
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Vault unlocked"))
+  })
+
+  it("reports a cancelled export without styling it as an error", async () => {
+    const bridge = createBridge()
+    bridge.configuration.exportTemplate = vi.fn(async () => ({ canceled: true }))
+    render(<I18nProvider><DataProtectionSettings bridge={bridge} /></I18nProvider>)
+
+    fireEvent.click(screen.getByRole("button", { name: "Export template" }))
+    const status = await screen.findByRole("status")
+    expect(status).toHaveTextContent("Configuration export cancelled.")
+    expect(status).toHaveClass("data-protection-operation-status-cancelled")
+    expect(status).not.toHaveClass("data-protection-operation-status-error")
+  })
+
+  it("settles a cancelled import instead of leaving a pending status", async () => {
+    const bridge = createBridge()
+    bridge.configuration.chooseImport = vi.fn(async () => ({ canceled: true }))
+    render(<I18nProvider><DataProtectionSettings bridge={bridge} /></I18nProvider>)
+
+    fireEvent.click(screen.getByRole("button", { name: "Import configuration" }))
+    const status = await screen.findByRole("status")
+    expect(status).toHaveTextContent("Configuration import cancelled.")
+    expect(status).toHaveClass("data-protection-operation-status-cancelled")
+    expect(status).not.toHaveTextContent("Working...")
+  })
+
   it("exports a non-sensitive template without asking for a password", async () => {
     const bridge = createBridge()
     render(<I18nProvider><DataProtectionSettings bridge={bridge} /></I18nProvider>)

@@ -779,6 +779,59 @@ describe("desktop workspace shell", () => {
     expect(screen.getByRole("button", { name: "主机" })).toBeInTheDocument()
   })
 
+  it("preserves Host selection when switching destinations", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Hosts" })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole("button", { name: "G11, SSH, root" }))
+    expect(screen.getByRole("button", { name: "G11, SSH, root" })).toHaveAttribute("data-selected", "true")
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole("button", { name: "Hosts" }))
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Hosts" })).toBeInTheDocument())
+
+    expect(screen.getByRole("button", { name: "G11, SSH, root" })).toHaveAttribute("data-selected", "true")
+  })
+
+  it("preserves Host selection while collapsing and expanding the Sidebar", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Hosts" })).toBeInTheDocument())
+    const hostCard = screen.getByRole("button", { name: "G11, SSH, root" })
+    fireEvent.click(hostCard)
+    const resizeHandle = screen.getByRole("separator", { name: "Resize sidebar" })
+
+    for (let index = 0; index < 20; index += 1) fireEvent.keyDown(resizeHandle, { key: "ArrowLeft" })
+    expect(resizeHandle).toHaveAttribute("aria-valuenow", "58")
+    fireEvent.keyDown(resizeHandle, { key: "ArrowRight" })
+
+    expect(resizeHandle).toHaveAttribute("aria-valuenow", "180")
+    expect(hostCard).toHaveAttribute("data-selected", "true")
+  })
+
+  it("keeps the active terminal surface mounted while switching destinations", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const sessionId = workspace().sessions[0].id
+    const terminal = screen.getByTestId("terminal-workspace-mock")
+    const controller = terminalHarness.controllers.get(sessionId) ?? terminalHarness.controller
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole("button", { name: "Hosts" }))
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Hosts" })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole("button", { name: /^G11$/ }))
+
+    expect(screen.getByTestId("terminal-workspace-mock")).toBe(terminal)
+    expect(terminalHarness.controllers.get(sessionId) ?? terminalHarness.controller).toBe(controller)
+    expect(bridge.sessions.open).toHaveBeenCalledTimes(1)
+  })
+
   it("keeps the terminal event subscription stable while switching locale", async () => {
     render(<App />)
     await waitFor(() => expect(bridge.events.onSessionEvent).toHaveBeenCalledTimes(1))
@@ -1293,7 +1346,8 @@ function createBridge() {
       duplicate: vi.fn(async (id: string): Promise<HostProfile> => ({ ...host, id, name: `${host.name} copy` })),
       setFavorite: vi.fn(async (id: string, favorite: boolean): Promise<HostProfile> => ({ ...host, id, favorite })),
       remove: vi.fn(async () => undefined),
-      importSshConfig: vi.fn(async () => [])
+      importSshConfig: vi.fn(async () => []),
+      testConnection: vi.fn(async () => ({ status: "reachable" as const, latencyMs: 24 }))
     },
     sessions: {
       open: vi.fn(async ({ sessionId, hostId }: { sessionId: string; hostId: string }) => ({ sessionId, hostId, channelGeneration: 1, state: "connected" as const })),

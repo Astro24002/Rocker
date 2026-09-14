@@ -19,6 +19,7 @@ export type CommandId =
   | "session.split-horizontal"
   | "session.close"
   | "navigation.hosts"
+  | "navigation.trust"
   | "navigation.history"
   | "navigation.ports"
   | "navigation.settings"
@@ -27,7 +28,7 @@ export type CommandId =
   | "palette.open"
 
 export type CommandCategory = "terminal" | "session" | "navigation" | "palette"
-export type NavigationCommand = "hosts" | "history" | "ports" | "settings" | "sftp" | "snippets" | "terminal"
+export type NavigationCommand = "hosts" | "trust" | "history" | "ports" | "settings" | "sftp" | "snippets" | "terminal"
 
 export interface TerminalCommandSurface {
   hasSelection(): boolean
@@ -263,6 +264,15 @@ export const commandRegistry: readonly CommandDefinition[] = [
     category: "navigation",
     isEnabled: alwaysEnabled,
     execute: ({ actions }) => actions.navigation.navigate("hosts")
+  },
+  {
+    id: "navigation.trust",
+    label: "Trust",
+    labelKey: "nav.trust",
+    category: "navigation",
+    keywords: ["host key", "fingerprint", "security"],
+    isEnabled: alwaysEnabled,
+    execute: ({ actions }) => actions.navigation.navigate("trust")
   },
   {
     id: "navigation.history",

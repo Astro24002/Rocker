@@ -1,4 +1,4 @@
-import { ChevronRight, Clock3, Columns2, Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, RotateCw, Server, Settings, X } from "lucide-react"
+import { ChevronRight, Clock3, Columns2, Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, RotateCw, Server, Settings, ShieldCheck, X } from "lucide-react"
 import { forwardRef, useCallback, useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactElement } from "react"
 import { useI18n } from "../i18n"
 import { isCommandEnabled, type CommandContext, type CommandId } from "../features/commands/command-registry"
@@ -7,7 +7,7 @@ import { isCompactSidebar, normalizeSidebarWidth } from "../shared/sidebar-width
 import rockerMark from "../../build/icon.svg"
 import type { WorkspaceSession } from "../features/terminal/session-state"
 
-export type NavKey = "hosts" | "sftp" | "ports" | "snippets" | "history" | "settings"
+export type NavKey = "hosts" | "trust" | "sftp" | "ports" | "snippets" | "history" | "settings"
 export type WorkspaceNavKey = NavKey | "terminal"
 export type SessionCommandId = Extract<CommandId, `session.${string}`>
 export type ContextMenuOwner = "sidebar" | "terminal"
@@ -29,6 +29,7 @@ interface SidebarProps {
 
 const navItems: Array<{ key: NavKey; icon: typeof Server }> = [
   { key: "hosts", icon: Server },
+  { key: "trust", icon: ShieldCheck },
   { key: "sftp", icon: FolderClosed },
   { key: "snippets", icon: FileCode2 },
   { key: "ports", icon: Network },
@@ -45,6 +46,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
   const menuTriggerRef = useRef<HTMLButtonElement>(null)
   const duplicateTriggerRef = useRef<HTMLButtonElement>(null)
   const pendingRestoreSessionId = useRef<string | undefined>(undefined)
+  const previousActiveNav = useRef<WorkspaceNavKey>(activeNav)
 
   const closeSessionMenu = useCallback((restoreFocus = true): void => {
     if (!menuSessionId) return
@@ -78,6 +80,13 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
   }, [commandPaletteOpen, contextMenuOwner, onContextMenuOwnerChange])
 
   useEffect(() => {
+    const navigationChanged = previousActiveNav.current !== activeNav
+    previousActiveNav.current = activeNav
+    if (!navigationChanged || !menuSessionId) return
+    closeSessionMenu()
+  }, [activeNav, closeSessionMenu, menuSessionId])
+
+  useEffect(() => {
     const sessionId = pendingRestoreSessionId.current
     if (menuSessionId || !sessionId) return
     pendingRestoreSessionId.current = undefined
@@ -93,6 +102,14 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
     setDuplicateMenuSessionId(sessionId)
   }, [])
 
+  const openSessionMenu = useCallback((sessionId: string, trigger: HTMLButtonElement): void => {
+    if (commandPaletteOpen) return
+    pendingRestoreSessionId.current = undefined
+    menuTriggerRef.current = trigger
+    onContextMenuOwnerChange?.("sidebar")
+    setMenuSessionId(sessionId)
+  }, [commandPaletteOpen, onContextMenuOwnerChange])
+
   return (
     <aside className="sidebar" data-compact={isCompactSidebar(width)} style={{ width: normalizeSidebarWidth(width) }}>
       <div className="sidebar-brand">
@@ -100,7 +117,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
         <span>Rocker</span>
       </div>
 
-      <nav className="primary-nav" aria-label="Primary">
+      <nav className="primary-nav" aria-label={t("sidebar.primaryNavigation")}>
         {navItems.map(({ key, icon }) => (
           <NavItem
             key={key}
@@ -126,14 +143,20 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
           <div className="sidebar-session-list">
             {sessions.map((session) => (
               <div key={session.id} className="sidebar-session-row">
-                <button aria-expanded={menuSessionId === session.id} aria-haspopup="menu" data-active={session.id === activeSessionId} data-session-id={session.id} ref={(element) => { if (element && menuSessionId === session.id) menuTriggerRef.current = element }} type="button" onContextMenu={(event) => { event.preventDefault(); if (commandPaletteOpen) return; event.stopPropagation(); pendingRestoreSessionId.current = undefined; menuTriggerRef.current = event.currentTarget; onContextMenuOwnerChange?.("sidebar"); setMenuSessionId(session.id) }} onClick={() => {
+                <button aria-expanded={menuSessionId === session.id} aria-haspopup="menu" data-active={session.id === activeSessionId} data-session-id={session.id} ref={(element) => { if (element && menuSessionId === session.id) menuTriggerRef.current = element }} type="button" onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openSessionMenu(session.id, event.currentTarget) }} onKeyDown={(event) => {
+                  const opensMenu = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)
+                  if (!opensMenu) return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  openSessionMenu(session.id, event.currentTarget)
+                }} onClick={() => {
                   onSessionActivate?.(session.id)
                   onNavigate("terminal")
                 }}>
                   <span className="session-state-dot" data-state={session.state} />
                   <span>{session.label}</span>
                 </button>
-                {menuSessionId === session.id && <div aria-label={`Session actions for ${session.label}`} className="session-menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key !== "Escape") return; event.preventDefault(); closeSessionMenu() }} ref={menuRef} role="menu" tabIndex={-1}>
+                {menuSessionId === session.id && <div aria-label={t("sidebar.sessionActions").replace("{label}", session.label)} className="session-menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key !== "Escape") return; event.preventDefault(); closeSessionMenu() }} ref={menuRef} role="menu" tabIndex={-1}>
                   <SessionMenuItem commandId="session.reconnect" disabled={!isSessionCommandEnabled("session.reconnect", session, commandContext)} onClick={() => dispatchSessionCommand("session.reconnect", session, commandContext, onSessionCommand, closeSessionMenu)}><RotateCw aria-hidden="true" size={14} /><span>{t("commands.reconnect")}</span></SessionMenuItem>
                   <SessionMenuItem commandId="session.rename" disabled={!isSessionCommandEnabled("session.rename", session, commandContext)} onClick={() => dispatchSessionCommand("session.rename", session, commandContext, onSessionCommand, closeSessionMenu)}><Pencil aria-hidden="true" size={14} /><span>{t("sidebar.rename")}</span></SessionMenuItem>
                   <div className="session-menu-submenu-item" onPointerEnter={() => openDuplicateMenu(session.id, session, commandContext)}>

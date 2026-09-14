@@ -10,6 +10,7 @@ import { hostForSshTarget, parseSshCommand, recentHostIds as deriveRecentHostIds
 import { HistoryView } from "../features/history/HistoryView"
 import { PortsView } from "../features/ports/PortsView"
 import { SettingsView } from "../features/settings/SettingsView"
+import { TrustView } from "../features/trust/TrustView"
 import { CommandPalette, type CommandPaletteFocusRequest } from "../features/commands/CommandPalette"
 import { executeCommand, isCommandEnabled, type CommandActions, type CommandContext, type CommandId, type TerminalCommandSurface } from "../features/commands/command-registry"
 import { matchGlobalShortcut, shouldIgnoreGlobalShortcutTarget } from "../features/commands/command-shortcuts"
@@ -35,9 +36,10 @@ import { I18nProvider, useI18n } from "../i18n"
 import { normalizeSidebarWidth } from "../shared/sidebar-width"
 import { bootstrapReducer, createBootstrapState, deriveBootstrapCapabilities, retryableBootstrapResources } from "./bootstrap-state"
 import { getRockerBridge } from "./bridge"
-import type { BootstrapResourceName, HostSaveProfile } from "../../electron/ipc/bridge-contract"
+import type { BootstrapResourceName, HostKeyInventoryEntry, HostKeyInventorySnapshot, HostSaveProfile } from "../../electron/ipc/bridge-contract"
 import type {
   AppSettings,
+  ConnectionTestResult,
   ConnectionHistoryItem,
   HostProfile,
   StoredWorkspaceWindow,
@@ -128,6 +130,9 @@ function Workspace() {
   const [activeNav, setActiveNav] = useState<WorkspaceNavKey>("hosts")
   const [hosts, setHosts] = useState<HostProfile[]>([])
   const [history, setHistory] = useState<ConnectionHistoryItem[]>([])
+  const [hostKeyInventory, setHostKeyInventory] = useState<HostKeyInventorySnapshot>({ entries: [], history: [] })
+  const [hostKeyLoading, setHostKeyLoading] = useState(false)
+  const [hostKeyLoadError, setHostKeyLoadError] = useState(false)
   const recentHostIdSet = useMemo(() => new Set(deriveRecentHostIds(history)), [history])
   const [editor, setEditor] = useState<{ open: boolean; profile?: HostProfile }>({ open: false })
   const [workspace, setWorkspace] = useState<TerminalWorkspaceState>(createTerminalWorkspaceState)
@@ -173,6 +178,7 @@ function Workspace() {
   const retryInFlight = useRef(false)
   const retryGeneration = useRef(0)
   const capabilities = useMemo(() => deriveBootstrapCapabilities(bootstrapState), [bootstrapState])
+  const hostKeysAvailable = bootstrapState.phase !== "error" && bootstrapState.resources.hostKeys?.health.status !== undefined && bootstrapState.resources.hostKeys.health.status !== "blocked"
   const settingsMutationsAvailable = capabilities.settingsWritable
   settingsRef.current = settings
   const terminalPreferences = useMemo<TerminalPreferences>(() => terminalPreferencesForSettings(settings), [
@@ -183,6 +189,22 @@ function Workspace() {
     settings.cursorBlink,
     settings.terminalBell
   ])
+
+  const refreshHostKeys = useCallback(async (): Promise<void> => {
+    setHostKeyLoading(true)
+    setHostKeyLoadError(false)
+    try {
+      const inventory = await bridge.hostKeys.list()
+      if (!bootstrapMounted.current) return
+      setHostKeyInventory(inventory)
+    } catch {
+      if (!bootstrapMounted.current) return
+      setHostKeyLoadError(true)
+      setHostKeyInventory({ entries: [], history: [] })
+    } finally {
+      if (bootstrapMounted.current) setHostKeyLoading(false)
+    }
+  }, [bridge])
 
   const pumpSettingsWrites = useCallback((): void => {
     if (settingsWriteInFlight.current) return
@@ -404,6 +426,12 @@ function Workspace() {
 
         workspaceWritable.current = isWorkspaceWritable(snapshot.workspace.health.status)
         dispatchBootstrap({ type: "load-success", snapshot })
+        if (snapshot.hostKeys.health.status === "blocked") {
+          setHostKeyInventory({ entries: [], history: [] })
+          setHostKeyLoadError(true)
+        } else {
+          void refreshHostKeys()
+        }
         const snapshotCapabilities = deriveBootstrapCapabilities(snapshot)
 
         const availableHosts = snapshot.hosts.health.status === "blocked" ? [] : snapshot.hosts.value ?? []
@@ -456,13 +484,15 @@ function Workspace() {
         if (!cancelled) {
           workspaceWritable.current = false
           dispatchBootstrap({ type: "load-error" })
+          setHostKeyInventory({ entries: [], history: [] })
+          setHostKeyLoadError(true)
         }
       }
     }
 
     void initialize()
     return () => { cancelled = true }
-  }, [bridge])
+  }, [bridge, refreshHostKeys])
 
   useEffect(() => {
     if (!workspaceWritable.current) return
@@ -508,6 +538,14 @@ function Workspace() {
       }
       if (result.history) setHistory(result.history.health.status === "blocked" ? [] : result.history.value ?? [])
       if (result.hosts) setHosts(result.hosts.health.status === "blocked" ? [] : result.hosts.value ?? [])
+      if (result.hostKeys) {
+        if (result.hostKeys.health.status === "blocked") {
+          setHostKeyInventory({ entries: [], history: [] })
+          setHostKeyLoadError(true)
+        } else {
+          void refreshHostKeys()
+        }
+      }
 
       let restoredWorkspace: TerminalWorkspaceState | undefined
       if (result.workspace) {
@@ -574,7 +612,7 @@ function Workspace() {
     } finally {
       retryInFlight.current = false
     }
-  }, [bootstrapState, bridge, hosts, openPendingSession, setLocale, workspace])
+  }, [bootstrapState, bridge, hosts, openPendingSession, refreshHostKeys, setLocale, workspace])
 
   const activeSession = workspace.sessions.find((session) => session.id === workspace.activeSessionId)
   const activeHost = activeSession ? hosts.find((host) => host.id === activeSession.hostId) : undefined
@@ -658,10 +696,11 @@ function Workspace() {
       const preferences = terminalPreferencesForSettings(importedSettings)
       for (const controller of controllers.current.values()) controller.applyPreferences(preferences)
       setSettingsPersistenceFailed(false)
+      void refreshHostKeys()
     }).catch(() => {
       if (bootstrapMounted.current) setSettingsPersistenceFailed(true)
     })
-  }, [bridge, setLocale])
+  }, [bridge, refreshHostKeys, setLocale])
 
   const connectHost = (host: HostProfile): void => {
     if (!capabilities.sshAvailable) return
@@ -1030,6 +1069,17 @@ function Workspace() {
     setHosts((current) => current.filter((candidate) => candidate.id !== host.id))
   }
 
+  const testHostConnection = async (host: HostProfile): Promise<ConnectionTestResult> => {
+    if (!capabilities.sshAvailable) throw new Error("SSH is unavailable")
+    return bridge.hosts.testConnection(host.id)
+  }
+
+  const removeHostKey = async (entry: HostKeyInventoryEntry): Promise<void> => {
+    if (!hostKeysAvailable) throw new Error("Host Key storage is unavailable")
+    await bridge.hostKeys.remove(entry)
+    await refreshHostKeys()
+  }
+
   const hostList = (
     <HostList
       hosts={hosts}
@@ -1041,6 +1091,7 @@ function Workspace() {
       onDuplicate={duplicateHost}
       onToggleFavorite={toggleHostFavorite}
       onRemove={removeHost}
+      onTestConnection={testHostConnection}
       recentHostIds={recentHostIdSet}
       onImport={() => {
         if (!capabilities.hostMutationsAvailable) return
@@ -1098,6 +1149,9 @@ function Workspace() {
               />
             </div>
           )}
+          <div className="workspace-destination" data-destination="hosts" hidden={activeNav !== "hosts" && !(activeNav === "terminal" && workspace.sessions.length === 0)}>
+            {hostList}
+          </div>
           {activeNav === "settings" ? (
             <SettingsView locale={locale} settings={settings} bridge={hasDataProtectionBridge(bridge) ? bridge : undefined} onConfigurationImported={refreshConfigurationAfterImport} disabled={!settingsMutationsAvailable} terminalAppearanceDisabled={false} persistenceUnavailable={!settingsMutationsAvailable || settingsPersistenceFailed} onLocaleChange={(next) => {
               if (!settingsMutationsAvailable) return
@@ -1105,9 +1159,19 @@ function Workspace() {
               updateSettings({ locale: next })
             }} onUpdate={updateSettings} onExportDiagnostics={() => bridge.diagnostics.export()} />
           ) : activeNav === "terminal" ? (
-            workspace.sessions.length === 0 ? hostList : null
+            null
           ) : activeNav === "hosts" ? (
-            hostList
+            null
+          ) : activeNav === "trust" ? (
+            <TrustView
+              entries={hostKeyInventory.entries}
+              history={hostKeyInventory.history}
+              hosts={hosts}
+              disabled={!hostKeysAvailable}
+              loading={hostKeyLoading}
+              error={hostKeyLoadError}
+              onRemove={removeHostKey}
+            />
           ) : activeNav === "history" ? (
             <HistoryView items={history} hosts={hosts} disabled={!capabilities.historyWritable} reconnectDisabled={!capabilities.sshAvailable} onReconnect={connectHost} onClear={() => {
               if (!capabilities.historyWritable) return

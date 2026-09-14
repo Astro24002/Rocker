@@ -16,6 +16,10 @@ export class ConnectionFailureError extends Error {
   }
 }
 
+export type ConnectionTestResult =
+  | { status: "reachable"; latencyMs: number }
+  | { status: "failed"; reason: ConnectionFailureReason }
+
 export type TerminalSessionState =
   | "idle"
   | "restoring"

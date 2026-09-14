@@ -11,6 +11,7 @@ export interface HostKeyStore {
   replace?(host: string, port: number, expectedFingerprint: string, replacementFingerprint: string): Promise<void>
   remove?(host: string, port: number, expectedFingerprint?: string): Promise<void>
   entries?(): Promise<StoredHostKeyRecord[]>
+  auditEntries?(): Promise<HostKeyAuditRecord[]>
   health?(options?: HostKeyHealthOptions): Promise<StorageHealth>
 }
 
@@ -18,6 +19,17 @@ export interface StoredHostKeyRecord {
   host: string
   port: number
   fingerprint: string
+}
+
+export type HostKeyAuditAction = "trusted" | "replaced" | "removed"
+
+export interface HostKeyAuditRecord {
+  at: string
+  action: HostKeyAuditAction
+  host: string
+  port: number
+  fingerprint: string
+  previousFingerprint?: string
 }
 
 export type HostKeyInspection =

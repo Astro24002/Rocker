@@ -10,8 +10,14 @@ independent Electron implementation with the same broad desktop and terminal
 technology direction as Tabby, while using a Termius 7-style information
 hierarchy and an original Rocker interface.
 
-The product name is `Rocker`. The repository directory, package name,
-application identifier, executable name, and internal namespace use `rocker`.
+The product name is `Rocker`, and the repository directory uses the product
+casing. The npm package name, application identifier, executable name, and
+internal namespace use the lowercase technical identifier `rocker`.
+
+Electron user data is stored under the product-cased `Rocker` directory. The
+legacy lowercase `rocker` directory is intentionally not read or migrated;
+users who need data from another installation can use Rocker's explicit
+configuration import flow.
 
 The first release focuses on three workflows:
 
@@ -402,4 +408,3 @@ The first release is accepted when all of the following are demonstrated:
 12. SFTP and Snippets show explicit first-release placeholder states.
 13. Automated tests cover session isolation, fingerprint verification, port
     forwarding lifecycle, monitoring parsing, localization, and persistence.
-

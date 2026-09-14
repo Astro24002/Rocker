@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { I18nProvider } from "../../i18n"
 import { HistoryView } from "./HistoryView"
 
@@ -13,6 +13,8 @@ const item = {
 }
 
 describe("HistoryView", () => {
+  afterEach(() => localStorage.clear())
+
   it("keeps history navigable but blocks clear and reconnect commands independently", () => {
     const onReconnect = vi.fn()
     const onClear = vi.fn()
@@ -27,5 +29,15 @@ describe("HistoryView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reconnect" }))
     expect(onClear).not.toHaveBeenCalled()
     expect(onReconnect).not.toHaveBeenCalled()
+  })
+
+  it("localizes history headings and action names", () => {
+    localStorage.setItem("rocker.locale", "zh-CN")
+    render(<I18nProvider><HistoryView items={[item]} hosts={[host]} onReconnect={vi.fn()} onClear={vi.fn()} /></I18nProvider>)
+
+    expect(screen.getByText("主机", { selector: ".history-heading span" })).toBeInTheDocument()
+    expect(screen.getByText("连接时间", { selector: ".history-heading span" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "清除历史记录" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "重新连接" })).toBeInTheDocument()
   })
 })

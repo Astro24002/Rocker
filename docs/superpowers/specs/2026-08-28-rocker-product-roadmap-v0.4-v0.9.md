@@ -1,7 +1,7 @@
 # Rocker Product Roadmap: v0.4.x to v0.9.0
 
-Date: 2026-08-28 (updated 2026-09-10 for v0.5-A)
-Status: Maintained product evolution baseline aligned with the approved workspace shell
+Date: 2026-08-28 (updated 2026-09-11 for v0.5-A through v0.5-D and the deferred runtime-capability boundary)
+Status: Maintained product evolution baseline aligned with the approved workspace shell and v0.5.x quality sequence
 Scope: Windows and macOS desktop application
 
 ## Version Policy
@@ -15,6 +15,7 @@ roadmap.
 v0.3.1  Reliability baseline
 v0.4.x  Terminal productivity and workspace-shell closeout
 v0.5.0  Hosts and Trust
+v0.5.1-v0.5.5  UI quality and native-shell closure patches
 v0.6.0  Port Forwarding Manager
 v0.7.0  SFTP Foundation
 v0.8.0  Snippets and workspace productivity
@@ -23,8 +24,11 @@ v0.9.0  Release candidate hardening
 
 Every version is independently releasable. A later version must not silently
 change the security or ownership guarantees established by an earlier one.
+`v0.5.0` is the capability milestone; `v0.5.1` through `v0.5.5` are ordered
+quality and integration patches within the same product line. The product owner
+controls whether and when each patch tag is published.
 
-## Audited Status at 2026-09-10
+## Audited Status at 2026-09-11
 
 This roadmap distinguishes shipped behavior from code that only exists in the
 current working tree. The published baseline is package `0.4.3`, tag `v0.4.3`,
@@ -46,21 +50,30 @@ Status terms used below:
 | Terminal productivity | Released | Search, Command Palette, context actions, appearance settings, and recent Session ordering shipped in v0.4.0. Permanent terminal toolbars remain intentionally absent from the approved shell. |
 | Workspace shell and default theme | Released, with working-tree refinements | The frameless two-column shell, constrained resizable Sidebar, Rocker identity, and `#0AA344` theme baseline are shipped. Current Hosts/workspace alignment changes remain unreleased. |
 | Local data protection | Released | Local-first storage, system-protected credentials, optional Vault, sanitized template export, encrypted migration export/import, rollback, and recovery shipped in v0.4.3. |
-| Hosts | Working tree / v0.5-A implemented | Compact cards, bounded direct SSH entry, the shared New/Edit drawer, exact group filtering, safe duplicate/favorite/remove actions, Recent Hosts, and App-level save error propagation are implemented and locally verified. Trust management, tags, environment policy, connection testing, scale validation, and metadata application remain v0.5 work. |
-| Host Key trust | Partial | First-use and changed-key verification plus persistence exist. A user-facing Trust inventory, audit history, removal/re-trust workflow, and owner-scoped management IPC do not. |
+| Hosts | Working tree / v0.5-A through v0.5-D implemented | Compact cards, bounded direct SSH entry, the shared New/Edit drawer, exact group/environment/tag filtering, safe duplicate/favorite/remove actions, Recent Hosts, production deletion warnings, explicit fresh-transport connection testing, and App-level save error propagation are implemented and locally verified. Runtime metadata application is intentionally deferred; scale benchmarking is non-blocking engineering evidence. |
+| Host Key trust | Working tree / v0.5-B and v0.5-D integration implemented | First-use and changed-key verification, persistence, a user-facing Trust inventory, bounded audit history, expected-fingerprint removal, owner-scoped management IPC, and shared Host Key checks for Connection Test are implemented and locally verified. Re-trust remains the existing native confirmation path; release packaging and native manual checks remain open. |
 | Port Forwarding | Partial | Explicit scan, transient Local Forward lifecycle, leases, recovery, and owner cleanup exist. Persistent profiles and the full management workflow do not. |
 | History | Partial | List, search, clear, and reconnect exist. Completed-session outcome and elapsed-time recording are not yet closed; current open records use a zero duration. |
 | SFTP | Placeholder | The route exists, but no SFTP service, lease kind, IPC contract, file browser, or transfer queue exists. |
 | Snippets | Placeholder | The route and Host editor association fields exist, but there is no Snippet store, expansion, preview, or execution path. |
 | Named Workspaces | Partial | Automatic Session/split/layout recovery exists. User-named save/restore and forwarding intent do not. |
 | Release engineering | Partial | Windows/macOS x64/arm64 packaging and a six-asset release allow-list exist. Signing, notarization, native launch smoke, and final migration/security/performance gates remain v0.9 work. |
-| Product documentation | Partial | The roadmap now records v0.5-A working-tree progress and its verification evidence. README still reports v0.4.0, the architecture audit predates Vault/Host work, and the planned v0.4.3 verification record is absent. |
+| Product documentation | Partial | The roadmap records v0.5-A through v0.5-D and the completed v0.5.1-v0.5.5 quality sequence with design, implementation, and verification records. README still reports v0.4.0, the architecture audit predates Vault/Host work, and release tags remain product-owner controlled. |
 
-The audited automated baseline is 75 passing test files, one intentionally
-skipped soak file, 626 passing tests, and one skipped test. React `act(...)`
+The audited pre-v0.5.1 automated baseline is 76 passing test files, one intentionally
+skipped soak file, 652 passing tests, and one skipped test. React `act(...)`
 warnings remain non-blocking test-hygiene debt. Native Windows/macOS launch
 testing is intentionally deferred during the v0 line; the long soak is a v1
 gate, not a v0 patch gate.
+
+The v0.5.1 accessibility patch, v0.5.2 localization/protection-form patch,
+v0.5.3 platform-aware window-shell patch, v0.5.4 workspace-resilience patch,
+and v0.5.5 visual-polish patch are implemented and locally verified in the
+working tree. Their release tags remain product-owner controlled. The full
+automated gate is 77 passing test files, one intentionally skipped file, 676
+passing tests, one skipped test, a passing typecheck, a passing production
+build, and a clean diff check. Native launch remains pending by v0 policy and
+long-running soak remains a v1 gate.
 
 ### Engineering Readiness
 
@@ -70,17 +83,19 @@ and validated imports, and forwarding already survives independently of a
 Terminal Session. These are suitable foundations for the remaining roadmap.
 
 The coordination layer now needs a size boundary. At this audit, `App.tsx` is
-about 1,300 lines and `electron/ipc/register.ts` is about 1,034 lines with 42
-IPC registrations. v0.5 must extract Hosts state/workflow coordination and its
-domain IPC registration instead of adding Trust behavior directly to those
-files. v0.7 must begin with a separate SFTP service, lease contract, and IPC
-module. `ConnectionManager` should remain the SSH transport authority rather
-than absorb feature-specific file or forwarding workflows.
+about 1,379 lines and `electron/ipc/register.ts` is about 1,082 lines with 46
+IPC registrations. The current Trust slice keeps only a narrow inventory
+refresh/removal integration in `App.tsx`; before the v0.5 release boundary,
+Hosts and Trust coordination should move behind feature hooks/modules instead
+of growing the shell controller. v0.7 must begin with a separate SFTP service,
+lease contract, and IPC module. `ConnectionManager` should remain the SSH
+transport authority rather than absorb feature-specific file or forwarding
+workflows.
 
-One current Hosts integration defect is release-blocking: the application shell
-discards the Promise returned by Host save, so a persistence failure cannot
-reach the editor's error state. Fix this boundary and add an App-level failure
-regression before releasing the Hosts candidate.
+The prior Hosts integration defect in which the application shell discarded the
+Host save Promise is fixed in the current working tree, with an App-level
+failure regression preserving the editor error state. Keep that boundary test
+green before releasing the Hosts candidate.
 
 ### Release Classification
 
@@ -94,8 +109,8 @@ The working tree currently mixes patch and minor-version scope:
   established version policy.
 
 Do not describe or tag the combined dirty working tree as a completed patch or
-completed v0.5 release. Separate the release scopes or finish the complete v0.5
-acceptance boundary first.
+completed v0.5 release. Separate the release scopes or finish the current v0.5
+capability boundary and its focused verification records first.
 
 ## Product North Star
 
@@ -116,14 +131,15 @@ the top of the right Workspace.
 | --- | --- | --- |
 | Sessions | Direct SSH terminal | Core product surface; remains the default working state. |
 | Hosts | Host management workspace | Working-tree UI foundation; completion target is v0.5. |
+| Trust | Host Key trust workspace | Working-tree v0.5-B inventory, audit, and expected-fingerprint removal; native re-trust remains the connection confirmation flow. |
 | SFTP | Remote file workspace | Reserved destination; placeholder until v0.7. |
 | Snippets | Command-library workspace | Reserved destination; placeholder until v0.8. |
 | Port Forwarding | Forwarding management workspace | Existing runtime flow; manager workflow planned in v0.6. |
 | History | Connection history workspace | Existing local workflow; outcome/duration closeout remains partial. |
 | Settings | Device-local preferences and data protection | Existing local workflow. |
 
-The Sidebar order is Hosts, SFTP, Snippets, Port Forwarding, History, and
-Settings. Sessions remain a separate section below product navigation. A
+The Sidebar order is Hosts, Trust, SFTP, Snippets, Port Forwarding, History,
+and Settings. Sessions remain a separate section below product navigation. A
 feature must use its route in the right Workspace; it must not add a permanent
 toolbar, monitoring panel, or side pane that reduces the SSH terminal's normal
 working area.
@@ -275,54 +291,64 @@ and understanding its trust posture before a remote operation begins.
 
 ### Current Evidence and Remaining Scope
 
-The current working tree now closes the first v0.5-A Host workflow slice. Groups
-remain profile strings rather than managed entities, while exact group filtering,
-safe duplicate/favorite/remove actions, Recent Hosts derivation, and the compact
-selected-card action strip are implemented. The App now preserves rejected Host
-save Promises so the editor can show a retryable generic error.
+The current working tree closes the first v0.5-A Host workflow slice, the
+v0.5-B Trust slice, the v0.5-C Host organization slice, and the v0.5-D
+Connection Test slice. Groups remain
+profile strings rather than managed entities, while exact group/environment/tag
+filtering, normalized optional tags, production deletion warnings, safe
+duplicate/favorite/remove actions, Recent Hosts derivation, the compact
+selected-card action strip, a focused Trust inventory, bounded Host Key audit
+history, and expected-fingerprint removal are implemented. The App preserves
+rejected Host save Promises so the editor can show a retryable generic error,
+and Host/Trust mutations remain owner-scoped and serialized in the main process.
+Connection testing now uses a fresh, no-PTY SSH probe with the existing
+credential resolver and Host Key confirmation flow; it does not acquire a
+lease, register a reusable connection, or add History records.
 
-The Host workflow is still not the complete v0.5 milestone. Trust inventory and
-Host Key management, tags, environment policy, connection testing, scale
-validation, and Host charset/theme application remain open. Use
+The Host, Trust, and Connection Test work closes the v0.5.0 capability boundary.
+The quality patches in the ordered v0.5.x route remain separate from the
+capability milestone. Session security summaries and Host runtime preferences
+are intentionally deferred because they cross the Session, connection, Host
+Key, IPC, and terminal-output boundaries. Scale validation is retained as
+non-blocking engineering evidence rather than a v0.5 product gate. Use
 [v0.5-A Host Workflow Verification](../../releases/v0.5-a-host-workflow-verification.md)
+and [v0.5-B Trust Verification](../../releases/v0.5-b-trust-verification.md),
+plus [v0.5-C Host Organization Verification](../../releases/v0.5-c-host-organization-verification.md)
+and [v0.5-D Connection Test Verification](../../releases/v0.5-d-connection-test-verification.md)
 for the exact automated evidence and native-manual PENDING checks.
 
 `snippetsEnabled`, `snippetCollection`, `charset`, and `themeColor` in the Host
 editor are reserved profile metadata. Snippets have no executable entity model,
 and charset/theme values are not applied to terminal decoding or rendering yet.
-The UI must not imply otherwise. Charset and theme become effective in v0.5;
+The UI must not imply otherwise. The fields remain storage-compatible for a
+future Session and Terminal Runtime track; they are not v0.5 acceptance items.
 Snippet association remains dormant until v0.8.
 
 ### Features
 
-- Complete group management, platform marks, favorites, and recent Hosts, then
-  add tags and environment metadata.
+- Complete group management, platform marks, favorites, and recent Hosts.
 - Host search across name, address, username, group, and tags.
 - Environment metadata with filtering and an explicit risk confirmation policy;
   do not add it to the compact card's default information set.
 - Duplicate host configuration with credentials excluded by default.
-- Connection test action with a bounded timeout.
-- Apply the selected per-Host charset and terminal theme to new Sessions, with
-  UTF-8 and Rocker Dark as the defaults.
+- Explicit Connection Test action with a fresh no-PTY transport, shared Host Key
+  confirmation, safe failure categories, and a 30-second maximum probe timeout.
 - Trust view showing trusted Host Key metadata and change history. It is a
   focused management view, not a dashboard or telemetry center.
 - Host Key removal and re-trust workflow.
-- Session security summary: auth method, verified key status, and reuse state.
 
 ### Architecture Impact
 
 - Extend `HostProfile` with optional tags and environment metadata.
 - Add a versioned Host Key audit record without storing raw private material.
 - Keep credential storage separate from host documents.
-- Add owner-scoped security IPC read/write operations.
 - Extract Hosts coordination from the application shell before adding Trust
   workflows; `App.tsx` must not become the permanent feature controller.
-- Connect Host charset and theme preferences to Terminal Session creation while
-  keeping Snippet association explicitly dormant until v0.8.
+- Keep reserved Host profile metadata storage-compatible without exposing
+  unsupported runtime behavior as if it were active.
 
 ### Acceptance
 
-- Searching 1,000 local hosts remains interactive.
 - Duplicating a host never copies a password or passphrase into the host file.
 - Production hosts show a clear confirmation before destructive or risky actions.
 - The trust view can explain why a connection was accepted or rejected without
@@ -332,8 +358,7 @@ Snippet association remains dormant until v0.8.
   weakening single-click select and double-click connect behavior.
 - Host save failure is covered at the App integration boundary and leaves the
   editor open with an actionable retry state.
-- A Host's supported charset and theme take effect for a new Session; selecting
-  an unsupported value cannot create a misleading saved preference.
+- Unsupported runtime preferences are not presented as active behavior.
 
 ### Out of Scope
 
@@ -341,9 +366,72 @@ Snippet association remains dormant until v0.8.
 
 ### Exit Decision
 
-Do not declare v0.5 complete because Host fields or cards exist. The milestone
-closes only when Host organization, operations, trust inspection, connection
-testing, security summary, and the 1,000-host interaction target are delivered.
+Do not declare v0.5 complete because Host fields or cards exist. The v0.5.0
+capability milestone closes when Host organization, operations, trust
+inspection, and connection testing are delivered and verified. The ordered
+v0.5.x quality patches then close their own evidence rows; deferred runtime
+capabilities do not block either boundary.
+
+## Deferred Cross-Layer Capability Tracks
+
+These items remain designed product work, but are deliberately excluded from
+v0.5 because they change shared runtime contracts:
+
+| Track | Candidate route | Reason for deferral |
+| --- | --- | --- |
+| Session Security Summary | v0.6+ Session and Security | Requires a stable read-only model spanning Session lifecycle, connection reuse, Host Key trust, and owner-scoped IPC. |
+| Host Charset / Terminal Theme Runtime | v0.6+/v0.7+ Terminal Runtime | Changes SSH byte decoding, xterm rendering, channel-generation reset, and reconnect behavior. |
+| 1,000-host benchmark | Engineering gate after the list contract is stable | A benchmark is evidence, not a product surface; it should measure the final interaction architecture and must not block v0.5 feature delivery. |
+
+The exact target version for the first two tracks will be selected during the
+corresponding large-version design review. Until then, the current Host profile
+fields remain backward-compatible metadata and are not claimed to affect active
+Sessions.
+
+## v0.5.x: UI Quality and Native Shell Closure
+
+### Purpose
+
+The v0.5 capability work is followed by a bounded quality sequence derived from
+the UI audit. These patches do not add a new product surface or change the
+Hosts/Trust boundary. They make the approved desktop shell usable with a
+keyboard, complete in English and Simplified Chinese, platform-aware, and
+resilient at the supported minimum window. Deferred Session security and Host
+runtime preferences are explicitly outside this line.
+
+Design and implementation details live in the [v0.5.x UI quality design](2026-09-11-rocker-v0.5-ui-quality-and-native-shell-design.md)
+and [v0.5.x implementation plan](../plans/2026-09-11-rocker-v0.5-ui-quality-and-native-shell-implementation-plan.md).
+
+### Ordered Patch Route
+
+| Patch | Focus | Release outcome | Explicit non-goals |
+| --- | --- | --- | --- |
+| `v0.5.1` | Accessibility and keyboard semantics | Visible focus states, correct selected/expanded semantics, keyboard Host connect, keyboard Session menus, and accessible resize behavior | No new global shortcut family or visual redesign |
+| `v0.5.2` | Localization and protection-form clarity | Complete English/简体中文 copy for audited routes plus visible Vault/migration labels, inline errors, and submit feedback | No credential-encryption or migration-format change |
+| `v0.5.3` | Native desktop shell | Platform-appropriate Windows/macOS window controls and drag regions while preserving blank Workspace chrome | No native launch/soak release gate or global title bar |
+| `v0.5.4` | Workspace interaction resilience | Sidebar collapse/resize, destination switching, Session focus return, and minimum-window layout remain stable without terminal state loss | No new Session metadata, runtime charset/theme behavior, or new destinations |
+| `v0.5.5` | Visual polish and desktop resilience | Reduced-motion support, token-only overlays, readable typography, minimum-size header resilience, and visual regression coverage | No new destinations, Host-card information, or deferred runtime capability |
+
+### Release Gates
+
+- Each patch has focused tests for its own behavior before implementation and a
+  recorded entry in `docs/releases/v0.5.x-ui-quality-verification.md`.
+- Every patch keeps `npm run typecheck`, the full `npm test` suite, the
+  production build, and `git diff --check` green before its tag is considered.
+- Native Windows/macOS manual checks are recorded when runners are available;
+  native launch remains explicitly deferred as a v0 gate when they are not.
+- The long-running soak is a v1 release gate and is not pulled into any
+  `v0.5.x` patch release.
+- A patch may be skipped only when its acceptance evidence is included in a
+  later patch without reversing the order of the quality dependencies.
+
+### Out of Scope
+
+SFTP, Snippets execution, Local Terminal, monitoring, Mobile, AI, cloud sync,
+ProxyJump, SOCKS5, remote forwarding, Session Security Summary, Host Charset /
+Terminal Theme Runtime, 1,000-host product-scale acceptance, a new global
+shortcut family, and a redesign of the approved Hosts card information
+architecture remain outside the v0.5.x sequence.
 
 ## v0.6.0: Port Forwarding Manager
 
@@ -571,9 +659,10 @@ adding a new product subsystem.
    candidate. Correct History completion metadata and the Host save Promise
    boundary, refresh README/architecture verification records, and rerun source
    verification before either release scope is tagged.
-2. Complete v0.5 Hosts and Trust before starting SFTP. This closes the Host,
-   credential, and verified-key control plane that every later remote operation
-   depends on.
+2. Complete v0.5.0 Hosts and Trust plus the ordered v0.5.x UI quality patches
+   before starting SFTP. This closes the Host, credential, verified-key, and
+   desktop interaction control plane that every later remote operation depends
+   on.
 3. Complete v0.6 persistent Local Forward management. Its independent consumer
    lifecycle is the proving ground for generalized SSH connection leases.
 4. Build v0.7 SFTP on the generalized lease, typed IPC, and owner-cleanup model;

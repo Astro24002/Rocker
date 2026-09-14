@@ -15,9 +15,11 @@ describe("Sidebar session actions", () => {
     expect(container.querySelector(".sidebar[data-compact='true']")).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Local Terminal" })).not.toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Hosts" })).toHaveAttribute("aria-current", "page")
+    expect(screen.getByRole("button", { name: "Settings" })).not.toHaveAttribute("aria-current")
     expect(screen.queryByText("Current host")).not.toBeInTheDocument()
     expect(screen.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Hosts", "SFTP", "Snippets", "Port Forwarding", "History", "Settings"
+      "Hosts", "Trust", "SFTP", "Snippets", "Port Forwarding", "History", "Settings"
     ])
     expect(onNavigate).not.toHaveBeenCalled()
     expect(container.querySelector(".sidebar-resizer")).toBeNull()
@@ -54,6 +56,16 @@ describe("Sidebar session actions", () => {
     expect(sessionButton).toHaveFocus()
   })
 
+  it.each(["ContextMenu", "F10"] as const)("opens the Session menu with %s keyboard input", (key) => {
+    render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} /></I18nProvider>)
+
+    const sessionButton = screen.getByRole("button", { name: "G11" })
+    sessionButton.focus()
+    fireEvent.keyDown(sessionButton, { key, shiftKey: key === "F10" })
+
+    expect(screen.getByRole("menu", { name: "Session actions for G11" })).toHaveFocus()
+  })
+
   it("restores focus to the session row after an outside dismissal", () => {
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} /></I18nProvider>)
 
@@ -63,6 +75,20 @@ describe("Sidebar session actions", () => {
 
     expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
     expect(sessionButton).toHaveFocus()
+  })
+
+  it("closes a Session menu and restores its origin focus after destination changes", () => {
+    const { rerender } = render(<I18nProvider><Sidebar width={220} activeNav="terminal" sessions={[session]} onNavigate={vi.fn()} /></I18nProvider>)
+
+    const sessionButton = screen.getByRole("button", { name: "G11" })
+    fireEvent.contextMenu(sessionButton)
+    expect(screen.getByRole("menu", { name: "Session actions for G11" })).toBeInTheDocument()
+
+    rerender(<I18nProvider><Sidebar width={58} activeNav="hosts" sessions={[session]} activeSessionId={session.id} onNavigate={vi.fn()} /></I18nProvider>)
+
+    expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "G11" })).toHaveFocus()
+    expect(screen.getByRole("button", { name: "G11" })).toHaveAttribute("data-active", "true")
   })
 
   it("clears its row menu when the command palette opens", () => {

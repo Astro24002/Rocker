@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import type { AppSettings } from "../../app/types"
 import { I18nProvider } from "../../i18n"
 import { SettingsView } from "./SettingsView"
@@ -22,6 +22,8 @@ const settings: AppSettings = {
 }
 
 describe("SettingsView", () => {
+  afterEach(() => localStorage.clear())
+
   it("keeps diagnostics available while disabling setting mutations", () => {
     const onUpdate = vi.fn()
     const onLocaleChange = vi.fn()
@@ -44,6 +46,13 @@ describe("SettingsView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }))
     expect(onExportDiagnostics).toHaveBeenCalledTimes(1)
+  })
+
+  it("exposes the active language as a pressed segmented control", () => {
+    render(<I18nProvider><SettingsView locale="en" settings={settings} onLocaleChange={vi.fn()} onUpdate={vi.fn()} onExportDiagnostics={vi.fn(async () => ({ canceled: true }))} /></I18nProvider>)
+
+    expect(screen.getByRole("button", { name: "English" })).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByRole("button", { name: "简体中文" })).toHaveAttribute("aria-pressed", "false")
   })
 
   it("exposes controlled reconnect, restoration, and multi-line paste preferences", () => {
@@ -77,6 +86,14 @@ describe("SettingsView", () => {
     expect(onUpdate).toHaveBeenNthCalledWith(2, { cursorStyle: "underline" })
     expect(onUpdate).toHaveBeenNthCalledWith(3, { cursorBlink: false })
     expect(onUpdate).toHaveBeenNthCalledWith(4, { terminalBell: false })
+  })
+
+  it("localizes native setting option labels with the active language", () => {
+    localStorage.setItem("rocker.locale", "zh-CN")
+    render(<I18nProvider><SettingsView locale="zh-CN" settings={settings} onLocaleChange={vi.fn()} onUpdate={vi.fn()} onExportDiagnostics={vi.fn(async () => ({ canceled: true }))} /></I18nProvider>)
+
+    expect(screen.getByRole("combobox", { name: "连接超时" })).toHaveDisplayValue("15 秒")
+    expect([...screen.getByRole("combobox", { name: "连接超时" }).querySelectorAll("option")].map((option) => option.textContent)).toEqual(["10 秒", "15 秒", "30 秒"])
   })
 
   it("exports diagnostics through the bridge and disables the command while pending", async () => {

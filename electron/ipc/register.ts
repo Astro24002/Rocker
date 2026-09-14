@@ -35,6 +35,7 @@ import type {
   StoredWorkspaceSession
 } from "../storage/types"
 import type { SshConnectionManager } from "../ssh/connection-manager"
+import type { HostKeyAuditRecord, StoredHostKeyRecord } from "../ssh/host-keys"
 import type { TerminalSessionManager } from "../ssh/terminal-session-manager"
 import type { WorkspaceWindowManager } from "../windows/workspace-window-manager"
 import {
@@ -44,6 +45,8 @@ import {
   type BootstrapResourceName,
   ipcChannels,
   type HostSaveProfile,
+  type HostKeyInventorySnapshot,
+  type HostKeyRemovalRequest,
   type HostSaveRequest,
   type SessionOpenRequest,
   type WorkspaceSaveRequest
@@ -53,7 +56,7 @@ import { isValidSessionId, validateDimensions, validateTerminalData } from "./va
 export interface IpcDependencies {
   hosts: HostStore
   credentials: CredentialVault
-  hostKeys: BootstrapHealthStore
+  hostKeys: HostKeyManagementStore
   sessions: TerminalSessionManager
   connections: SshConnectionManager
   ports: PortService
@@ -73,6 +76,12 @@ export interface IpcDependencies {
 
 interface BootstrapHealthStore {
   health(options?: { consumeHealth?: boolean }): Promise<StorageHealth>
+}
+
+interface HostKeyManagementStore extends BootstrapHealthStore {
+  entries(): Promise<StoredHostKeyRecord[]>
+  auditEntries(): Promise<HostKeyAuditRecord[]>
+  remove(host: string, port: number, expectedFingerprint: string): Promise<void>
 }
 
 interface PendingConfigurationImport {
@@ -139,6 +148,39 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     if (result.canceled || !result.filePaths[0]) return []
     const source = await readFile(result.filePaths[0], "utf8")
     return dependencies.mutations.run(() => dependencies.hosts.importOpenSSHConfig(source))
+  })
+  ipcMain.handle(ipcChannels.hostsTestConnection, async (event, id: unknown) => {
+    assertId(id, "host")
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    const host = (await dependencies.hosts.list()).find((candidate) => candidate.id === id)
+    if (!host) throw new Error("Host profile not found")
+    assertCurrentOwner(dependencies, owner)
+    const result = await dependencies.connections.testConnection({ hostId: id, owner })
+    assertCurrentOwner(dependencies, owner)
+    return result
+  })
+
+  ipcMain.handle(ipcChannels.hostKeysList, async (event): Promise<HostKeyInventorySnapshot> => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertCurrentOwner(dependencies, owner)
+    const [entries, history] = await Promise.all([
+      dependencies.hostKeys.entries(),
+      dependencies.hostKeys.auditEntries()
+    ])
+    assertCurrentOwner(dependencies, owner)
+    return {
+      entries: entries.map((entry) => ({ ...entry })),
+      history: history.map((entry) => ({ ...entry }))
+    }
+  })
+  ipcMain.handle(ipcChannels.hostKeysRemove, async (event, value: unknown): Promise<void> => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    const request = normalizeHostKeyRemovalRequest(value)
+    await dependencies.mutations.run(async () => {
+      assertCurrentOwner(dependencies, owner)
+      await dependencies.hostKeys.remove(request.host, request.port, request.fingerprint)
+    })
+    assertCurrentOwner(dependencies, owner)
   })
 
   ipcMain.handle(ipcChannels.sessionOpen, async (event, value: unknown) => {
@@ -449,6 +491,7 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     if (target?.isMaximized()) target.unmaximize()
     else target?.maximize()
   })
+  ipcMain.handle(ipcChannels.windowIsMaximized, (event) => BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false)
   ipcMain.handle(ipcChannels.windowClose, (event) => BrowserWindow.fromWebContents(event.sender)?.close())
 
   const unsubscribe = dependencies.sessions.onEvent(({ owner, event }) => {
@@ -479,6 +522,13 @@ function normalizeSessionOpenRequest(value: unknown): SessionOpenRequest {
     ...(value.forceNewConnection === true ? { forceNewConnection: true } : {}),
     ...(value.restorePriority ? { restorePriority: value.restorePriority } : {})
   }
+}
+
+function normalizeHostKeyRemovalRequest(value: unknown): HostKeyRemovalRequest {
+  if (!isPlainRecord(value) || !isBoundedString(value.host, 512) || !isValidRemotePort(value.port) || !isBoundedString(value.fingerprint, 512)) {
+    throw new Error("Invalid Host Key removal request")
+  }
+  return { host: value.host, port: value.port, fingerprint: value.fingerprint }
 }
 
 function normalizeWorkspaceSaveRequest(value: unknown): WorkspaceSaveRequest {
@@ -972,6 +1022,12 @@ function assertHostProfile(profile: HostSaveProfile | undefined): asserts profil
   if (profile.themeColor !== undefined && !isHostThemeColorValue(profile.themeColor)) {
     throw new Error("Invalid host theme color")
   }
+  if (profile.environment !== undefined && !isHostEnvironmentValue(profile.environment)) {
+    throw new Error("Invalid host environment")
+  }
+  if (profile.tags !== undefined && !isValidHostTags(profile.tags)) {
+    throw new Error("Invalid host tags")
+  }
   if ("hasIdentityFile" in profile && typeof profile.hasIdentityFile !== "boolean") {
     throw new Error("Invalid identity file state")
   }
@@ -999,6 +1055,16 @@ function isHostCharsetValue(value: unknown): value is "utf-8" | "gb18030" | "iso
 
 function isHostThemeColorValue(value: unknown): value is "rocker" | "amber" | "ocean" | "slate" {
   return value === "rocker" || value === "amber" || value === "ocean" || value === "slate"
+}
+
+function isHostEnvironmentValue(value: unknown): value is "production" | "staging" | "development" | "personal" {
+  return value === "production" || value === "staging" || value === "development" || value === "personal"
+}
+
+function isValidHostTags(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.length <= 16
+    && value.every((candidate) => typeof candidate === "string" && candidate.trim().length <= 64)
 }
 
 function isNonBlankBoundedString(value: unknown, maximumLength: number): value is string {

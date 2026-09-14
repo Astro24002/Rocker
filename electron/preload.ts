@@ -14,6 +14,7 @@ const bridge: RockerBridge = {
     platform: process.platform,
     minimize: () => ipcRenderer.invoke(ipcChannels.windowMinimize),
     toggleMaximize: () => ipcRenderer.invoke(ipcChannels.windowToggleMaximize),
+    isMaximized: () => ipcRenderer.invoke(ipcChannels.windowIsMaximized),
     close: () => ipcRenderer.invoke(ipcChannels.windowClose)
   },
   hosts: {
@@ -22,7 +23,8 @@ const bridge: RockerBridge = {
     duplicate: (id) => ipcRenderer.invoke(ipcChannels.hostsDuplicate, id),
     setFavorite: (id, favorite) => ipcRenderer.invoke(ipcChannels.hostsSetFavorite, id, favorite),
     remove: (id) => ipcRenderer.invoke(ipcChannels.hostsRemove, id),
-    importSshConfig: () => ipcRenderer.invoke(ipcChannels.hostsImport)
+    importSshConfig: () => ipcRenderer.invoke(ipcChannels.hostsImport),
+    testConnection: (id) => ipcRenderer.invoke(ipcChannels.hostsTestConnection, id)
   },
   sessions: {
     open: (request) => ipcRenderer.invoke(ipcChannels.sessionOpen, request),
@@ -76,6 +78,10 @@ const bridge: RockerBridge = {
     unlockVault: (password) => ipcRenderer.invoke(ipcChannels.credentialVaultUnlock, password),
     lockVault: () => ipcRenderer.invoke(ipcChannels.credentialVaultLock),
     disableVault: () => ipcRenderer.invoke(ipcChannels.credentialVaultDisable)
+  },
+  hostKeys: {
+    list: () => ipcRenderer.invoke(ipcChannels.hostKeysList),
+    remove: (request) => ipcRenderer.invoke(ipcChannels.hostKeysRemove, request)
   },
   events: {
     onSessionEvent: (listener) => {

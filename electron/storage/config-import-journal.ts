@@ -196,7 +196,11 @@ function normalizeSettingsRollback(value: unknown): { expected: AppSettings; res
 }
 
 function sameHost(left: HostProfile, right: HostProfile): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
+  const normalizedLeft = normalizeHostProfile(left)
+  const normalizedRight = normalizeHostProfile(right)
+  return normalizedLeft !== undefined && normalizedRight !== undefined
+    ? JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight)
+    : JSON.stringify(left) === JSON.stringify(right)
 }
 
 function sameSettings(left: AppSettings, right: AppSettings): boolean {

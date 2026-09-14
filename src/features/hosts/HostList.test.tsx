@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { I18nProvider } from "../../i18n"
 import { HostList } from "./HostList"
 
@@ -16,6 +16,8 @@ const host = {
 }
 
 describe("HostList", () => {
+  afterEach(() => localStorage.clear())
+
   it("does not invoke SSH actions while security capabilities are blocked", () => {
     const onConnect = vi.fn()
     const onAdd = vi.fn()
@@ -68,6 +70,41 @@ describe("HostList", () => {
     expect(onConnect).toHaveBeenCalledWith(host)
   })
 
+  it("selects a focused card with Space without connecting", () => {
+    const onConnect = vi.fn()
+    render(<I18nProvider><HostList hosts={[host]} onConnect={onConnect} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
+
+    const card = screen.getByRole("button", { name: "Server A, SSH, root" })
+    card.focus()
+    fireEvent.keyDown(card, { key: " " })
+
+    expect(card).toHaveFocus()
+    expect(card).toHaveAttribute("aria-pressed", "true")
+    expect(onConnect).not.toHaveBeenCalled()
+  })
+
+  it("connects a focused card with Enter", () => {
+    const onConnect = vi.fn()
+    render(<I18nProvider><HostList hosts={[host]} onConnect={onConnect} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
+
+    const card = screen.getByRole("button", { name: "Server A, SSH, root" })
+    card.focus()
+    fireEvent.keyDown(card, { key: "Enter" })
+
+    expect(onConnect).toHaveBeenCalledTimes(1)
+    expect(onConnect).toHaveBeenCalledWith(host)
+  })
+
+  it("exposes the selected Host filter state", () => {
+    render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
+
+    expect(screen.getByRole("button", { name: /All hosts/ })).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByRole("button", { name: "Recent hosts" })).toHaveAttribute("aria-pressed", "false")
+
+    fireEvent.click(screen.getByRole("button", { name: "Recent hosts" }))
+    expect(screen.getByRole("button", { name: "Recent hosts" })).toHaveAttribute("aria-pressed", "true")
+  })
+
   it("shows compact card metadata, platform icon, and enables Connect for a complete SSH command", () => {
     const onCommandConnect = vi.fn()
     render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onConnectCommand={onCommandConnect} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
@@ -86,6 +123,14 @@ describe("HostList", () => {
     expect(onCommandConnect).toHaveBeenCalledWith("ssh root@127.0.0.1 -p 27001")
   })
 
+  it("localizes the host command search affordance", () => {
+    localStorage.setItem("rocker.locale", "zh-CN")
+    render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
+
+    expect(screen.getByRole("textbox", { name: "查找主机或 ssh user@hostname" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "连接" })).toBeDisabled()
+  })
+
   it("shows contextual host actions only after selecting a card", () => {
     render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
 
@@ -95,6 +140,31 @@ describe("HostList", () => {
     expect(screen.getByRole("button", { name: "Duplicate host" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Favorite host" })).toBeInTheDocument()
     expect(screen.queryByText("⋯")).not.toBeInTheDocument()
+  })
+
+  it("tests the selected Host and reports a safe reachable result", async () => {
+    const onTestConnection = vi.fn().mockResolvedValue({ status: "reachable", latencyMs: 18 })
+    render(<I18nProvider><HostList hosts={[host]} onConnect={vi.fn()} onTestConnection={onTestConnection} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
+    fireEvent.click(screen.getByRole("button", { name: "Server A, SSH, root" }))
+
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }))
+    await waitFor(() => expect(onTestConnection).toHaveBeenCalledWith(host))
+    expect(screen.getByRole("status")).toHaveTextContent("Reachable in 18 ms")
+  })
+
+  it("filters cards by environment and tag selectors", () => {
+    const production = { ...host, id: "host-prod", name: "Production", environment: "production" as const, tags: ["core", "linux"] }
+    const staging = { ...host, id: "host-stage", name: "Staging", environment: "staging" as const, tags: ["database"] }
+    render(<I18nProvider><HostList hosts={[production, staging]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
+
+    fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "production" } })
+    expect(screen.getByRole("button", { name: "Production, SSH, root" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Staging, SSH, root" })).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "all" } })
+    fireEvent.change(screen.getByLabelText("Tag"), { target: { value: "database" } })
+    expect(screen.getByRole("button", { name: "Staging, SSH, root" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Production, SSH, root" })).not.toBeInTheDocument()
   })
 
   it("calls favorite and duplicate actions for the selected Host", async () => {
@@ -118,6 +188,17 @@ describe("HostList", () => {
 
     expect(confirmation).toHaveBeenCalled()
     expect(onRemove).not.toHaveBeenCalled()
+    confirmation.mockRestore()
+  })
+
+  it("identifies production risk in the delete confirmation", () => {
+    const production = { ...host, environment: "production" as const }
+    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false)
+    render(<I18nProvider><HostList hosts={[production]} onConnect={vi.fn()} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
+    fireEvent.click(screen.getByRole("button", { name: "Server A, SSH, root" }))
+    fireEvent.click(screen.getByRole("button", { name: "Delete host" }))
+
+    expect(confirmation).toHaveBeenCalledWith(expect.stringContaining("production"))
     confirmation.mockRestore()
   })
 

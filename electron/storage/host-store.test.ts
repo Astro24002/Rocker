@@ -99,6 +99,25 @@ describe("host profile editor metadata", () => {
     expect(normalized).toMatchObject({ authMethod: "password", publicKeyEnabled: false })
     expect(normalized).not.toHaveProperty("identityFile")
   })
+
+  it("normalizes optional environment and tags without creating misleading metadata", () => {
+    expect(normalizeHostProfile({
+      ...profile,
+      environment: "production",
+      tags: [" ops ", "Ops", "Linux", ""]
+    })).toMatchObject({ environment: "production", tags: ["ops", "Linux"] })
+
+    expect(normalizeHostProfile({
+      ...profile,
+      environment: "unknown",
+      tags: "ops"
+    })).not.toHaveProperty("environment")
+    expect(normalizeHostProfile({
+      ...profile,
+      environment: "unknown",
+      tags: "ops"
+    })).not.toHaveProperty("tags")
+  })
 })
 
 describe("host profile mutations", () => {
@@ -116,6 +135,8 @@ describe("host profile mutations", () => {
       identityFile: "/private/keys/id_ed25519",
       group: "Production",
       platform: "ubuntu",
+      environment: "production",
+      tags: ["core", "linux"],
       snippetsEnabled: true,
       snippetCollection: "Release",
       charset: "gb18030",
@@ -134,6 +155,8 @@ describe("host profile mutations", () => {
       authMethod: "agent",
       group: "Production",
       platform: "ubuntu",
+      environment: "production",
+      tags: ["core", "linux"],
       charset: "gb18030",
       themeColor: "amber",
       favorite: false,

@@ -39,6 +39,7 @@ describe("command registry", () => {
       "session.split-horizontal",
       "session.close",
       "navigation.hosts",
+      "navigation.trust",
       "navigation.history",
       "navigation.ports",
       "navigation.settings",

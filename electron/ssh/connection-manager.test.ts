@@ -59,6 +59,99 @@ describe("SshConnectionManager", () => {
     expect(manager.ownerForConnection(lease.connectionId)).toBeUndefined()
   })
 
+  it("probes with a fresh transport without changing reusable connection state", async () => {
+    const { clients, events, manager, request } = createConnectionHarness({})
+    const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    const before = manager.resourceSnapshot()
+
+    const result = await manager.testConnection({ hostId: request.hostId, owner: owner11 })
+
+    expect(result).toEqual({ status: "reachable", latencyMs: expect.any(Number) })
+    expect(clients).toHaveLength(2)
+    expect(clients[1].end).toHaveBeenCalledOnce()
+    expect(manager.resourceSnapshot()).toEqual(before)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ kind: "ready", connectionId: lease.connectionId })
+
+    await manager.release(lease.id)
+  })
+
+  it("returns a bounded failure category and closes a failed probe", async () => {
+    const { clients, manager, request, setConnectFailure } = createConnectionHarness({})
+    setConnectFailure(Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" }))
+
+    await expect(manager.testConnection({ hostId: request.hostId, owner: owner11 })).resolves.toEqual({
+      status: "failed",
+      reason: "timeout"
+    })
+    expect(clients).toHaveLength(1)
+    expect(clients[0].end).toHaveBeenCalledOnce()
+    expect(manager.resourceSnapshot()).toEqual({ connections: 0, leases: 0, readyWaiters: 0, retryTimers: 0, connectingTransports: 0 })
+  })
+
+  it("uses the existing Host Key trust flow for a probe", async () => {
+    const promptForHostKey = vi.fn(async () => true)
+    const trustHostKey = vi.fn(async () => undefined)
+    const { manager, request } = createConnectionHarness({
+      inspection: "unknown",
+      promptForHostKey,
+      trustHostKey
+    })
+
+    await expect(manager.testConnection({ hostId: request.hostId, owner: owner11 })).resolves.toEqual({
+      status: "reachable",
+      latencyMs: expect.any(Number)
+    })
+    expect(promptForHostKey).toHaveBeenCalledOnce()
+    expect(trustHostKey).toHaveBeenCalledWith("127.0.0.1", 22, "fingerprint-a")
+  })
+
+  it("returns cancellation before creating a probe transport", async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const { clients, manager, request } = createConnectionHarness({})
+
+    await expect(manager.testConnection({ hostId: request.hostId, owner: owner11, signal: controller.signal })).resolves.toEqual({
+      status: "failed",
+      reason: "cancelled"
+    })
+    expect(clients).toHaveLength(0)
+  })
+
+  it("caps a probe timeout even when the saved connection timeout is longer", async () => {
+    vi.useFakeTimers()
+    try {
+      const { clients, manager, request } = createConnectionHarness({ deferReady: true, readyTimeoutMs: 120_000 })
+      const operation = manager.testConnection({ hostId: request.hostId, owner: owner11 })
+
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      await expect(operation).resolves.toEqual({ status: "failed", reason: "timeout" })
+      expect(clients).toHaveLength(1)
+      expect(clients[0].end).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("bounds a stalled connection-resolution step", async () => {
+    vi.useFakeTimers()
+    try {
+      const manager = new SshConnectionManager({
+        resolve: async () => await new Promise<ResolvedConnectionRequest>(() => undefined),
+        promptForHostKey: async () => false,
+        createClient: () => { throw new Error("A stalled resolution must not create a client") }
+      })
+      const operation = manager.testConnection({ hostId: "host-a", owner: owner11 })
+
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      await expect(operation).resolves.toEqual({ status: "failed", reason: "timeout" })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("releases only the matching runtime owner before broad webContents cleanup", async () => {
     const { manager, request } = createConnectionHarness({})
     const ownerV1: RuntimeOwner = { webContentsId: 7, rendererGeneration: 1 }
@@ -840,6 +933,7 @@ interface HarnessOptions {
   deferRetryResolution?: boolean
   maxRetryAttempts?: number
   deferReady?: boolean
+  readyTimeoutMs?: number
   authMethod?: ResolvedConnectionRequest["authMethod"]
   identityFile?: string
   agent?: string
@@ -947,7 +1041,7 @@ function createConnectionHarness(options: HarnessOptions) {
         authMethod: options.authMethod ?? "agent",
         ...(options.identityFile ? { identityFile: options.identityFile } : {}),
         ...(options.agent ? { agent: options.agent } : {}),
-        readyTimeoutMs: 15_000,
+        readyTimeoutMs: options.readyTimeoutMs ?? 15_000,
         securityContextKey,
         ...(knownHostKeyFingerprint ? { knownHostKeyFingerprint } : {})
       }

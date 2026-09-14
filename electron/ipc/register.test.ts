@@ -71,6 +71,120 @@ describe("registerIpcHandlers", () => {
     expect([...electron.handlers.keys()]).not.toContain("rocker:monitor:sample")
   })
 
+  it("returns the current native maximize state for the owning window", async () => {
+    const harness = createHarness()
+    const nativeWindow = { isMaximized: vi.fn(() => true) }
+    electron.BrowserWindow.fromWebContents.mockReturnValue(nativeWindow)
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.windowIsMaximized)).resolves.toBe(true)
+    expect(nativeWindow.isMaximized).toHaveBeenCalledOnce()
+    expect(electron.BrowserWindow.fromWebContents).toHaveBeenCalledWith({ id: 21 })
+  })
+
+  it("lists the Host Key inventory and audit history for the current renderer owner", async () => {
+    const harness = createHarness()
+    harness.hostKeys.entries.mockResolvedValue([{ host: "server.example", port: 22, fingerprint: "fingerprint-a" }])
+    harness.hostKeys.auditEntries.mockResolvedValue([{
+      at: "2026-09-11T00:00:00.000Z",
+      action: "trusted",
+      host: "server.example",
+      port: 22,
+      fingerprint: "fingerprint-a"
+    }])
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostKeysList)).resolves.toEqual({
+      entries: [{ host: "server.example", port: 22, fingerprint: "fingerprint-a" }],
+      history: [{
+        at: "2026-09-11T00:00:00.000Z",
+        action: "trusted",
+        host: "server.example",
+        port: 22,
+        fingerprint: "fingerprint-a"
+      }]
+    })
+  })
+
+  it("tests a saved Host through the current renderer owner without opening a Session", async () => {
+    const harness = createHarness()
+    harness.hosts.list.mockResolvedValue([{ id: "host-a", name: "Host A", host: "server.example", port: 22, username: "root", authMethod: "agent", favorite: false, notes: "" }])
+    harness.connections.testConnection.mockResolvedValue({ status: "reachable", latencyMs: 18 })
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostsTestConnection, "host-a")).resolves.toEqual({ status: "reachable", latencyMs: 18 })
+    expect(harness.connections.testConnection).toHaveBeenCalledWith({ hostId: "host-a", owner: owner21 })
+    expect(harness.sessions.open).not.toHaveBeenCalled()
+    expect(harness.history.add).not.toHaveBeenCalled()
+  })
+
+  it("rejects a Host connection test when the Host is missing", async () => {
+    const harness = createHarness()
+    harness.hosts.list.mockResolvedValue([])
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostsTestConnection, "host-missing")).rejects.toThrow("Host profile not found")
+    expect(harness.connections.testConnection).not.toHaveBeenCalled()
+  })
+
+  it("rejects a Host connection test when the renderer owner is replaced", async () => {
+    const harness = createHarness()
+    harness.hosts.list.mockResolvedValue([{ id: "host-a", name: "Host A", host: "server.example", port: 22, username: "root", authMethod: "agent", favorite: false, notes: "" }])
+    harness.windows.currentOwnerForWebContents
+      .mockReturnValueOnce(owner21)
+      .mockReturnValue(owner21Generation2)
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostsTestConnection, "host-a")).rejects.toThrow("Renderer owner was replaced")
+    expect(harness.connections.testConnection).not.toHaveBeenCalled()
+  })
+
+  it("removes a Host Key only through the current owner and expected fingerprint", async () => {
+    const harness = createHarness()
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostKeysRemove, {
+      host: "server.example",
+      port: 22,
+      fingerprint: "fingerprint-a"
+    })).resolves.toBeUndefined()
+    expect(harness.hostKeys.remove).toHaveBeenCalledWith("server.example", 22, "fingerprint-a")
+
+    await expect(invokeFrom(21, ipcChannels.hostKeysRemove, {
+      host: "",
+      port: 22,
+      fingerprint: "fingerprint-a"
+    })).rejects.toThrow("Invalid Host Key removal request")
+  })
+
+  it("rejects Host Key inventory requests from a replaced renderer generation", async () => {
+    const harness = createHarness()
+    harness.windows.currentOwnerForWebContents
+      .mockReturnValueOnce(owner21)
+      .mockReturnValue(owner21Generation2)
+    harness.hostKeys.entries.mockResolvedValue([])
+    harness.hostKeys.auditEntries.mockResolvedValue([])
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostKeysList)).rejects.toThrow("Renderer owner was replaced")
+    expect(harness.hostKeys.entries).not.toHaveBeenCalled()
+  })
+
+  it("rejects Host Key removal when the renderer generation changes before mutation", async () => {
+    const harness = createHarness()
+    harness.windows.currentOwnerForWebContents
+      .mockReturnValueOnce(owner21)
+      .mockReturnValue(owner21Generation2)
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostKeysRemove, {
+      host: "server.example",
+      port: 22,
+      fingerprint: "fingerprint-a"
+    })).rejects.toThrow("Renderer owner was replaced")
+    expect(harness.hostKeys.remove).not.toHaveBeenCalled()
+  })
+
   it("does not deliver a session event from an old renderer generation", () => {
     const harness = createHarness()
     harness.windows.currentOwnerForWebContents.mockReturnValue(owner21Generation2)
@@ -462,6 +576,8 @@ describe("registerIpcHandlers", () => {
         snippetCollection: "Deployment",
         charset: "gb18030",
         themeColor: "amber",
+        environment: "production",
+        tags: [" core ", "linux"],
         favorite: false,
         notes: ""
       }
@@ -472,8 +588,32 @@ describe("registerIpcHandlers", () => {
       snippetsEnabled: true,
       snippetCollection: "Deployment",
       charset: "gb18030",
-      themeColor: "amber"
+      themeColor: "amber",
+      environment: "production",
+      tags: [" core ", "linux"]
     }))
+  })
+
+  it("rejects malformed Host organization metadata before saving", async () => {
+    const harness = createHarness()
+    registerIpcHandlers(harness.dependencies)
+
+    const base = {
+      id: "host-a",
+      name: "Host A",
+      host: "127.0.0.1",
+      port: 22,
+      username: "rock",
+      authMethod: "agent" as const,
+      favorite: false,
+      notes: ""
+    }
+
+    await expect(invokeFrom(21, ipcChannels.hostsSave, { profile: { ...base, environment: "unknown" } }))
+      .rejects.toThrow("Invalid host environment")
+    await expect(invokeFrom(21, ipcChannels.hostsSave, { profile: { ...base, tags: ["x".repeat(65)] } }))
+      .rejects.toThrow("Invalid host tags")
+    expect(harness.hosts.save).not.toHaveBeenCalled()
   })
 
   it("accepts empty optional values while their capabilities are disabled", async () => {
@@ -726,7 +866,8 @@ function createHarness() {
   const connections = {
     ownerForConnection: vi.fn(),
     releaseOwner: vi.fn(),
-    updateRetryPolicy: vi.fn()
+    updateRetryPolicy: vi.fn(),
+    testConnection: vi.fn()
   }
   const settings = { get: vi.fn(), update: vi.fn(), loadWithStatus: vi.fn() }
   const history = { add: vi.fn(), list: vi.fn(), clear: vi.fn(), loadWithStatus: vi.fn() }
@@ -741,7 +882,7 @@ function createHarness() {
     lockVault: vi.fn(),
     disableVault: vi.fn()
   }
-  const hostKeys = { health: vi.fn() }
+  const hostKeys = { health: vi.fn(), entries: vi.fn(), auditEntries: vi.fn(), remove: vi.fn() }
   const diagnostics = { snapshot: vi.fn(() => [{ at: "2026-08-28T12:00:00.000Z", category: "session", action: "connected" }]) }
   const mutations = { run: vi.fn(async <T>(operation: () => Promise<T> | T) => operation()) }
   const configuration = { preview: vi.fn(), import: vi.fn() }

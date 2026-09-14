@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { JsonStore } from "./json-store"
 import { StorageBlockedError, type LoadResult } from "./storage-result"
-import type { HostCharset, HostPlatform, HostProfile, HostThemeColor, StoredHostDocument } from "./types"
+import type { HostCharset, HostEnvironment, HostPlatform, HostProfile, HostThemeColor, StoredHostDocument } from "./types"
 
 const defaultDocument: StoredHostDocument = { hosts: [] }
 
@@ -71,6 +71,8 @@ export class HostStore {
         authMethod: "agent",
         ...(source.platform ? { platform: source.platform } : {}),
         ...(source.group ? { group: source.group } : {}),
+        ...(source.environment ? { environment: source.environment } : {}),
+        ...(source.tags ? { tags: [...source.tags] } : {}),
         charset: source.charset ?? "utf-8",
         themeColor: source.themeColor ?? "rocker",
         publicKeyEnabled: false,
@@ -156,6 +158,7 @@ export function normalizeHostProfile(value: unknown): HostProfile | undefined {
   const group = typeof value.group === "string" ? value.group.trim() : undefined
   const publicKeyEnabled = value.authMethod === "privateKey"
   const snippetsEnabled = value.snippetsEnabled === true && isBoundedString(value.snippetCollection, 256)
+  const tags = normalizeHostTags(value.tags)
   return {
     id: value.id,
     name: value.name,
@@ -171,6 +174,8 @@ export function normalizeHostProfile(value: unknown): HostProfile | undefined {
     ...(snippetsEnabled ? { snippetCollection: value.snippetCollection as string } : {}),
     charset: isHostCharset(value.charset) ? value.charset : "utf-8",
     themeColor: isHostThemeColor(value.themeColor) ? value.themeColor : "rocker",
+    ...(isHostEnvironment(value.environment) ? { environment: value.environment } : {}),
+    ...(tags ? { tags } : {}),
     favorite: value.favorite,
     notes: value.notes
   }
@@ -186,6 +191,27 @@ function isHostCharset(value: unknown): value is HostCharset {
 
 function isHostThemeColor(value: unknown): value is HostThemeColor {
   return value === "rocker" || value === "amber" || value === "ocean" || value === "slate"
+}
+
+function isHostEnvironment(value: unknown): value is HostEnvironment {
+  return value === "production" || value === "staging" || value === "development" || value === "personal"
+}
+
+export function normalizeHostTags(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length > 16) return undefined
+  const tags: string[] = []
+  const seen = new Set<string>()
+  for (const candidate of value) {
+    if (typeof candidate !== "string") return undefined
+    const tag = candidate.trim()
+    if (tag.length === 0) continue
+    if (tag.length > 64) return undefined
+    const identity = tag.toLowerCase()
+    if (seen.has(identity)) continue
+    seen.add(identity)
+    tags.push(tag)
+  }
+  return tags.length > 0 ? tags : undefined
 }
 
 function mapLoadResult<T, U>(result: LoadResult<T>, map: (value: T) => U): LoadResult<U> {

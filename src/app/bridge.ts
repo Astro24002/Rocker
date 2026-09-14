@@ -3,15 +3,17 @@ import type {
   AppBootstrapSnapshot,
   BootstrapHostProfile,
   BootstrapResourceName,
+  HostKeyInventorySnapshot,
+  HostKeyRemovalRequest,
   HostSaveProfile
 } from "../../electron/ipc/bridge-contract"
 import type { StorageHealth, StorageKind } from "../../electron/storage/storage-result"
-import type { AppSettings, ForwardingInfo, HostCharset, HostProfile, HostThemeColor, StoredWorkspaceWindow } from "./types"
+import type { AppSettings, ForwardingInfo, HostCharset, HostEnvironment, HostProfile, HostThemeColor, StoredWorkspaceWindow } from "./types"
 
 const demoHosts: HostProfile[] = [
-  { id: "demo-g11", name: "G11", host: "47.97.162.53", port: 22, username: "root", authMethod: "agent", platform: "ubuntu", group: "Personal", favorite: true, notes: "" },
-  { id: "demo-adcp", name: "WH-ADCP", host: "10.24.18.21", port: 22, username: "deploy", authMethod: "privateKey", platform: "debian", group: "Production", favorite: false, notes: "" },
-  { id: "demo-db", name: "Database", host: "db.internal", port: 2222, username: "ops", authMethod: "password", group: "Production", favorite: false, notes: "" }
+  { id: "demo-g11", name: "G11", host: "47.97.162.53", port: 22, username: "root", authMethod: "agent", platform: "ubuntu", group: "Personal", environment: "development", tags: ["core", "linux"], favorite: true, notes: "" },
+  { id: "demo-adcp", name: "WH-ADCP", host: "10.24.18.21", port: 22, username: "deploy", authMethod: "privateKey", platform: "debian", group: "Production", environment: "production", tags: ["release", "linux"], favorite: false, notes: "" },
+  { id: "demo-db", name: "Database", host: "db.internal", port: 2222, username: "ops", authMethod: "password", group: "Production", environment: "production", tags: ["database"], favorite: false, notes: "" }
 ]
 
 type PreviewSession = {
@@ -28,6 +30,16 @@ const mockSessions = new Map<string, PreviewSession>()
 const mockForwards = new Map<string, ForwardingInfo>()
 let mockHosts = [...demoHosts]
 let mockWorkspace: StoredWorkspaceWindow | undefined
+let mockHostKeys: HostKeyInventorySnapshot = {
+  entries: [{ host: "47.97.162.53", port: 22, fingerprint: "demo-g11-fingerprint" }],
+  history: [{
+    at: "2026-09-01T08:00:00.000Z",
+    action: "trusted",
+    host: "47.97.162.53",
+    port: 22,
+    fingerprint: "demo-g11-fingerprint"
+  }]
+}
 let mockSettings: AppSettings = {
   locale: "en",
   sidebarWidth: 220,
@@ -52,7 +64,13 @@ export function getRockerBridge(): RockerBridge {
 
 function createBrowserPreviewBridge(): RockerBridge {
   return {
-    app: { platform: "browser" as NodeJS.Platform, minimize: async () => undefined, toggleMaximize: async () => undefined, close: async () => undefined },
+    app: {
+      platform: "browser" as NodeJS.Platform,
+      minimize: async () => undefined,
+      toggleMaximize: async () => undefined,
+      isMaximized: async () => false,
+      close: async () => undefined
+    },
     hosts: {
       list: async () => mockHosts,
       save: async ({ profile }) => {
@@ -74,6 +92,8 @@ function createBrowserPreviewBridge(): RockerBridge {
           authMethod: "agent",
           ...(source.platform ? { platform: source.platform } : {}),
           ...(source.group ? { group: source.group } : {}),
+          ...(source.environment ? { environment: source.environment } : {}),
+          ...(source.tags ? { tags: [...source.tags] } : {}),
           charset: source.charset ?? "utf-8",
           themeColor: source.themeColor ?? "rocker",
           publicKeyEnabled: false,
@@ -92,7 +112,11 @@ function createBrowserPreviewBridge(): RockerBridge {
         return updated
       },
       remove: async (id) => { mockHosts = mockHosts.filter((host) => host.id !== id) },
-      importSshConfig: async () => []
+      importSshConfig: async () => [],
+      testConnection: async (id) => {
+        if (!mockHosts.some((host) => host.id === id)) return { status: "failed", reason: "configuration" }
+        return { status: "reachable", latencyMs: 24 }
+      }
     },
     sessions: {
       open: async ({ sessionId, hostId }) => {
@@ -221,6 +245,22 @@ function createBrowserPreviewBridge(): RockerBridge {
       lockVault: async () => ({ mode: "vault", keychainAvailable: true, vaultState: "locked" }),
       disableVault: async () => ({ mode: "keychain", keychainAvailable: true, vaultState: "not-configured" })
     },
+    hostKeys: {
+      list: async () => ({
+        entries: mockHostKeys.entries.map((entry) => ({ ...entry })),
+        history: mockHostKeys.history.map((entry) => ({ ...entry }))
+      }),
+      remove: async (request: HostKeyRemovalRequest) => {
+        const current = mockHostKeys.entries.find((entry) => entry.host === request.host && entry.port === request.port)
+        if (current && current.fingerprint !== request.fingerprint.replace(/^SHA256:/i, "")) throw new Error("Host Key changed")
+        mockHostKeys = {
+          entries: mockHostKeys.entries.filter((entry) => !(entry.host === request.host && entry.port === request.port)),
+          history: current
+            ? [...mockHostKeys.history, { at: new Date().toISOString(), action: "removed", ...current }]
+            : mockHostKeys.history
+        }
+      }
+    },
     events: {
       onSessionEvent: (listener) => {
         mockListeners.add(listener)
@@ -264,13 +304,16 @@ function normalizePreviewHostProfile(profile: HostSaveProfile, existing: HostPro
   const publicKeyEnabled = source.publicKeyEnabled === true || source.authMethod === "privateKey"
   const snippetCollection = isNonBlankString(source.snippetCollection, 256) ? source.snippetCollection.trim() : undefined
   const snippetsEnabled = source.snippetsEnabled === true && snippetCollection !== undefined
-  const { snippetCollection: _snippetCollection, ...withoutSnippetCollection } = source
+  const normalizedTags = normalizePreviewTags(source.tags)
+  const { snippetCollection: _snippetCollection, environment: _environment, tags: _tags, ...withoutOptionalMetadata } = source
   return {
-    ...(snippetsEnabled ? { ...withoutSnippetCollection, snippetCollection } : withoutSnippetCollection),
+    ...(snippetsEnabled ? { ...withoutOptionalMetadata, snippetCollection } : withoutOptionalMetadata),
     publicKeyEnabled,
     snippetsEnabled,
     charset: isPreviewCharset(source.charset) ? source.charset : "utf-8",
-    themeColor: isPreviewThemeColor(source.themeColor) ? source.themeColor : "rocker"
+    themeColor: isPreviewThemeColor(source.themeColor) ? source.themeColor : "rocker",
+    ...(isPreviewEnvironment(source.environment) ? { environment: source.environment } : {}),
+    ...(normalizedTags ? { tags: normalizedTags } : {})
   }
 }
 
@@ -284,6 +327,27 @@ function isPreviewCharset(value: unknown): value is HostCharset {
 
 function isPreviewThemeColor(value: unknown): value is HostThemeColor {
   return value === "rocker" || value === "amber" || value === "ocean" || value === "slate"
+}
+
+function isPreviewEnvironment(value: unknown): value is HostEnvironment {
+  return value === "production" || value === "staging" || value === "development" || value === "personal"
+}
+
+function normalizePreviewTags(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length > 16) return undefined
+  const tags: string[] = []
+  const seen = new Set<string>()
+  for (const candidate of value) {
+    if (typeof candidate !== "string") return undefined
+    const tag = candidate.trim()
+    if (!tag) continue
+    if (tag.length > 64) return undefined
+    const identity = tag.toLowerCase()
+    if (seen.has(identity)) continue
+    seen.add(identity)
+    tags.push(tag)
+  }
+  return tags.length > 0 ? tags : undefined
 }
 
 function isRedactedHostProfile(profile: HostSaveProfile): profile is BootstrapHostProfile {

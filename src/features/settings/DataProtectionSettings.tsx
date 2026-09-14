@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { CheckCircle2, Download, KeyRound, LockKeyhole, ShieldCheck, UnlockKeyhole, Upload } from "lucide-react"
+import { CheckCircle2, Download, KeyRound, LoaderCircle, LockKeyhole, ShieldCheck, UnlockKeyhole, Upload } from "lucide-react"
 import type {
   ConfigurationImportChooseResult,
   ConfigurationImportRequest,
@@ -18,7 +18,9 @@ interface DataProtectionSettingsProps {
 
 type OperationStatus =
   | { kind: "idle" }
+  | { kind: "pending"; message: string }
   | { kind: "success"; message: string }
+  | { kind: "cancelled"; message: string }
   | { kind: "error"; message: string }
 
 const emptyProtectionStatus: CredentialProtectionStatus = {
@@ -58,7 +60,7 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
   const refreshProtection = async (operation: () => Promise<CredentialProtectionStatus>): Promise<void> => {
     if (busy) return
     setBusy(true)
-    setStatus({ kind: "idle" })
+    setStatus({ kind: "pending", message: t("settings.operationPending") })
     try {
       const next = await operation()
       setProtection(next)
@@ -95,11 +97,11 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
   const exportTemplate = async (): Promise<void> => {
     if (busy) return
     setBusy(true)
-    setStatus({ kind: "idle" })
+    setStatus({ kind: "pending", message: t("settings.operationPending") })
     try {
       const result = await bridge.configuration.exportTemplate()
       setStatus(result.canceled || !result.path
-        ? { kind: "error", message: t("settings.configurationExportCancelled") }
+        ? { kind: "cancelled", message: t("settings.configurationExportCancelled") }
         : { kind: "success", message: `${t("settings.exportedTo")} ${result.path}` })
     } catch {
       setStatus({ kind: "error", message: t("settings.configurationExportError") })
@@ -115,13 +117,13 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
       return
     }
     setBusy(true)
-    setStatus({ kind: "idle" })
+    setStatus({ kind: "pending", message: t("settings.operationPending") })
     try {
       const result = await bridge.configuration.exportBundle(migrationPassword)
       setMigrationPassword("")
       setMigrationConfirmation("")
       setStatus(result.canceled || !result.path
-        ? { kind: "error", message: t("settings.configurationExportCancelled") }
+        ? { kind: "cancelled", message: t("settings.configurationExportCancelled") }
         : { kind: "success", message: `${t("settings.exportedTo")} ${result.path}` })
     } catch {
       setStatus({ kind: "error", message: t("settings.configurationExportError") })
@@ -133,9 +135,15 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
   const chooseImport = async (): Promise<void> => {
     if (busy) return
     setBusy(true)
-    setStatus({ kind: "idle" })
+    setStatus({ kind: "pending", message: t("settings.operationPending") })
     try {
       const selected = await bridge.configuration.chooseImport()
+      if (selected.canceled || !selected.importId || !selected.preview) {
+        setImportSelection(undefined)
+        setImportPreview(undefined)
+        setStatus({ kind: "cancelled", message: t("settings.configurationImportCancelled") })
+        return
+      }
       setImportSelection(selected)
       setImportPreview(selected.preview)
       setHostActions({})
@@ -154,7 +162,7 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
   const previewEncryptedImport = async (): Promise<void> => {
     if (!importSelection?.importId || !importPassword || busy) return
     setBusy(true)
-    setStatus({ kind: "idle" })
+    setStatus({ kind: "pending", message: t("settings.operationPending") })
     try {
       const preview = await bridge.configuration.previewImport(importSelection.importId, importPassword)
       setImportPreview(preview)
@@ -186,7 +194,7 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
       }
     }
     setBusy(true)
-    setStatus({ kind: "idle" })
+    setStatus({ kind: "pending", message: t("settings.operationPending") })
     try {
       await bridge.configuration.applyImport(request)
       setImportSelection(undefined)
@@ -222,7 +230,7 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
         <div className="data-protection-panel-icon"><KeyRound size={17} aria-hidden="true" /></div>
         <div className="data-protection-panel-copy">
           <strong>{vaultLabel}</strong>
-          <span>{t("settings.vaultHint")}</span>
+          <span id="vault-password-hint">{t("settings.vaultHint")}</span>
         </div>
         <div className="data-protection-panel-actions">
           {protection.mode === "vault" && protection.vaultState === "unlocked" ? (
@@ -236,8 +244,14 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
             </>
           ) : (
             <>
-              <input type="password" aria-label={t("settings.vaultPassword")} autoComplete="new-password" value={vaultPassword} onChange={(event) => setVaultPassword(event.target.value)} placeholder={t("settings.vaultPassword")} />
-              {protection.mode !== "vault" && <input type="password" aria-label={t("settings.confirmVaultPassword")} autoComplete="new-password" value={vaultConfirmation} onChange={(event) => setVaultConfirmation(event.target.value)} placeholder={t("settings.confirmVaultPassword")} />}
+              <label className="data-protection-field" htmlFor="vault-password">
+                <span>{t("settings.vaultPassword")}</span>
+                <input id="vault-password" type="password" aria-describedby="vault-password-hint" autoComplete={protection.mode === "vault" ? "current-password" : "new-password"} value={vaultPassword} onChange={(event) => setVaultPassword(event.target.value)} placeholder={t("settings.vaultPassword")} />
+              </label>
+              {protection.mode !== "vault" && <label className="data-protection-field" htmlFor="vault-password-confirmation">
+                <span>{t("settings.confirmVaultPassword")}</span>
+                <input id="vault-password-confirmation" type="password" aria-describedby="vault-password-hint" autoComplete="new-password" value={vaultConfirmation} onChange={(event) => setVaultConfirmation(event.target.value)} placeholder={t("settings.confirmVaultPassword")} />
+              </label>}
               <button type="button" className="settings-action settings-action-primary" disabled={busy || !vaultPassword || (protection.mode !== "vault" && !vaultConfirmation)} onClick={enableOrUnlockVault}>
                 {protection.mode === "vault" ? <UnlockKeyhole size={15} aria-hidden="true" /> : <ShieldCheck size={15} aria-hidden="true" />}
                 {protection.mode === "vault" ? t("settings.unlockVault") : t("settings.enableVault")}
@@ -251,7 +265,7 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
         <div>
           <span className="view-eyebrow">{t("settings.configurationMigration")}</span>
           <h2>{t("settings.configurationMigration")}</h2>
-          <p>{t("settings.configurationMigrationHint")}</p>
+          <p id="migration-password-hint">{t("settings.configurationMigrationHint")}</p>
         </div>
       </div>
       <div className="data-protection-migration-actions">
@@ -262,8 +276,14 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
         <div className="data-protection-action-block">
           <div className="data-protection-action-heading"><LockKeyhole size={16} aria-hidden="true" /><strong>{t("settings.exportMigration")}</strong></div>
           <div className="data-protection-inline-fields">
-            <input type="password" aria-label={t("settings.migrationPassword")} autoComplete="new-password" value={migrationPassword} onChange={(event) => setMigrationPassword(event.target.value)} placeholder={t("settings.migrationPassword")} />
-            <input type="password" aria-label={t("settings.confirmMigrationPassword")} autoComplete="new-password" value={migrationConfirmation} onChange={(event) => setMigrationConfirmation(event.target.value)} placeholder={t("settings.confirmMigrationPassword")} />
+            <label className="data-protection-field" htmlFor="migration-password">
+              <span>{t("settings.migrationPassword")}</span>
+              <input id="migration-password" type="password" aria-describedby="migration-password-hint" autoComplete="new-password" value={migrationPassword} onChange={(event) => setMigrationPassword(event.target.value)} placeholder={t("settings.migrationPassword")} />
+            </label>
+            <label className="data-protection-field" htmlFor="migration-password-confirmation">
+              <span>{t("settings.confirmMigrationPassword")}</span>
+              <input id="migration-password-confirmation" type="password" aria-describedby="migration-password-hint" autoComplete="new-password" value={migrationConfirmation} onChange={(event) => setMigrationConfirmation(event.target.value)} placeholder={t("settings.confirmMigrationPassword")} />
+            </label>
           </div>
           <button type="button" className="settings-action" disabled={busy || !migrationPassword || !migrationConfirmation} onClick={() => void exportMigration()}><LockKeyhole size={15} aria-hidden="true" />{t("settings.exportMigration")}</button>
         </div>
@@ -291,8 +311,8 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
           onApply={() => void applyImport()}
         />}
       </div>
-      {status.kind !== "idle" && <div className={`data-protection-operation-status data-protection-operation-status-${status.kind}`} role="status">
-        {status.kind === "success" ? <CheckCircle2 size={15} aria-hidden="true" /> : <ShieldCheck size={15} aria-hidden="true" />}
+      {status.kind !== "idle" && <div className={`data-protection-operation-status data-protection-operation-status-${status.kind}`} role="status" aria-live="polite" aria-busy={status.kind === "pending"}>
+        {status.kind === "success" ? <CheckCircle2 size={15} aria-hidden="true" /> : status.kind === "pending" ? <LoaderCircle size={15} aria-hidden="true" /> : <ShieldCheck size={15} aria-hidden="true" />}
         <span>{status.message}</span>
       </div>}
     </section>
@@ -337,8 +357,14 @@ function ImportPreviewPanel({
   const { t } = useI18n()
   if (preview.requiresPassword) {
     return <div className="import-preview-panel">
-      <p>{t("settings.importRequiresPassword")}</p>
-      <div className="data-protection-inline-fields"><input type="password" aria-label={t("settings.importPassword")} autoComplete="current-password" value={importPassword} onChange={(event) => onImportPasswordChange(event.target.value)} placeholder={t("settings.importPassword")} /><button type="button" className="settings-action" disabled={busy || !importPassword} onClick={onPreviewPassword}><UnlockKeyhole size={15} aria-hidden="true" />{t("settings.previewImport")}</button></div>
+      <p id="import-password-hint">{t("settings.importRequiresPassword")}</p>
+      <div className="data-protection-inline-fields">
+        <label className="data-protection-field" htmlFor="import-password">
+          <span>{t("settings.importPassword")}</span>
+          <input id="import-password" type="password" aria-describedby="import-password-hint" autoComplete="current-password" value={importPassword} onChange={(event) => onImportPasswordChange(event.target.value)} placeholder={t("settings.importPassword")} />
+        </label>
+        <button type="button" className="settings-action" disabled={busy || !importPassword} onClick={onPreviewPassword}><UnlockKeyhole size={15} aria-hidden="true" />{t("settings.previewImport")}</button>
+      </div>
     </div>
   }
   return <div className="import-preview-panel">

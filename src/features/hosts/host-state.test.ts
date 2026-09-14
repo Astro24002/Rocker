@@ -30,6 +30,15 @@ describe("host state", () => {
     expect(filterHosts([host, other], { group: "all", query: "g11" })).toEqual([host])
   })
 
+  it("filters by exact environment and tag while searching tag text", () => {
+    const production = { ...host, id: "production", environment: "production" as const, tags: ["Core", "Linux"] }
+    const staging = { ...host, id: "staging", environment: "staging" as const, tags: ["Database"] }
+
+    expect(filterHosts([production, staging], { group: "all", query: "", environment: "production" })).toEqual([production])
+    expect(filterHosts([production, staging], { group: "all", query: "", tag: "linux" })).toEqual([production])
+    expect(filterHosts([production, staging], { group: "all", query: "database" })).toEqual([staging])
+  })
+
   it("derives unique recent hosts from successful history in newest-first order", () => {
     const recent = recentHostIds([
       { hostId: "old", connectedAt: "2026-01-01T00:00:00.000Z", outcome: "connected" },

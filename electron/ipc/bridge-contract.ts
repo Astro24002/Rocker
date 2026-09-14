@@ -7,10 +7,25 @@ import type {
   StoredWorkspaceWindow
 } from "../storage/types"
 import type { DiscoveredPort, ForwardingInfo, ForwardingSpec } from "../ports/types"
-import type { TerminalSessionEvent, TerminalSessionInfo } from "../ssh/types"
+import type { ConnectionTestResult, TerminalSessionEvent, TerminalSessionInfo } from "../ssh/types"
 import type { StorageHealth } from "../storage/storage-result"
 import type { ConflictResolution, ImportPreview, ImportResult } from "../storage/config-bundle"
 import type { CredentialProtectionStatus } from "../storage/credentials"
+import type { HostKeyAuditRecord as StoredHostKeyAuditRecord, StoredHostKeyRecord } from "../ssh/host-keys"
+
+export type HostKeyInventoryEntry = StoredHostKeyRecord
+export type HostKeyAuditRecord = StoredHostKeyAuditRecord
+
+export interface HostKeyInventorySnapshot {
+  entries: HostKeyInventoryEntry[]
+  history: HostKeyAuditRecord[]
+}
+
+export interface HostKeyRemovalRequest {
+  host: string
+  port: number
+  fingerprint: string
+}
 
 export interface DiagnosticsExportResult {
   canceled: boolean
@@ -94,6 +109,7 @@ export interface RockerBridge {
     platform: NodeJS.Platform
     minimize(): Promise<void>
     toggleMaximize(): Promise<void>
+    isMaximized(): Promise<boolean>
     close(): Promise<void>
   }
   hosts: {
@@ -103,6 +119,7 @@ export interface RockerBridge {
     setFavorite(id: string, favorite: boolean): Promise<HostProfile>
     remove(id: string): Promise<void>
     importSshConfig(): Promise<HostProfile[]>
+    testConnection(id: string): Promise<ConnectionTestResult>
   }
   sessions: {
     open(request: SessionOpenRequest): Promise<TerminalSessionInfo>
@@ -157,6 +174,10 @@ export interface RockerBridge {
     lockVault(): Promise<CredentialProtectionStatus>
     disableVault(): Promise<CredentialProtectionStatus>
   }
+  hostKeys: {
+    list(): Promise<HostKeyInventorySnapshot>
+    remove(request: HostKeyRemovalRequest): Promise<void>
+  }
   events: {
     onSessionEvent(listener: (event: TerminalSessionEvent) => void): () => void
     onSessionLaunch(listener: (request: SessionLaunchRequest) => void): () => void
@@ -170,6 +191,7 @@ export const ipcChannels = {
   hostsSetFavorite: "rocker:hosts:set-favorite",
   hostsRemove: "rocker:hosts:remove",
   hostsImport: "rocker:hosts:import",
+  hostsTestConnection: "rocker:hosts:test-connection",
   sessionOpen: "rocker:sessions:open",
   sessionWrite: "rocker:sessions:write",
   sessionResize: "rocker:sessions:resize",
@@ -206,8 +228,11 @@ export const ipcChannels = {
   credentialVaultUnlock: "rocker:credentials:vault-unlock",
   credentialVaultLock: "rocker:credentials:vault-lock",
   credentialVaultDisable: "rocker:credentials:vault-disable",
+  hostKeysList: "rocker:host-keys:list",
+  hostKeysRemove: "rocker:host-keys:remove",
   windowMinimize: "rocker:window:minimize",
   windowToggleMaximize: "rocker:window:toggle-maximize",
+  windowIsMaximized: "rocker:window:is-maximized",
   windowClose: "rocker:window:close",
   sessionLaunch: "rocker:window:session-launch"
 } as const

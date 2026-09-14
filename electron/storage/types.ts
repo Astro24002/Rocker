@@ -1,5 +1,13 @@
 export type AuthMethod = "password" | "privateKey" | "agent"
 
+export type HostPlatform = "ubuntu" | "debian" | "linux"
+
+export type HostCharset = "utf-8" | "gb18030" | "iso-8859-1"
+
+export type HostThemeColor = "rocker" | "amber" | "ocean" | "slate"
+
+export type HostEnvironment = "production" | "staging" | "development" | "personal"
+
 export type CredentialKind = "password" | "passphrase"
 
 export interface HostProfile {
@@ -9,8 +17,16 @@ export interface HostProfile {
   port: number
   username: string
   authMethod: AuthMethod
+  platform?: HostPlatform
   identityFile?: string
   group?: string
+  publicKeyEnabled?: boolean
+  snippetsEnabled?: boolean
+  snippetCollection?: string
+  charset?: HostCharset
+  themeColor?: HostThemeColor
+  environment?: HostEnvironment
+  tags?: string[]
   favorite: boolean
   notes: string
 }

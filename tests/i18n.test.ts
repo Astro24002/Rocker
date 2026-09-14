@@ -10,5 +10,7 @@ describe("Rocker localization", () => {
   it("keeps English and Simplified Chinese dictionaries complete", () => {
     expect(Object.keys(dictionaries["zh-CN"]).sort()).toEqual(Object.keys(dictionaries.en).sort())
     expect(translate("zh-CN", "nav.hosts")).toBe("主机")
+    expect(translate("en", "settings.operationPending")).toBe("Working...")
+    expect(translate("zh-CN", "settings.operationPending")).toBe("正在处理...")
   })
 })

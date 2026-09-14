@@ -1,11 +1,14 @@
 import { resolve } from "node:path"
 import { JsonStore } from "../storage/json-store"
 import type { LoadResult, StorageHealth } from "../storage/storage-result"
-import { normalizeFingerprint, type HostKeyStore, type StoredHostKeyRecord } from "./host-keys"
+import { normalizeFingerprint, type HostKeyAuditRecord, type HostKeyStore, type StoredHostKeyRecord } from "./host-keys"
 
 interface HostKeyDocument {
   fingerprints: Record<string, string>
+  history: HostKeyAuditRecord[]
 }
+
+const maximumAuditEntries = 500
 
 export class JsonHostKeyStore implements HostKeyStore {
   private readonly store: JsonStore<HostKeyDocument>
@@ -15,7 +18,7 @@ export class JsonHostKeyStore implements HostKeyStore {
     this.store = new JsonStore({
       filePath: resolvedPath,
       store: "hostKeys",
-      defaultValue: { fingerprints: {} },
+      defaultValue: { fingerprints: {}, history: [] },
       recovery: "blocked",
       normalize: normalizeHostKeyDocument,
       sensitive: true
@@ -36,8 +39,15 @@ export class JsonHostKeyStore implements HostKeyStore {
       if (stored !== undefined && normalizeFingerprint(stored) !== normalizedFingerprint) {
         throw new Error("Host Key changed; replacement confirmation is required")
       }
-      document.fingerprints[key] = normalizedFingerprint
-      return document
+      const fingerprints = { ...document.fingerprints, [key]: normalizedFingerprint }
+      if (stored !== undefined) return { ...document, fingerprints }
+      return appendAudit({ ...document, fingerprints }, {
+        at: new Date().toISOString(),
+        action: "trusted",
+        host,
+        port,
+        fingerprint: normalizedFingerprint
+      })
     })
   }
 
@@ -51,8 +61,17 @@ export class JsonHostKeyStore implements HostKeyStore {
       if (stored === undefined || normalizeFingerprint(stored) !== normalizedExpected) {
         throw new Error("Host Key changed while awaiting replacement confirmation")
       }
-      document.fingerprints[key] = normalizedReplacement
-      return document
+      return appendAudit({
+        ...document,
+        fingerprints: { ...document.fingerprints, [key]: normalizedReplacement }
+      }, {
+        at: new Date().toISOString(),
+        action: "replaced",
+        host,
+        port,
+        fingerprint: normalizedReplacement,
+        previousFingerprint: normalizedExpected
+      })
     })
   }
 
@@ -70,7 +89,13 @@ export class JsonHostKeyStore implements HostKeyStore {
       }
       const fingerprints = { ...document.fingerprints }
       delete fingerprints[key]
-      return { fingerprints }
+      return appendAudit({ ...document, fingerprints }, {
+        at: new Date().toISOString(),
+        action: "removed",
+        host,
+        port,
+        fingerprint: normalizeFingerprint(stored)
+      })
     })
   }
 
@@ -81,6 +106,11 @@ export class JsonHostKeyStore implements HostKeyStore {
       if (!parsed) throw new Error("Stored Host Key is invalid")
       return { ...parsed, fingerprint }
     })
+  }
+
+  public async auditEntries(): Promise<HostKeyAuditRecord[]> {
+    const document = await this.store.read()
+    return document.history.map((entry) => ({ ...entry }))
   }
 
   public async health(options: { consumeHealth?: boolean } = {}): Promise<StorageHealth> {
@@ -102,7 +132,42 @@ export function normalizeHostKeyDocument(value: unknown): HostKeyDocument | unde
     if (normalized === undefined) return undefined
     fingerprints[key] = normalized
   }
-  return { fingerprints }
+  const history = value.history === undefined ? [] : normalizeAuditEntries(value.history)
+  if (history === undefined) return undefined
+  return { fingerprints, history }
+}
+
+function normalizeAuditEntries(value: unknown): HostKeyAuditRecord[] | undefined {
+  if (!Array.isArray(value) || value.length > maximumAuditEntries) return undefined
+  const history: HostKeyAuditRecord[] = []
+  for (const candidate of value) {
+    if (!isRecord(candidate) || typeof candidate.at !== "string" || !Number.isFinite(Date.parse(candidate.at))) return undefined
+    if (candidate.action !== "trusted" && candidate.action !== "replaced" && candidate.action !== "removed") return undefined
+    if (typeof candidate.host !== "string" || candidate.host.length === 0 || candidate.host.length > 512) return undefined
+    if (typeof candidate.port !== "number" || !Number.isInteger(candidate.port) || candidate.port < 1 || candidate.port > 65_535) return undefined
+    const fingerprint = normalizeStoredFingerprint(candidate.fingerprint)
+    if (fingerprint === undefined) return undefined
+    const previousFingerprint = candidate.previousFingerprint === undefined
+      ? undefined
+      : normalizeStoredFingerprint(candidate.previousFingerprint)
+    if (candidate.previousFingerprint !== undefined && previousFingerprint === undefined) return undefined
+    history.push({
+      at: candidate.at,
+      action: candidate.action,
+      host: candidate.host,
+      port: candidate.port,
+      fingerprint,
+      ...(previousFingerprint ? { previousFingerprint } : {})
+    })
+  }
+  return history
+}
+
+function appendAudit(document: HostKeyDocument, entry: HostKeyAuditRecord): HostKeyDocument {
+  const history = [...document.history, entry]
+  return history.length > maximumAuditEntries
+    ? { ...document, history: history.slice(history.length - maximumAuditEntries) }
+    : { ...document, history }
 }
 
 function parseHostKeyStorageKey(value: string): Pick<StoredHostKeyRecord, "host" | "port"> | undefined {

@@ -1,4 +1,4 @@
-import type { ConnectionHistoryItem, HostPlatform, HostProfile } from "../../app/types"
+import type { ConnectionHistoryItem, HostEnvironment, HostPlatform, HostProfile } from "../../app/types"
 
 export type HostIconPlatform = HostPlatform | "rocker"
 
@@ -58,6 +58,8 @@ export interface HostFilterOptions {
   query: string
   recentOnly?: boolean
   recentHostIds?: ReadonlySet<string>
+  environment?: HostEnvironment | "all"
+  tag?: string
 }
 
 export function recentHostIds(
@@ -82,10 +84,14 @@ export function recentHostIds(
 export function filterHosts(hosts: HostProfile[], options: HostFilterOptions): HostProfile[] {
   const normalizedGroup = options.group.trim().toLowerCase()
   const normalizedQuery = options.query.trim().toLowerCase()
+  const normalizedEnvironment = options.environment?.trim().toLowerCase()
+  const normalizedTag = options.tag?.trim().toLowerCase()
   return hosts.filter((host) => {
     const matchesGroup = normalizedGroup === "all" || host.group?.trim().toLowerCase() === normalizedGroup
     const matchesRecent = !options.recentOnly || options.recentHostIds?.has(host.id) === true
-    const searchable = `${host.name} ${host.host} ${host.username} ${host.group ?? ""}`.toLowerCase()
-    return matchesGroup && matchesRecent && (!normalizedQuery || searchable.includes(normalizedQuery))
+    const matchesEnvironment = !normalizedEnvironment || normalizedEnvironment === "all" || host.environment === normalizedEnvironment
+    const matchesTag = !normalizedTag || normalizedTag === "all" || host.tags?.some((tag) => tag.trim().toLowerCase() === normalizedTag) === true
+    const searchable = `${host.name} ${host.host} ${host.username} ${host.group ?? ""} ${host.environment ?? ""} ${(host.tags ?? []).join(" ")}`.toLowerCase()
+    return matchesGroup && matchesRecent && matchesEnvironment && matchesTag && (!normalizedQuery || searchable.includes(normalizedQuery))
   })
 }

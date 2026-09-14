@@ -16,6 +16,7 @@ import { createSafeStorageCipher } from "./storage/safe-storage"
 import { defaultSettings, SettingsStore } from "./storage/settings-store"
 import { SerializedOperationQueue } from "./storage/operation-queue"
 import type { AppSettings } from "./storage/types"
+import { productUserDataDirectory } from "./storage/user-data-directory"
 import { WorkspaceSnapshotStore } from "./storage/workspace-store"
 import { SshConnectionManager, type ConnectionEvent, type HostKeyPromptRequest } from "./ssh/connection-manager"
 import { createConnectionResolver } from "./ssh/connection-resolver"
@@ -40,6 +41,8 @@ interface ApplicationRuntime {
 let runtime: ApplicationRuntime | undefined
 let shutdown: Promise<void> | undefined
 let pendingFocus = false
+
+app.setName("Rocker")
 
 function createNativeWindow(options: WorkspaceWindowOptions = {}): BrowserWindow {
   const window = new BrowserWindow({
@@ -68,18 +71,20 @@ function createNativeWindow(options: WorkspaceWindowOptions = {}): BrowserWindow
 }
 
 async function startApplication(): Promise<void> {
-  const userDataPath = app.getPath("userData")
-  const diagnostics = new DiagnosticLogger(userDataPath)
+  const appDataPath = app.getPath("appData")
+  app.setPath("userData", productUserDataDirectory(appDataPath))
+  const resolvedUserDataPath = app.getPath("userData")
+  const diagnostics = new DiagnosticLogger(resolvedUserDataPath)
   const mutations = new SerializedOperationQueue()
-  const hosts = createHostStore(userDataPath)
+  const hosts = createHostStore(resolvedUserDataPath)
   const credentials = new CredentialVault(
-    new JsonCredentialValueStore(join(userDataPath, "credentials.json")),
+    new JsonCredentialValueStore(join(resolvedUserDataPath, "credentials.json")),
     createSafeStorageCipher(),
-    new JsonVaultStore(join(userDataPath, "vault.json"))
+    new JsonVaultStore(join(resolvedUserDataPath, "vault.json"))
   )
-  const settings = new SettingsStore(join(userDataPath, "settings.json"))
-  const hostKeys = new JsonHostKeyStore(join(userDataPath, "host-keys.json"))
-  const importJournal = new ConfigImportJournalStore(join(userDataPath, "config-import.json"))
+  const settings = new SettingsStore(join(resolvedUserDataPath, "settings.json"))
+  const hostKeys = new JsonHostKeyStore(join(resolvedUserDataPath, "host-keys.json"))
+  const importJournal = new ConfigImportJournalStore(join(resolvedUserDataPath, "config-import.json"))
   await importJournal.recover({
     listHosts: () => hosts.list(),
     saveHost: (profile) => hosts.save(profile),
@@ -92,7 +97,7 @@ async function startApplication(): Promise<void> {
   })
   const initialSettingsResult = await loadInitialSettings(settings)
   const initialSettings = initialSettingsResult.status === "blocked" ? defaultSettings : initialSettingsResult.value
-  const snapshots = new WorkspaceSnapshotStore(join(userDataPath, "workspace.json"))
+  const snapshots = new WorkspaceSnapshotStore(join(resolvedUserDataPath, "workspace.json"))
   const initialWorkspaceResult = await loadInitialWorkspace(snapshots)
   let windows: WorkspaceWindowManager
   const connections = new SshConnectionManager({
@@ -151,7 +156,7 @@ async function startApplication(): Promise<void> {
     connections,
     ports: new PortService(connections),
     forwarding,
-    history: new HistoryStore(join(userDataPath, "history.json")),
+    history: new HistoryStore(join(resolvedUserDataPath, "history.json")),
     settings,
     diagnostics,
     mutations,

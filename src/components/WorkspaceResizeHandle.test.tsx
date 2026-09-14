@@ -1,11 +1,14 @@
 import { fireEvent, render, screen } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { I18nProvider } from "../i18n"
 import { WorkspaceResizeHandle } from "./WorkspaceResizeHandle"
 
 describe("WorkspaceResizeHandle", () => {
+  afterEach(() => localStorage.clear())
+
   it("updates width from a captured pointer drag", () => {
     const onWidthChange = vi.fn()
-    render(<WorkspaceResizeHandle width={220} onWidthChange={onWidthChange} />)
+    render(<I18nProvider><WorkspaceResizeHandle width={220} onWidthChange={onWidthChange} /></I18nProvider>)
     const handle = screen.getByRole("separator", { name: "Resize sidebar" })
 
     fireEvent.pointerDown(handle, { clientX: 400, pointerId: 7 })
@@ -17,7 +20,7 @@ describe("WorkspaceResizeHandle", () => {
 
   it("uses accessible separator values and keyboard snap steps", () => {
     const onWidthChange = vi.fn()
-    const { rerender } = render(<WorkspaceResizeHandle width={220} onWidthChange={onWidthChange} />)
+    const { rerender } = render(<I18nProvider><WorkspaceResizeHandle width={220} onWidthChange={onWidthChange} /></I18nProvider>)
     const handle = screen.getByRole("separator", { name: "Resize sidebar" })
 
     expect(handle).toHaveAttribute("aria-orientation", "vertical")
@@ -28,12 +31,19 @@ describe("WorkspaceResizeHandle", () => {
     fireEvent.keyDown(handle, { key: "ArrowLeft" })
     expect(onWidthChange).toHaveBeenLastCalledWith(208)
 
-    rerender(<WorkspaceResizeHandle width={180} onWidthChange={onWidthChange} />)
+    rerender(<I18nProvider><WorkspaceResizeHandle width={180} onWidthChange={onWidthChange} /></I18nProvider>)
     fireEvent.keyDown(screen.getByRole("separator", { name: "Resize sidebar" }), { key: "ArrowLeft" })
     expect(onWidthChange).toHaveBeenLastCalledWith(58)
 
-    rerender(<WorkspaceResizeHandle width={58} onWidthChange={onWidthChange} />)
+    rerender(<I18nProvider><WorkspaceResizeHandle width={58} onWidthChange={onWidthChange} /></I18nProvider>)
     fireEvent.keyDown(screen.getByRole("separator", { name: "Resize sidebar" }), { key: "ArrowRight" })
     expect(onWidthChange).toHaveBeenLastCalledWith(180)
+  })
+
+  it("localizes the resize separator name", () => {
+    localStorage.setItem("rocker.locale", "zh-CN")
+    render(<I18nProvider><WorkspaceResizeHandle width={220} onWidthChange={vi.fn()} /></I18nProvider>)
+
+    expect(screen.getByRole("separator", { name: "调整侧边栏宽度" })).toBeInTheDocument()
   })
 })

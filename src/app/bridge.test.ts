@@ -87,6 +87,8 @@ describe("browser preview bridge", () => {
       identityFile: "/private/user-data/.ssh/id_ed25519",
       snippetsEnabled: true,
       snippetCollection: "Release",
+      environment: "production",
+      tags: ["core", "linux"],
       favorite: true,
       notes: "preview"
     }
@@ -100,7 +102,9 @@ describe("browser preview bridge", () => {
         name: "Preview duplicate copy",
         authMethod: "agent",
         favorite: false,
-        snippetsEnabled: false
+        snippetsEnabled: false,
+        environment: "production",
+        tags: ["core", "linux"]
       })
       expect(duplicate).not.toHaveProperty("identityFile")
       expect(duplicate).not.toHaveProperty("snippetCollection")
@@ -110,6 +114,13 @@ describe("browser preview bridge", () => {
       await bridge.hosts.remove(profile.id)
       if (duplicate) await bridge.hosts.remove(duplicate.id)
     }
+  })
+
+  it("returns a safe deterministic connection-test result in browser preview", async () => {
+    setPreviewWindowBridge(undefined)
+    const bridge = getRockerBridge()
+
+    await expect(bridge.hosts.testConnection("demo-g11")).resolves.toEqual({ status: "reachable", latencyMs: 24 })
   })
 })
 

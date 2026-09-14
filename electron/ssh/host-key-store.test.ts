@@ -77,4 +77,32 @@ describe("JsonHostKeyStore", () => {
     await expect(store.remove("host.example", 22, "trusted-fingerprint")).resolves.toBeUndefined()
     await expect(store.get("host.example", 22)).resolves.toBeUndefined()
   })
+
+  it("records trust, replacement, and removal audit entries without storing raw key material", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-host-key-store-"))
+    temporaryPaths.push(directory)
+    const store = new JsonHostKeyStore(join(directory, "host-keys.json"))
+
+    await store.trust("host.example", 22, "old-fingerprint")
+    await store.replace("host.example", 22, "old-fingerprint", "new-fingerprint")
+    await store.remove("host.example", 22, "new-fingerprint")
+
+    await expect(store.auditEntries()).resolves.toEqual([
+      expect.objectContaining({ action: "trusted", host: "host.example", port: 22, fingerprint: "old-fingerprint" }),
+      expect.objectContaining({ action: "replaced", host: "host.example", port: 22, fingerprint: "new-fingerprint", previousFingerprint: "old-fingerprint" }),
+      expect.objectContaining({ action: "removed", host: "host.example", port: 22, fingerprint: "new-fingerprint" })
+    ])
+    const serialized = await import("node:fs/promises").then(({ readFile }) => readFile(join(directory, "host-keys.json"), "utf8"))
+    expect(serialized).not.toContain("private-key")
+  })
+
+  it("returns an empty audit history for a legacy fingerprint document", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-host-key-store-"))
+    temporaryPaths.push(directory)
+    const filePath = join(directory, "host-keys.json")
+    await writeFile(filePath, JSON.stringify({ fingerprints: { "host.example:22": "legacy-fingerprint" } }), "utf8")
+    const store = new JsonHostKeyStore(filePath)
+
+    await expect(store.auditEntries()).resolves.toEqual([])
+  })
 })
