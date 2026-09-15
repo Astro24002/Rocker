@@ -229,8 +229,10 @@ textarea:focus-visible {
 }
 
 .session-section {
+  display: flex;
   min-height: 0;
   flex: 1;
+  flex-direction: column;
   padding: 16px 12px;
 }
 
@@ -278,8 +280,11 @@ textarea:focus-visible {
 
 .sidebar-session-list {
   display: flex;
+  min-height: 0;
+  flex: 1;
   flex-direction: column;
   gap: 4px;
+  overflow-y: auto;
   margin-top: 11px;
 }
 

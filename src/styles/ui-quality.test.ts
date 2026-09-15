@@ -18,6 +18,13 @@ describe("UI quality stylesheet contract", () => {
     expect(layoutStyles).toMatch(/\.workspace-stage\s*>\s*\[hidden\]\s*\{[\s\S]*?display:\s*none\s*!important;/)
   })
 
+  it("keeps workspace management views and sessions vertically scrollable", () => {
+    expect(layoutStyles).toMatch(/\.ports-content,\s*\.settings-list\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1;[\s\S]*?overflow-y:\s*auto;/)
+    expect(layoutStyles).toMatch(/\.host-content,\s*\.history-content,\s*\.trust-content\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1;[\s\S]*?overflow-y:\s*auto;/)
+    expect(componentStyles).toMatch(/\.session-section\s*\{[\s\S]*?display:\s*flex;[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1;[\s\S]*?flex-direction:\s*column;/)
+    expect(componentStyles).toMatch(/\.sidebar-session-list\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1;[\s\S]*?overflow-y:\s*auto;/)
+  })
+
   it("defines reduced-motion behavior for transitions and refresh indicators", () => {
     expect(componentStyles).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?transition-duration:\s*0\.01ms/)
     expect(componentStyles).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.is-spinning[\s\S]*?animation:\s*none/)
