@@ -50,6 +50,29 @@ describe("SshConnectionManager", () => {
     expect(otherWindow.connectionId).not.toBe(first.connectionId)
   })
 
+  it("shares a Host transport between terminal and forwarding leases", async () => {
+    const { clients, manager, request } = createConnectionHarness({})
+    const terminal = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
+    const forwarding = await manager.acquire({ ...request, owner: owner11, kind: "forward" })
+
+    expect(forwarding.connectionId).toBe(terminal.connectionId)
+    expect(forwarding.kind).toBe("forward")
+    expect(clients).toHaveLength(1)
+
+    await manager.release(forwarding.id)
+    await manager.release(terminal.id)
+  })
+
+  it("acquires a forwarding lease when no terminal Session exists", async () => {
+    const { clients, manager, request } = createConnectionHarness({})
+
+    const forwarding = await manager.acquire({ ...request, owner: owner11, kind: "forward" })
+
+    expect(forwarding.kind).toBe("forward")
+    expect(clients).toHaveLength(1)
+    await manager.release(forwarding.id)
+  })
+
   it("reports the owner only while a connection record remains active", async () => {
     const { manager, request } = createConnectionHarness({})
     const lease = await manager.acquire({ ...request, owner: owner11, kind: "terminal" })
