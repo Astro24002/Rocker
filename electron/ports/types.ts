@@ -24,6 +24,8 @@ export interface ForwardingSpec {
 export interface ForwardingInfo extends ForwardingSpec {
   id: string
   connectionId: string
+  hostId?: string
+  profileId?: string
   status: PortStatus
   error?: string
 }
