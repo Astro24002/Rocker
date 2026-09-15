@@ -311,7 +311,7 @@ export class WorkspaceWindowManager {
     const loadWithStatus = this.options.snapshots.loadWithStatus
     if (loadWithStatus) {
       try {
-        return await loadWithStatus(options)
+        return await loadWithStatus.call(this.options.snapshots, options)
       } catch (error) {
         return { status: "blocked", issue: safeStorageIssue(error) }
       }

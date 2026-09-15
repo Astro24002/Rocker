@@ -1,4 +1,7 @@
-import { describe, expect, it, vi, type Mock } from "vitest"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest"
 import {
   WorkspaceWindowManager,
   type WorkspaceWindow,
@@ -7,9 +10,15 @@ import {
 import type { RuntimeOwner } from "../runtime/owner"
 import type { LoadResult } from "../storage/storage-result"
 import type { StoredWorkspaceDocument, StoredWorkspaceWindow } from "../storage/types"
+import { WorkspaceSnapshotStore } from "../storage/workspace-store"
 
 const firstWorkspace = "11111111-1111-4111-8111-111111111111"
 const secondWorkspace = "22222222-2222-4222-8222-222222222222"
+const temporaryDirectories: string[] = []
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
+})
 
 type IsExactRuntimeOwner<T> = T extends RuntimeOwner
   ? RuntimeOwner extends T ? true : false
@@ -324,6 +333,25 @@ describe("WorkspaceWindowManager", () => {
 
     expect(firstResult.value).toEqual(first)
     expect(secondResult.value).toEqual(second)
+  })
+
+  it("loads a missing workspace through the real snapshot store instance", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-workspace-window-manager-"))
+    temporaryDirectories.push(directory)
+    const snapshots = new WorkspaceSnapshotStore(join(directory, "workspace.json"), 0)
+    const windows = createWindowFactory()
+    const manager = new WorkspaceWindowManager({ snapshots, createWindow: windows.create })
+    const window = manager.createNew() as FakeWindow
+    window.webContents.emit("did-finish-load")
+    const owner = manager.currentOwnerForWebContents(window.webContents.id)
+    expect(owner).toBeDefined()
+
+    const result = await manager.loadWorkspaceWithStatus(owner!)
+
+    expect(result).toEqual({
+      health: { store: "workspace", status: "defaulted", reason: "missing" },
+      value: undefined
+    })
   })
 
   it("returns no workspace data when its owner is replaced during load", async () => {
