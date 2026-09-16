@@ -35,6 +35,8 @@ import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import { HostStore } from "../storage/host-store"
 import type { HostProfile } from "../storage/types"
 import type { AppSettings } from "../storage/types"
+import type { ForwardingProfile } from "../storage/types"
+import type { ForwardingInfo } from "../ports/types"
 
 const sessionId = "11111111-1111-4111-8111-111111111111"
 const connectionId = "22222222-2222-4222-8222-222222222222"
@@ -268,6 +270,107 @@ describe("registerIpcHandlers", () => {
 
     await expect(invokeFrom(22, ipcChannels.portsScan, connectionId)).rejects.toThrow("SSH connection is owned by another window")
     expect(harness.ports.scan).not.toHaveBeenCalled()
+  })
+
+  it("lists saved forwarding profiles globally, including stopped runtimes", async () => {
+    const harness = createHarness()
+    const profile = testForwardingProfile()
+    harness.forwardingProfiles.list.mockResolvedValue([profile])
+    harness.forwarding.list.mockReturnValue([{
+      id: "forwarding-runtime",
+      profileId: profile.id,
+      hostId: profile.hostId,
+      connectionId,
+      localAddress: profile.localAddress,
+      localPort: profile.localPort,
+      remoteAddress: profile.remoteAddress,
+      remotePort: profile.remotePort,
+      status: "stopped"
+    }])
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.portsListOverview)).resolves.toEqual([{ profile, runtime: expect.objectContaining({ status: "stopped" }) }])
+  })
+
+  it("creates a Host-bound profile without starting a runtime", async () => {
+    const harness = createHarness()
+    const profile = testForwardingProfile()
+    harness.hosts.list.mockResolvedValue([{ id: profile.hostId, name: "Host A", host: "server.example", port: 22, username: "root", authMethod: "agent", favorite: false, notes: "" }])
+    harness.forwardingProfiles.save.mockResolvedValue(undefined)
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.portsCreateProfile, profile.hostId, {
+      name: profile.name,
+      description: profile.description,
+      localAddress: profile.localAddress,
+      localPort: profile.localPort,
+      remoteAddress: profile.remoteAddress,
+      remotePort: profile.remotePort,
+      autoStart: profile.autoStart
+    })).resolves.toMatchObject({ hostId: profile.hostId, name: profile.name })
+    expect(harness.forwardingProfiles.save).toHaveBeenCalledOnce()
+    expect(harness.forwarding.startProfile).not.toHaveBeenCalled()
+  })
+
+  it("stops and removes Host forwarding resources before deleting the Host", async () => {
+    const harness = createHarness()
+    const profile = testForwardingProfile()
+    const runtime: ForwardingInfo = {
+      id: "runtime-1",
+      profileId: profile.id,
+      hostId: profile.hostId,
+      connectionId,
+      localAddress: profile.localAddress,
+      localPort: profile.localPort,
+      remoteAddress: profile.remoteAddress,
+      remotePort: profile.remotePort,
+      status: "forwarding"
+    }
+    harness.hosts.list.mockResolvedValue([{ id: profile.hostId, name: "Host A", host: "server.example", port: 22, username: "root", authMethod: "agent", favorite: false, notes: "" }])
+    harness.forwardingProfiles.list.mockResolvedValue([profile])
+    harness.forwarding.list.mockReturnValue([runtime])
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostsRemove, profile.hostId)).resolves.toBeUndefined()
+    expect(harness.forwarding.stop).toHaveBeenCalledWith(runtime.id)
+    expect(harness.forwardingProfiles.remove).toHaveBeenCalledWith(profile.id)
+    expect(harness.hosts.remove).toHaveBeenCalledWith(profile.hostId)
+  })
+
+  it("starts a saved profile through Host acquisition without a terminal", async () => {
+    const harness = createHarness()
+    const profile = testForwardingProfile()
+    harness.hosts.list.mockResolvedValue([{ id: profile.hostId, name: "Host A", host: "server.example", port: 22, username: "root", authMethod: "agent", favorite: false, notes: "" }])
+    harness.forwardingProfiles.get.mockResolvedValue(profile)
+    harness.forwarding.startProfile.mockResolvedValue({
+      id: "runtime-1",
+      profileId: profile.id,
+      hostId: profile.hostId,
+      connectionId,
+      localAddress: profile.localAddress,
+      localPort: profile.localPort,
+      remoteAddress: profile.remoteAddress,
+      remotePort: profile.remotePort,
+      status: "forwarding"
+    })
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.portsStartProfile, profile.id)).resolves.toMatchObject({ profileId: profile.id })
+    expect(harness.forwarding.startProfile).toHaveBeenCalledWith(profile, owner21)
+  })
+
+  it("delivers forwarding events only to the owning window", () => {
+    const harness = createHarness()
+    let emitForwarding: ((event: unknown) => void) | undefined
+    harness.dependencies.forwarding.onEvent = vi.fn((listener: (event: unknown) => void) => {
+      emitForwarding = listener
+      return vi.fn()
+    })
+    registerIpcHandlers(harness.dependencies)
+
+    emitForwarding?.({ kind: "stopped", forwardingId: "runtime-1", connectionId, owner: owner21, profileId: "profile-1", hostId: "host-a" })
+    expect(harness.owner.webContents.send).toHaveBeenCalledWith(ipcChannels.portsEvent, expect.objectContaining({ profileId: "profile-1" }))
+    expect(harness.other.webContents.send).not.toHaveBeenCalled()
   })
 
   it("applies updated reconnect settings to the connection manager", async () => {
@@ -888,6 +991,14 @@ function createHarness() {
   const configuration = { preview: vi.fn(), import: vi.fn() }
   const createConfigurationExportSnapshot = vi.fn()
   const hosts = { list: vi.fn(), save: vi.fn(), saveRedacted: vi.fn(), duplicate: vi.fn(), setFavorite: vi.fn(), remove: vi.fn(), importOpenSSHConfig: vi.fn(), loadWithStatus: vi.fn() }
+  const forwardingProfiles = {
+    list: vi.fn(async (_hostId?: string) => [] as ForwardingProfile[]),
+    get: vi.fn(async (_id: string) => undefined as ForwardingProfile | undefined),
+    save: vi.fn(),
+    remove: vi.fn(),
+    replace: vi.fn(),
+    flush: vi.fn()
+  }
   const currentOwnerForWebContents = vi.fn((id: number) => id === owner21.webContentsId ? owner21 : id === owner22.webContentsId ? owner22 : undefined)
   const windowForWebContents = vi.fn((id: number) => id === 21 ? owner : id === 22 ? other : undefined)
   const sendToOwner = vi.fn((targetOwner: RuntimeOwner, channel: string, ...args: unknown[]): boolean => {
@@ -907,6 +1018,7 @@ function createHarness() {
     loadWorkspace: vi.fn(),
     loadWorkspaceWithStatus: vi.fn()
   }
+  const forwarding = { start: vi.fn(), stop: vi.fn(), list: vi.fn(() => [] as ForwardingInfo[]), get: vi.fn(), resume: vi.fn(), ownerForForwarding: vi.fn(), releaseOwner: vi.fn(), onEvent: vi.fn(() => vi.fn()), startProfile: vi.fn() }
   const dependencies = {
     hosts,
     credentials,
@@ -914,7 +1026,8 @@ function createHarness() {
     sessions,
     connections,
     ports: { scan: vi.fn() },
-    forwarding: { start: vi.fn(), stop: vi.fn(), list: vi.fn(), get: vi.fn(), resume: vi.fn(), ownerForForwarding: vi.fn(), releaseOwner: vi.fn() },
+    forwarding,
+    forwardingProfiles,
     history,
     settings,
     diagnostics,
@@ -931,6 +1044,8 @@ function createHarness() {
   return {
     dependencies,
     hosts,
+    forwardingProfiles,
+    forwarding,
     windows,
     owner,
     other,
@@ -987,6 +1102,22 @@ function settingsSnapshot(): AppSettings {
     restorePreviousWorkspace: true,
     confirmMultilinePaste: true,
     bindAddress: "127.0.0.1"
+  }
+}
+
+function testForwardingProfile(): ForwardingProfile {
+  return {
+    id: "profile-1",
+    hostId: "host-a",
+    name: "Web console",
+    description: "Console",
+    localAddress: "127.0.0.1",
+    localPort: 18080,
+    remoteAddress: "127.0.0.1",
+    remotePort: 8080,
+    autoStart: false,
+    createdAt: "2026-09-08T00:00:00.000Z",
+    updatedAt: "2026-09-08T00:00:00.000Z"
   }
 }
 

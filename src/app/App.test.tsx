@@ -258,6 +258,37 @@ describe("desktop workspace shell", () => {
     expect(surface.focus).toHaveBeenCalledTimes(1)
   })
 
+  it("routes the session context forwarding action to the Host-local destination", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Port forwarding" }))
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Host forwarding" })).toBeInTheDocument())
+    expect(document.querySelector(".ports-host-view[data-mode='host']")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Port Forwarding" }))
+    await waitFor(() => expect(document.querySelector(".ports-overview-view[data-mode='global']")).toBeInTheDocument())
+  })
+
+  it("returns to the global overview when the last Host session closes", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Port forwarding" }))
+    await waitFor(() => expect(document.querySelector(".ports-host-view[data-mode='host']")).toBeInTheDocument())
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Close" }))
+
+    await waitFor(() => expect(document.querySelector(".ports-overview-view[data-mode='global']")).toBeInTheDocument())
+    expect(document.querySelector(".ports-host-view[data-mode='host']")).not.toBeInTheDocument()
+  })
+
   it.each([
     ["hosts", "Hosts"],
     ["history", "History"],

@@ -127,6 +127,7 @@ function Workspace() {
   const translation = useRef(t)
   translation.current = t
   const [activeNav, setActiveNav] = useState<WorkspaceNavKey>("hosts")
+  const [hostForwardingHostId, setHostForwardingHostId] = useState<string>()
   const [hosts, setHosts] = useState<HostProfile[]>([])
   const [history, setHistory] = useState<ConnectionHistoryItem[]>([])
   const [hostKeyInventory, setHostKeyInventory] = useState<HostKeyInventorySnapshot>({ entries: [], history: [] })
@@ -756,6 +757,30 @@ function Workspace() {
     setActiveNav("terminal")
   }, [])
 
+  const navigateWorkspace = useCallback((destination: WorkspaceNavKey): void => {
+    // Sidebar and navigation commands always target the global workspace view.
+    setHostForwardingHostId(undefined)
+    setActiveNav(destination)
+  }, [])
+
+  const openHostForwarding = useCallback((session: WorkspaceSession): void => {
+    if (!workspaceRef.current.sessions.some((candidate) => candidate.id === session.id)) return
+    setWorkspace((current) => activateSession(current, session.id))
+    setRecentSessionState((current) => recordSessionFocus(current, session.id))
+    setHostForwardingHostId(session.hostId)
+    setActiveNav("ports")
+  }, [])
+
+  const openHostWorkspace = useCallback((hostId: string): void => {
+    const session = workspaceRef.current.sessions.find((candidate) => candidate.hostId === hostId)
+    if (!session) {
+      setHostForwardingHostId(undefined)
+      setActiveNav("hosts")
+      return
+    }
+    openHostForwarding(session)
+  }, [openHostForwarding])
+
   const openSearchForSession = useCallback((sessionOrId: WorkspaceSession | string): void => {
     const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId.id
     if (!workspaceRef.current.sessions.some((session) => session.id === sessionId)) return
@@ -803,7 +828,16 @@ function Workspace() {
     setRecentSessionState((current) => removeRecentSession(current, session.id))
     void bridge.sessions.close(session.id).catch(() => undefined)
     setWorkspace((current) => closeSession(current, session.id))
-    if (workspace.sessions.length <= 1) setActiveNav("hosts")
+    const anotherSessionForHost = workspace.sessions.some((candidate) => candidate.id !== session.id && candidate.hostId === session.hostId)
+    const leavingHostForwarding = hostForwardingHostId === session.hostId && !anotherSessionForHost
+    if (leavingHostForwarding) {
+      setHostForwardingHostId(undefined)
+      setActiveNav("ports")
+    }
+    if (workspace.sessions.length <= 1) {
+      setHostForwardingHostId(undefined)
+      setActiveNav(leavingHostForwarding ? "ports" : "hosts")
+    }
   }
 
   const focusCurrentTerminal = useCallback((): boolean => {
@@ -900,10 +934,11 @@ function Workspace() {
       duplicate: (session) => duplicateSession(session),
       duplicateWindow: (session) => capabilities.sshAvailable ? bridge.sessions.duplicateInNewWindow(session.hostId) : undefined,
       splitHorizontal: (session) => duplicateSession(session, false, true),
-      close: closeTerminalSession
+      close: closeTerminalSession,
+      portForwarding: openHostForwarding
     },
     navigation: {
-      navigate: (destination) => setActiveNav(destination)
+      navigate: (destination) => navigateWorkspace(destination)
     },
     palette: { open: openCommandPalette }
   }
@@ -1066,6 +1101,7 @@ function Workspace() {
     if (!capabilities.hostMutationsAvailable) throw new Error("Host mutations are unavailable")
     await bridge.hosts.remove(host.id)
     setHosts((current) => current.filter((candidate) => candidate.id !== host.id))
+    if (hostForwardingHostId === host.id) setHostForwardingHostId(undefined)
   }
 
   const removeHostKey = async (entry: HostKeyInventoryEntry): Promise<void> => {
@@ -1102,7 +1138,7 @@ function Workspace() {
         activeSessionId={workspace.activeSessionId}
         commandPaletteOpen={paletteOpen}
         contextMenuOwner={contextMenuOwner}
-        onNavigate={setActiveNav}
+        onNavigate={navigateWorkspace}
         onSessionActivate={activateExistingSession}
         onSessionCommand={invokeSessionCommand}
         onContextMenuOwnerChange={handleContextMenuOwnerChange}
@@ -1171,7 +1207,16 @@ function Workspace() {
               void bridge.history.clear().then(() => setHistory([])).catch(() => undefined)
             }} />
           ) : activeNav === "ports" ? (
-            <PortsView bridge={bridge} connectionId={activeConnectionId} session={activeSession} username={activeHost?.username} bindAddress={settings.bindAddress} />
+            hostForwardingHostId ? (
+              (() => {
+                const hostSession = workspace.sessions.find((candidate) => candidate.hostId === hostForwardingHostId)
+                const hostConnectionId = hostSession && canUseConnection(hostSession.state) ? connectionIds.current.get(hostSession.id) : undefined
+                const host = hosts.find((candidate) => candidate.id === hostForwardingHostId)
+                return <PortsView mode="host" bridge={bridge} hostId={hostForwardingHostId} connectionId={hostConnectionId} session={hostSession} username={host?.username} bindAddress={settings.bindAddress} />
+              })()
+            ) : (
+              <PortsView mode="global" bridge={bridge} hosts={hosts} onOpenHost={openHostWorkspace} />
+            )
           ) : (
             <ComingSoonView feature={activeNav} />
           )}

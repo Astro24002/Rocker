@@ -4,9 +4,10 @@ import type {
   HostProfile,
   StoredTerminalLayout,
   StoredWorkspaceSession,
-  StoredWorkspaceWindow
+  StoredWorkspaceWindow,
+  ForwardingProfile
 } from "../storage/types"
-import type { DiscoveredPort, ForwardingInfo, ForwardingSpec } from "../ports/types"
+import type { DiscoveredPort, ForwardingInfo, ForwardingProfileRequest, ForwardingProfileView, ForwardingSpec } from "../ports/types"
 import type { ConnectionTestResult, TerminalSessionEvent, TerminalSessionInfo } from "../ssh/types"
 import type { StorageHealth } from "../storage/storage-result"
 import type { ConflictResolution, ImportPreview, ImportResult } from "../storage/config-bundle"
@@ -78,6 +79,17 @@ export interface WorkspaceSaveRequest {
   layout?: StoredTerminalLayout
 }
 
+export type { ForwardingProfileRequest }
+
+export interface ForwardingRuntimeEvent {
+  kind: "started" | "resumed" | "suspended" | "stopped" | "error"
+  forwardingId?: string
+  hostId?: string
+  profileId?: string
+  status?: ForwardingInfo["status"]
+  reason?: string
+}
+
 export interface SessionLaunchRequest {
   hostId: string
 }
@@ -139,6 +151,12 @@ export interface RockerBridge {
     resume(forwardingId: string): Promise<ForwardingInfo>
     stop(forwardingId: string): Promise<void>
     list(): Promise<ForwardingInfo[]>
+    listOverview(): Promise<ForwardingProfileView[]>
+    listForHost(hostId: string): Promise<ForwardingProfileView[]>
+    createProfile(hostId: string, request: ForwardingProfileRequest): Promise<ForwardingProfile>
+    updateProfile(profileId: string, request: ForwardingProfileRequest): Promise<ForwardingProfile>
+    removeProfile(profileId: string): Promise<void>
+    startProfile(profileId: string): Promise<ForwardingInfo>
     openAddress(forwardingId: string): Promise<void>
   }
   workspace: {
@@ -181,6 +199,7 @@ export interface RockerBridge {
   events: {
     onSessionEvent(listener: (event: TerminalSessionEvent) => void): () => void
     onSessionLaunch(listener: (request: SessionLaunchRequest) => void): () => void
+    onForwardingEvent(listener: (event: ForwardingRuntimeEvent) => void): () => void
   }
 }
 
@@ -209,6 +228,13 @@ export const ipcChannels = {
   portsStop: "rocker:ports:stop",
   portsList: "rocker:ports:list",
   portsOpenAddress: "rocker:ports:open-address",
+  portsListOverview: "rocker:ports:list-overview",
+  portsListForHost: "rocker:ports:list-for-host",
+  portsCreateProfile: "rocker:ports:create-profile",
+  portsUpdateProfile: "rocker:ports:update-profile",
+  portsRemoveProfile: "rocker:ports:remove-profile",
+  portsStartProfile: "rocker:ports:start-profile",
+  portsEvent: "rocker:ports:event",
   workspaceLoad: "rocker:workspace:load",
   workspaceSave: "rocker:workspace:save",
   bootstrapLoad: "rocker:bootstrap:load",

@@ -1,7 +1,10 @@
-import { Clipboard, ExternalLink, Play, RefreshCw, Square } from "lucide-react"
+import { AlertTriangle, Clipboard, ExternalLink, Pencil, Play, Plus, RefreshCw, Server, Square, Trash2, X } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
-import type { AppSettings, DiscoveredPort, ForwardingInfo, PortStatus } from "../../app/types"
+import type { ForwardingProfileRequest, ForwardingProfileView } from "../../../electron/ports/types"
+import type { ForwardingProfile } from "../../../electron/storage/types"
+import type { AppSettings, DiscoveredPort, ForwardingInfo, HostProfile, PortStatus } from "../../app/types"
+import type { TranslationKey } from "../../i18n/en"
 import { IconButton } from "../../components/IconButton"
 import { useI18n } from "../../i18n"
 import type { WorkspaceSession } from "../terminal/session-state"
@@ -9,13 +12,23 @@ import { applyDiscoveredPorts, applyForwarding, createPortState, setPortError, s
 
 interface PortsViewProps {
   bridge: RockerBridge
+  mode?: "global" | "host"
+  hostId?: string
   connectionId?: string
   session?: WorkspaceSession
   username?: string
   bindAddress?: AppSettings["bindAddress"]
+  hosts?: readonly HostProfile[]
+  onOpenHost?(hostId: string): void
 }
 
-export function PortsView({ bridge, connectionId, session, username, bindAddress = "127.0.0.1" }: PortsViewProps) {
+export function PortsView(props: PortsViewProps) {
+  if (props.mode === "global") return <GlobalPortsView {...props} />
+  if (props.mode === "host") return <HostPortsView {...props} />
+  return <LegacyPortsView {...props} />
+}
+
+function LegacyPortsView({ bridge, connectionId, session, username, bindAddress = "127.0.0.1" }: PortsViewProps) {
   const { t } = useI18n()
   const [state, setState] = useState(createPortState)
   const [localPorts, setLocalPorts] = useState<Record<string, number>>({})
@@ -153,6 +166,393 @@ export function PortsView({ bridge, connectionId, session, username, bindAddress
   )
 }
 
+function GlobalPortsView({ bridge, hosts, onOpenHost }: PortsViewProps) {
+  const { t } = useI18n()
+  const [rows, setRows] = useState<ForwardingProfileView[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string>()
+
+  const refresh = async (): Promise<void> => {
+    setLoading(true)
+    try {
+      if (bridge.ports.listOverview) setRows(await bridge.ports.listOverview())
+      else setRows((await bridge.ports.list()).map((runtime) => ({
+        profile: runtimeToFallbackProfile(runtime),
+        runtime
+      })))
+      setError(undefined)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void refresh()
+    const unsubscribe = bridge.events?.onForwardingEvent?.(() => { void refresh() })
+    return () => unsubscribe?.()
+  }, [bridge])
+
+  const restart = async (profile: ForwardingProfile): Promise<void> => {
+    try {
+      const runtime = await bridge.ports.startProfile(profile.id)
+      setRows((current) => current.map((row) => row.profile.id === profile.id ? { ...row, runtime } : row))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  const stop = async (runtime: ForwardingInfo): Promise<void> => {
+    try {
+      await bridge.ports.stop(runtime.id)
+      setRows((current) => current.map((row) => row.runtime?.id === runtime.id ? { ...row, runtime: { ...runtime, status: "stopped" } } : row))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  const removeStaleProfile = async (profile: ForwardingProfile): Promise<void> => {
+    try {
+      await bridge.ports.removeProfile(profile.id)
+      setRows((current) => current.filter((row) => row.profile.id !== profile.id))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  return (
+    <section className="ports-view ports-overview-view" data-mode="global">
+      <header className="view-header">
+        <div>
+          <span className="view-eyebrow">Rocker / {t("nav.portForwarding")}</span>
+          <h1>{t("ports.title")}</h1>
+          <p>{t("ports.globalSubtitle")}</p>
+        </div>
+        <button className="secondary-command" type="button" onClick={() => void refresh()} disabled={loading}>
+          <RefreshCw size={15} className={loading ? "is-spinning" : ""} />{t("ports.refreshOverview")}
+        </button>
+      </header>
+      <div className="ports-content">
+        {error && <div className="inline-error">{error}</div>}
+        {rows.length > 0 ? (
+          <div className="ports-table ports-overview-table">
+            <div className="ports-heading"><span>{t("ports.host")}</span><span>{t("ports.route")}</span><span>{t("ports.status")}</span><span>{t("ports.connection")}</span><span /></div>
+            {rows.map(({ profile, runtime }) => {
+              const status = runtime?.status ?? "stopped"
+              const active = status === "forwarding" || status === "starting" || status === "stopping"
+              const host = hosts?.find((candidate) => candidate.id === profile.hostId)
+              const hostAvailable = hosts === undefined || host !== undefined
+              return (
+                <div className="port-row ports-overview-row" key={profile.id}>
+                  <div className="port-host-cell"><Server size={15} /><div><strong>{host?.name ?? (hostAvailable ? profile.hostId : t("ports.hostUnavailable"))}</strong><small>{profile.name}</small><small>{host ? `${host.username}@${host.host}:${host.port}` : profile.hostId}</small></div></div>
+                  <code>{formatAddress(profile.localAddress, profile.localPort)} <span className="route-arrow">-&gt;</span> {profile.remoteAddress}:{profile.remotePort}</code>
+                  <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
+                  <span className="port-connection-summary">{connectionSummary(status, t)}</span>
+                  <div className="port-actions">
+                    {active && runtime ? <>
+                      {status === "forwarding" && <IconButton label={t("ports.openAddress")} onClick={() => void bridge.ports.openAddress(runtime.id)}><ExternalLink size={14} /></IconButton>}
+                      <IconButton label={t("ports.stopForwarding")} onClick={() => void stop(runtime)}><Square size={13} /></IconButton>
+                    </> : <button className="secondary-command compact-command" type="button" onClick={() => void restart(profile)}>
+                      <Play size={14} />{status === "suspended" ? t("ports.resumeForwarding") : t("ports.startForwarding")}
+                    </button>}
+                    {hostAvailable && onOpenHost && <IconButton label={t("ports.openHost")} onClick={() => onOpenHost(profile.hostId)}><ExternalLink size={14} /></IconButton>}
+                    {!hostAvailable && <IconButton label={t("ports.removeProfile")} onClick={() => void removeStaleProfile(profile)}><Trash2 size={14} /></IconButton>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : !loading ? (
+          <div className="port-empty"><strong>{t("ports.globalEmptyTitle")}</strong><span>{t("ports.globalEmptyBody")}</span></div>
+        ) : <div className="port-empty"><strong>{t("ports.loading")}</strong></div>}
+      </div>
+    </section>
+  )
+}
+
+interface HostForwardingFormState {
+  name: string
+  description: string
+  localAddress: "127.0.0.1" | "::1" | "0.0.0.0"
+  localPort: string
+  remoteAddress: string
+  remotePort: string
+  autoStart: boolean
+}
+
+function HostPortsView({ bridge, hostId, connectionId, session, username, bindAddress = "127.0.0.1" }: PortsViewProps) {
+  const { t } = useI18n()
+  const canCreateProfile = Boolean(hostId && session)
+  const [rows, setRows] = useState<ForwardingProfileView[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string>()
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editing, setEditing] = useState<ForwardingProfile>()
+  const [form, setForm] = useState<HostForwardingFormState>(() => emptyForwardingForm(bindAddress))
+  const [saving, setSaving] = useState(false)
+  const [discoveredPorts, setDiscoveredPorts] = useState<DiscoveredPort[]>([])
+  const [scanning, setScanning] = useState(false)
+
+  const refresh = async (): Promise<void> => {
+    if (!hostId) {
+      setRows([])
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    try {
+      if (bridge.ports.listForHost) setRows(await bridge.ports.listForHost(hostId))
+      else setRows((await bridge.ports.list()).filter((runtime) => runtime.hostId === hostId).map((runtime) => ({ profile: runtimeToFallbackProfile(runtime), runtime })))
+      setError(undefined)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void refresh()
+    const unsubscribe = bridge.events?.onForwardingEvent?.((event) => {
+      if (event.hostId === undefined || event.hostId === hostId) void refresh()
+    })
+    return () => unsubscribe?.()
+  }, [bridge, hostId])
+
+  const openNew = (): void => {
+    if (!canCreateProfile) return
+    setEditing(undefined)
+    setForm(emptyForwardingForm(bindAddress))
+    setError(undefined)
+    setEditorOpen(true)
+  }
+
+  const openEdit = (profile: ForwardingProfile): void => {
+    setEditing(profile)
+    setForm({
+      name: profile.name,
+      description: profile.description ?? "",
+      localAddress: profile.localAddress,
+      localPort: String(profile.localPort),
+      remoteAddress: profile.remoteAddress,
+      remotePort: String(profile.remotePort),
+      autoStart: profile.autoStart
+    })
+    setError(undefined)
+    setEditorOpen(true)
+  }
+
+  const updateField = <K extends keyof HostForwardingFormState>(key: K, value: HostForwardingFormState[K]): void => {
+    setForm((current) => ({ ...current, [key]: value }))
+  }
+
+  const toRequest = (): ForwardingProfileRequest | undefined => {
+    const localPort = Number(form.localPort)
+    const remotePort = Number(form.remotePort)
+    if (!form.name.trim()) {
+      setError(t("ports.profileNameRequired"))
+      return undefined
+    }
+    if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535 || !Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
+      setError(t("ports.invalidPort"))
+      return undefined
+    }
+    if (!form.remoteAddress.trim()) {
+      setError(t("ports.remoteAddressRequired"))
+      return undefined
+    }
+    return {
+      name: form.name.trim(),
+      ...(form.description.trim() ? { description: form.description.trim() } : {}),
+      localAddress: form.localAddress,
+      localPort,
+      remoteAddress: form.remoteAddress.trim(),
+      remotePort,
+      autoStart: form.autoStart
+    }
+  }
+
+  const saveProfile = async (startAfterSave: boolean): Promise<void> => {
+    if (!hostId || !canCreateProfile || saving) return
+    const request = toRequest()
+    if (!request) return
+    setSaving(true)
+    try {
+      const profile = editing
+        ? await bridge.ports.updateProfile(editing.id, request)
+        : await bridge.ports.createProfile(hostId, request)
+      if (startAfterSave) {
+        const runtime = await bridge.ports.startProfile(profile.id)
+        setRows((current) => {
+          const next = current.filter((row) => row.profile.id !== profile.id)
+          return [...next, { profile, runtime }]
+        })
+      } else {
+        setRows((current) => {
+          const next = current.filter((row) => row.profile.id !== profile.id)
+          return [...next, { profile, runtime: current.find((row) => row.profile.id === profile.id)?.runtime }]
+        })
+      }
+      setEditorOpen(false)
+      setError(undefined)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const startProfile = async (profile: ForwardingProfile): Promise<void> => {
+    try {
+      const runtime = await bridge.ports.startProfile(profile.id)
+      setRows((current) => current.map((row) => row.profile.id === profile.id ? { ...row, runtime } : row))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  const stopRuntime = async (runtime: ForwardingInfo): Promise<void> => {
+    try {
+      await bridge.ports.stop(runtime.id)
+      setRows((current) => current.map((row) => row.runtime?.id === runtime.id ? { ...row, runtime: { ...runtime, status: "stopped" } } : row))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  const removeProfile = async (profile: ForwardingProfile): Promise<void> => {
+    try {
+      await bridge.ports.removeProfile(profile.id)
+      setRows((current) => current.filter((row) => row.profile.id !== profile.id))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  const scan = async (): Promise<void> => {
+    if (!connectionId || scanning) return
+    setScanning(true)
+    try {
+      setDiscoveredPorts(await bridge.ports.scan(connectionId))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  const quickForward = (port: DiscoveredPort): void => {
+    setEditing(undefined)
+    setForm({
+      ...emptyForwardingForm(bindAddress),
+      name: port.process ? `${port.process} :${port.remotePort}` : `Port ${port.remotePort}`,
+      remoteAddress: normalizeRemoteAddress(port.remoteAddress),
+      remotePort: String(port.remotePort),
+      localPort: String(port.remotePort)
+    })
+    setEditorOpen(true)
+  }
+
+  return (
+    <section className="ports-view ports-host-view" data-mode="host">
+      <header className="view-header">
+        <div>
+          <span className="view-eyebrow">Rocker / {session?.label ?? t("ports.hostWorkspace")}</span>
+          <h1>{t("ports.hostTitle")}</h1>
+          <p>{t("ports.hostSubtitle")}</p>
+        </div>
+        <div className="view-header-actions">
+          <button className="secondary-command" type="button" onClick={() => void scan()} disabled={!connectionId || scanning}>
+            <RefreshCw size={15} className={scanning ? "is-spinning" : ""} />{t("ports.scan")}
+          </button>
+          <button className="primary-command" type="button" onClick={openNew} disabled={!canCreateProfile}>
+            <Plus size={15} />{t("ports.newForwarding")}
+          </button>
+        </div>
+      </header>
+      <div className="ports-content">
+        <div className="ports-host-context">
+          <Server size={16} />
+          <div className="ports-host-context-copy">
+            <span>{t("ports.boundHost")}: <strong>{hostId ?? t("ports.hostUnavailable")}</strong></span>
+            {session && <span className="ports-session-strip"><span className="session-state-dot" data-state={session.state} />{t("ports.session")}: <strong>{session.label}</strong><span className="ports-session-state">{t(sessionStateKey(session.state))}</span></span>}
+          </div>
+          {username && <small>{username}</small>}
+        </div>
+        {error && <div className="inline-error">{error}</div>}
+        {rows.length > 0 ? <div className="ports-table ports-host-table">
+          <div className="ports-heading"><span>{t("ports.rule")}</span><span>{t("ports.route")}</span><span>{t("ports.status")}</span><span>{t("ports.policy")}</span><span /></div>
+          {rows.map(({ profile, runtime }) => {
+            const status = runtime?.status ?? "stopped"
+            return <div className="port-row ports-profile-row" key={profile.id}>
+              <div><strong>{profile.name}</strong>{profile.description && <small>{profile.description}</small>}</div>
+              <code>{formatAddress(profile.localAddress, profile.localPort)} <span className="route-arrow">-&gt;</span> {profile.remoteAddress}:{profile.remotePort}</code>
+              <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
+              <span>{profile.autoStart ? t("ports.autoStart") : t("ports.manualStart")}</span>
+              <div className="port-actions">
+                {runtime?.status === "forwarding" && <>
+                  <IconButton label={t("ports.copyAddress")} onClick={() => void navigator.clipboard?.writeText(formatAddress(runtime.localAddress, runtime.localPort))}><Clipboard size={14} /></IconButton>
+                  <IconButton label={t("ports.openAddress")} onClick={() => void bridge.ports.openAddress(runtime.id)}><ExternalLink size={14} /></IconButton>
+                  <IconButton label={t("ports.stopForwarding")} onClick={() => void stopRuntime(runtime)}><Square size={13} /></IconButton>
+                </>}
+                {(runtime?.status === "suspended" || !runtime || runtime.status === "stopped" || runtime.status === "error") && <IconButton label={runtime?.status === "suspended" ? t("ports.resumeForwarding") : t("ports.startForwarding")} onClick={() => void startProfile(profile)}><Play size={14} /></IconButton>}
+                <IconButton label={t("ports.editProfile")} onClick={() => openEdit(profile)}><Pencil size={14} /></IconButton>
+                <IconButton label={t("ports.removeProfile")} onClick={() => void removeProfile(profile)}><Trash2 size={14} /></IconButton>
+              </div>
+            </div>
+          })}
+        </div> : !loading ? <div className="port-empty"><strong>{t("ports.hostEmptyTitle")}</strong><span>{t("ports.hostEmptyBody")}</span></div> : <div className="port-empty"><strong>{t("ports.loading")}</strong></div>}
+        {discoveredPorts.length > 0 && <div className="ports-discovery"><div className="ports-section-label">{t("ports.discoveredTitle")}</div>{discoveredPorts.map((port) => <div className="port-discovery-row" key={port.id}><span>{port.process ?? t("ports.unknown")}</span><code>{port.remoteAddress}:{port.remotePort}</code><button className="secondary-command compact-command" type="button" onClick={() => quickForward(port)}><Play size={14} />{t("ports.forwardPort")}</button></div>)}</div>}
+      </div>
+      {editorOpen && <div className="forwarding-editor-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditorOpen(false) }}>
+        <div className="forwarding-editor" role="dialog" aria-modal="true" aria-labelledby="forwarding-editor-title">
+          <div className="forwarding-editor-header"><div><span className="view-eyebrow">{t("ports.editorEyebrow")}</span><h2 id="forwarding-editor-title">{editing ? t("ports.editTitle") : t("ports.newTitle")}</h2></div><IconButton label={t("hosts.editor.close")} onClick={() => setEditorOpen(false)}><X size={14} /></IconButton></div>
+          <div className="forwarding-form">
+            <label><span>{t("ports.profileName")}</span><input aria-label={t("ports.profileName")} value={form.name} onChange={(event) => updateField("name", event.target.value)} autoFocus /></label>
+            <label><span>{t("ports.description")}</span><textarea aria-label={t("ports.description")} value={form.description} onChange={(event) => updateField("description", event.target.value)} /></label>
+            <div className="forwarding-form-grid">
+              <label><span>{t("ports.localAddress")}</span><select aria-label={t("ports.localAddress")} value={form.localAddress} onChange={(event) => updateField("localAddress", event.target.value as HostForwardingFormState["localAddress"])}><option value="127.0.0.1">127.0.0.1</option><option value="::1">::1</option><option value="0.0.0.0">0.0.0.0</option></select></label>
+              <label><span>{t("ports.localPortLabel")}</span><input aria-label={t("ports.localPortLabel")} type="number" min={1} max={65535} value={form.localPort} onChange={(event) => updateField("localPort", event.target.value)} /></label>
+              <label><span>{t("ports.remoteAddress")}</span><input aria-label={t("ports.remoteAddress")} value={form.remoteAddress} onChange={(event) => updateField("remoteAddress", event.target.value)} /></label>
+              <label><span>{t("ports.remotePort")}</span><input aria-label={t("ports.remotePort")} type="number" min={1} max={65535} value={form.remotePort} onChange={(event) => updateField("remotePort", event.target.value)} /></label>
+            </div>
+            {form.localAddress === "0.0.0.0" && <div className="forwarding-exposure-warning"><AlertTriangle size={15} /><span>{t("ports.exposureWarning")}</span></div>}
+            <label className="forwarding-checkbox"><input type="checkbox" checked={form.autoStart} onChange={(event) => updateField("autoStart", event.target.checked)} /><span>{t("ports.autoStart")}</span></label>
+          </div>
+          <div className="forwarding-editor-actions"><button className="secondary-command" type="button" onClick={() => setEditorOpen(false)}>{t("hosts.editor.close")}</button><button className="secondary-command" type="button" disabled={saving} onClick={() => void saveProfile(false)}>{t("ports.saveProfile")}</button><button className="primary-command" type="button" disabled={saving} onClick={() => void saveProfile(true)}><Play size={14} />{t("ports.saveAndStart")}</button></div>
+        </div>
+      </div>}
+    </section>
+  )
+}
+
+function emptyForwardingForm(bindAddress: PortsViewProps["bindAddress"] = "127.0.0.1"): HostForwardingFormState {
+  return { name: "", description: "", localAddress: bindAddress ?? "127.0.0.1", localPort: "8080", remoteAddress: "127.0.0.1", remotePort: "8080", autoStart: false }
+}
+
+function runtimeToFallbackProfile(runtime: ForwardingInfo): ForwardingProfile {
+  const now = new Date(0).toISOString()
+  return {
+    id: runtime.profileId ?? runtime.id,
+    hostId: runtime.hostId ?? "unknown",
+    name: `${runtime.remoteAddress}:${runtime.remotePort}`,
+    localAddress: runtime.localAddress === "::1" || runtime.localAddress === "0.0.0.0" ? runtime.localAddress : "127.0.0.1",
+    localPort: runtime.localPort,
+    remoteAddress: runtime.remoteAddress,
+    remotePort: runtime.remotePort,
+    autoStart: false,
+    createdAt: now,
+    updatedAt: now
+  }
+}
+
+function connectionSummary(status: PortStatus, t: (key: TranslationKey) => string): string {
+  if (status === "forwarding" || status === "starting" || status === "stopping") return t("ports.sharedTransport")
+  if (status === "suspended") return t("ports.reconnectRequired")
+  return t("ports.readyToRestart")
+}
+
 function normalizeRemoteAddress(address: string): string {
   return address === "0.0.0.0" || address === "::" || address === "*" ? "127.0.0.1" : address
 }
@@ -167,4 +567,8 @@ function formatAddress(address: string, port: number): string {
 
 function statusKey(status: PortStatus): "ports.status.discovered" | "ports.status.starting" | "ports.status.forwarding" | "ports.status.suspended" | "ports.status.stopping" | "ports.status.stopped" | "ports.status.error" {
   return `ports.status.${status}`
+}
+
+function sessionStateKey(state: WorkspaceSession["state"]): "ports.sessionState.idle" | "ports.sessionState.connecting" | "ports.sessionState.connected" | "ports.sessionState.restoring" | "ports.sessionState.reconnecting" | "ports.sessionState.disconnected" | "ports.sessionState.error" | "ports.sessionState.closing" {
+  return `ports.sessionState.${state}`
 }

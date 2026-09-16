@@ -330,6 +330,33 @@ describe("ForwardingManager", () => {
     expect(acquire).toHaveBeenCalledOnce()
     expect(listeners.created).toHaveLength(2)
   })
+
+  it("rejects profile runtime replacement from another owner", async () => {
+    const connections = new FakeConnections()
+    const listeners = createListenerFactory()
+    connections.acquire = vi.fn(async () => {
+      const lease: ConnectionLease = { id: "profile-lease", connectionId, owner, kind: "forward" }
+      connections.addLease(lease)
+      return lease
+    })
+    const forwards = new ForwardingManager(connections, { createListener: listeners.create })
+    await forwards.startProfile(profile, owner)
+
+    await expect(forwards.createProfileRuntime(profile, connectionId, otherOwner)).rejects.toThrow("Port forwarding is owned by another window")
+    expect(listeners.created).toHaveLength(1)
+  })
+
+  it("rejects an invalid saved profile before acquiring a transport", async () => {
+    const connections = new FakeConnections()
+    const acquire = vi.fn(async () => {
+      throw new Error("should not acquire")
+    })
+    connections.acquire = acquire
+    const forwards = new ForwardingManager(connections, { createListener: createListenerFactory().create })
+
+    await expect(forwards.startProfile({ ...profile, localPort: 0 }, owner)).rejects.toThrow("Forwarding profile is invalid")
+    expect(acquire).not.toHaveBeenCalled()
+  })
 })
 
 class FakeConnections implements ForwardingConnectionAccess {

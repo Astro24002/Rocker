@@ -15,7 +15,15 @@ export type {
   StoredWorkspaceWindow
 } from "../../electron/storage/types"
 
-export type { DiscoveredPort, ForwardingInfo, ForwardingSpec, PortSource, PortStatus } from "../../electron/ports/types"
+export type {
+  DiscoveredPort,
+  ForwardingInfo,
+  ForwardingProfileRequest,
+  ForwardingProfileView,
+  ForwardingSpec,
+  PortSource,
+  PortStatus
+} from "../../electron/ports/types"
 export type {
   ConnectionTestResult,
   OwnedTerminalSessionEvent,

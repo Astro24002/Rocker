@@ -10,6 +10,8 @@ import type {
   ConfigurationImportJournalStore
 } from "./config-bundle"
 import type { AppSettings, HostProfile } from "./types"
+import type { ForwardingProfile } from "./types"
+import { normalizeForwardingProfile } from "./forwarding-profile-store"
 
 interface JournalDocument {
   journal?: ConfigurationImportJournal
@@ -66,13 +68,25 @@ export class ConfigImportJournalStore implements ConfigurationImportJournalStore
 export type ConfigImportRecoveryTarget = Pick<
   ConfigImportTarget,
   "listHosts" | "saveHost" | "removeHost" | "getSettings" | "updateSettings" | "getHostKey" | "replaceHostKey" | "removeHostKey"
->
+> & Pick<ConfigImportTarget, "listForwardingProfiles" | "replaceForwardingProfiles">
 
 async function recoverPendingJournal(
   journal: ConfigurationImportJournal,
   target: ConfigImportRecoveryTarget
 ): Promise<boolean> {
   let complete = true
+  if (journal.forwardingProfiles) {
+    try {
+      const current = await target.listForwardingProfiles?.() ?? []
+      if (sameForwardingProfiles(current, journal.forwardingProfiles.expected)) {
+        await target.replaceForwardingProfiles?.(journal.forwardingProfiles.restore)
+      } else if (!sameForwardingProfiles(current, journal.forwardingProfiles.restore)) {
+        complete = false
+      }
+    } catch {
+      complete = false
+    }
+  }
   for (const rollback of [...journal.hostKeys].reverse()) {
     try {
       if (!await recoverHostKey(rollback, target)) complete = false
@@ -160,13 +174,36 @@ function normalizeJournal(value: unknown): ConfigurationImportJournal | undefine
   }
   const settings = value.settings === undefined ? undefined : normalizeSettingsRollback(value.settings)
   if (value.settings !== undefined && !settings) return undefined
+  const forwardingProfiles = value.forwardingProfiles === undefined ? undefined : normalizeForwardingProfilesRollback(value.forwardingProfiles)
+  if (value.forwardingProfiles !== undefined && !forwardingProfiles) return undefined
   return {
     version: 1,
     state: value.state,
     hosts,
     hostKeys,
-    ...(settings ? { settings } : {})
+    ...(settings ? { settings } : {}),
+    ...(forwardingProfiles ? { forwardingProfiles } : {})
   }
+}
+
+function normalizeForwardingProfilesRollback(value: unknown): { expected: ForwardingProfile[]; restore: ForwardingProfile[] } | undefined {
+  if (!isRecord(value) || !Array.isArray(value.expected) || !Array.isArray(value.restore)) return undefined
+  const expected = normalizeForwardingProfiles(value.expected)
+  const restore = normalizeForwardingProfiles(value.restore)
+  return expected && restore ? { expected, restore } : undefined
+}
+
+function normalizeForwardingProfiles(value: unknown): ForwardingProfile[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const profiles: ForwardingProfile[] = []
+  const ids = new Set<string>()
+  for (const item of value) {
+    const profile = normalizeForwardingProfile(item)
+    if (!profile || ids.has(profile.id)) return undefined
+    ids.add(profile.id)
+    profiles.push(profile)
+  }
+  return profiles
 }
 
 function normalizeHostRollback(value: unknown): ConfigurationImportHostRollback | undefined {
@@ -206,6 +243,10 @@ function sameHost(left: HostProfile, right: HostProfile): boolean {
 }
 
 function sameSettings(left: AppSettings, right: AppSettings): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function sameForwardingProfiles(left: ForwardingProfile[], right: ForwardingProfile[]): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 

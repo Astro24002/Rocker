@@ -11,6 +11,7 @@ import { JsonCredentialValueStore, JsonVaultStore } from "./storage/credential-s
 import { ConfigBundleService, credentialsForHosts, hostKeysForHosts } from "./storage/config-bundle"
 import { ConfigImportJournalStore } from "./storage/config-import-journal"
 import { HistoryStore } from "./storage/history-store"
+import { ForwardingProfileStore } from "./storage/forwarding-profile-store"
 import { createHostStore } from "./storage/host-store"
 import { createSafeStorageCipher } from "./storage/safe-storage"
 import { defaultSettings, SettingsStore } from "./storage/settings-store"
@@ -37,6 +38,7 @@ interface ApplicationRuntime {
   snapshots: WorkspaceSnapshotStore
   windows: WorkspaceWindowManager
   diagnostics: DiagnosticLogger
+  forwardingProfiles: ForwardingProfileStore
 }
 
 let runtime: ApplicationRuntime | undefined
@@ -79,6 +81,7 @@ async function startApplication(): Promise<void> {
   const onStorageDiagnostic: StorageDiagnosticSink = (event) => recordStorageDiagnostic(diagnostics, event)
   const mutations = new SerializedOperationQueue()
   const hosts = createHostStore(resolvedUserDataPath, onStorageDiagnostic)
+  const forwardingProfiles = new ForwardingProfileStore(join(resolvedUserDataPath, "forwarding.json"), onStorageDiagnostic)
   const credentials = new CredentialVault(
     new JsonCredentialValueStore(join(resolvedUserDataPath, "credentials.json"), onStorageDiagnostic),
     createSafeStorageCipher(),
@@ -95,7 +98,9 @@ async function startApplication(): Promise<void> {
     updateSettings: (nextSettings) => settings.update(nextSettings).then(() => undefined),
     getHostKey: (host, port) => hostKeys.get(host, port),
     replaceHostKey: (host, port, expected, replacement) => hostKeys.replace(host, port, expected, replacement),
-    removeHostKey: (host, port, expected) => hostKeys.remove(host, port, expected)
+    removeHostKey: (host, port, expected) => hostKeys.remove(host, port, expected),
+    listForwardingProfiles: () => forwardingProfiles.list(),
+    replaceForwardingProfiles: (profiles) => forwardingProfiles.replace(profiles)
   })
   const initialSettingsResult = await loadInitialSettings(settings, (error) => {
     recordUnexpectedStorageFailure(diagnostics, "settings", "startup-load", error)
@@ -133,6 +138,8 @@ async function startApplication(): Promise<void> {
     trustHostKey: (host, port, fingerprint) => hostKeys.trust(host, port, fingerprint),
     replaceHostKey: (host, port, expected, replacement) => hostKeys.replace(host, port, expected, replacement),
     removeHostKey: (host, port, expected) => hostKeys.remove(host, port, expected),
+    listForwardingProfiles: () => forwardingProfiles.list(),
+    replaceForwardingProfiles: (profiles) => forwardingProfiles.replace(profiles),
     assertCredentialsWritable: () => credentials.assertWritable(),
     importCredentials: (values) => credentials.importValues(values),
     journal: importJournal
@@ -162,15 +169,16 @@ async function startApplication(): Promise<void> {
     connections,
     ports: new PortService(connections),
     forwarding,
+    forwardingProfiles,
     history: new HistoryStore(join(resolvedUserDataPath, "history.json"), onStorageDiagnostic),
     settings,
     diagnostics,
     mutations,
     configuration,
     createConfigurationExportSnapshot: (includeCredentials) => mutations.run(async () => {
-      const [profiles, currentSettings] = await Promise.all([hosts.list(), settings.get()])
+      const [profiles, currentSettings, forwardingProfilesSnapshot] = await Promise.all([hosts.list(), settings.get(), forwardingProfiles.list()])
       if (!includeCredentials) {
-        return { hosts: profiles, settings: currentSettings }
+        return { hosts: profiles, settings: currentSettings, profiles: forwardingProfilesSnapshot }
       }
       const [hostKeyEntries, credentialValues] = await Promise.all([
         hostKeys.entries(),
@@ -179,6 +187,7 @@ async function startApplication(): Promise<void> {
       return {
         hosts: profiles,
         settings: currentSettings,
+        profiles: forwardingProfilesSnapshot,
         hostKeys: hostKeysForHosts(profiles, hostKeyEntries),
         credentials: credentialsForHosts(profiles, credentialValues)
       }
@@ -205,7 +214,7 @@ async function startApplication(): Promise<void> {
   app.on("activate", () => {
     if (windows.ownerWebContentsIds().length === 0) windows.createNew()
   })
-  runtime = { connections, sessions, forwarding, snapshots, windows, diagnostics }
+  runtime = { connections, sessions, forwarding, snapshots, windows, diagnostics, forwardingProfiles }
   if (pendingFocus) {
     pendingFocus = false
     windows.focusMostRecentOrCreate()
@@ -283,6 +292,11 @@ async function shutdownApplication(applicationRuntime: ApplicationRuntime): Prom
     await applicationRuntime.snapshots.flush()
   } catch {
     // Shutdown should still release active transports when a snapshot write fails.
+  }
+  try {
+    await applicationRuntime.forwardingProfiles.flush()
+  } catch {
+    // Profile writes are best effort during shutdown; active transports still need cleanup.
   }
   await Promise.all(applicationRuntime.windows.ownerWebContentsIds().map(async (ownerWebContentsId) => {
     await applicationRuntime.forwarding.releaseWebContents(ownerWebContentsId)

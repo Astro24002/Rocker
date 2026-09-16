@@ -6,7 +6,7 @@ import type {
   RockerBridge
 } from "../../../electron/ipc/bridge-contract"
 import type { CredentialProtectionStatus } from "../../../electron/storage/credentials"
-import type { HostConflictResolution, HostKeyConflictResolution, ImportPreview } from "../../../electron/storage/config-bundle"
+import type { ForwardingConflictResolution, HostConflictResolution, HostKeyConflictResolution, ImportPreview } from "../../../electron/storage/config-bundle"
 import { useI18n } from "../../i18n"
 
 type DataProtectionBridge = Pick<RockerBridge, "configuration" | "credentials">
@@ -41,6 +41,7 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
   const [importPreview, setImportPreview] = useState<ImportPreview>()
   const [hostActions, setHostActions] = useState<Record<string, HostConflictResolution>>({})
   const [hostKeyActions, setHostKeyActions] = useState<Record<string, HostKeyConflictResolution>>({})
+  const [forwardingActions, setForwardingActions] = useState<Record<string, ForwardingConflictResolution>>({})
   const [importHostKeys, setImportHostKeys] = useState(false)
   const [applySettings, setApplySettings] = useState(false)
   const [importCredentials, setImportCredentials] = useState(false)
@@ -148,6 +149,7 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
       setImportPreview(selected.preview)
       setHostActions({})
       setHostKeyActions({})
+      setForwardingActions({})
       setImportHostKeys(false)
       setApplySettings(false)
       setImportCredentials(false)
@@ -177,17 +179,19 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
     if (!importSelection?.importId || !importPreview || importPreview.requiresPassword) return false
     if (importPreview.hostConflicts.some((conflict) => hostActions[conflict.id] === undefined)) return false
     if (importHostKeys && importPreview.hostKeyConflicts.some((conflict) => hostKeyActions[conflict.id] === undefined)) return false
+    if ((importPreview.forwardingConflicts ?? []).some((conflict) => forwardingActions[conflict.id] === undefined)) return false
     return true
-  }, [hostActions, hostKeyActions, importHostKeys, importPreview, importSelection])
+  }, [forwardingActions, hostActions, hostKeyActions, importHostKeys, importPreview, importSelection])
 
   const applyImport = async (): Promise<void> => {
-    if (!importReady || !importSelection?.importId || busy) return
+    if (!importReady || !importSelection?.importId || !importPreview || busy) return
     const request: ConfigurationImportRequest = {
       importId: importSelection.importId,
       password: importPassword || undefined,
       resolution: {
         hosts: hostActions,
         hostKeys: hostKeyActions,
+        ...((importPreview.forwardingConflicts ?? []).length > 0 ? { forwardings: forwardingActions } : {}),
         importHostKeys,
         applySettings,
         importCredentials
@@ -298,6 +302,7 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
           busy={busy}
           hostActions={hostActions}
           hostKeyActions={hostKeyActions}
+          forwardingActions={forwardingActions}
           importHostKeys={importHostKeys}
           applySettings={applySettings}
           importCredentials={importCredentials}
@@ -305,6 +310,7 @@ export function DataProtectionSettings({ bridge, onImported }: DataProtectionSet
           onPreviewPassword={previewEncryptedImport}
           onHostAction={(id, action) => setHostActions((current) => ({ ...current, [id]: action }))}
           onHostKeyAction={(id, action) => setHostKeyActions((current) => ({ ...current, [id]: action }))}
+          onForwardingAction={(id, action) => setForwardingActions((current) => ({ ...current, [id]: action }))}
           onImportHostKeysChange={setImportHostKeys}
           onApplySettingsChange={setApplySettings}
           onImportCredentialsChange={setImportCredentials}
@@ -325,6 +331,7 @@ function ImportPreviewPanel({
   busy,
   hostActions,
   hostKeyActions,
+  forwardingActions,
   importHostKeys,
   applySettings,
   importCredentials,
@@ -332,6 +339,7 @@ function ImportPreviewPanel({
   onPreviewPassword,
   onHostAction,
   onHostKeyAction,
+  onForwardingAction,
   onImportHostKeysChange,
   onApplySettingsChange,
   onImportCredentialsChange,
@@ -342,6 +350,7 @@ function ImportPreviewPanel({
   busy: boolean
   hostActions: Record<string, HostConflictResolution>
   hostKeyActions: Record<string, HostKeyConflictResolution>
+  forwardingActions: Record<string, ForwardingConflictResolution>
   importHostKeys: boolean
   applySettings: boolean
   importCredentials: boolean
@@ -349,6 +358,7 @@ function ImportPreviewPanel({
   onPreviewPassword(): void
   onHostAction(id: string, action: HostConflictResolution): void
   onHostKeyAction(id: string, action: HostKeyConflictResolution): void
+  onForwardingAction(id: string, action: ForwardingConflictResolution): void
   onImportHostKeysChange(value: boolean): void
   onApplySettingsChange(value: boolean): void
   onImportCredentialsChange(value: boolean): void
@@ -371,6 +381,7 @@ function ImportPreviewPanel({
     <div className="import-preview-counts">
       <span>{t("settings.importHosts")} <strong>{preview.hosts.total}</strong></span>
       <span>{t("settings.importHostKeys")} <strong>{preview.hostKeys.total}</strong></span>
+      {preview.forwardings && <span>{t("settings.importForwardings")} <strong>{preview.forwardings.total}</strong></span>}
       <span>{t("settings.importCredentials")} <strong>{preview.credentials.total}</strong></span>
     </div>
     {preview.hostConflicts.length > 0 && <div className="import-conflict-group">
@@ -382,16 +393,21 @@ function ImportPreviewPanel({
       <p>{t("settings.importHostKeyWarning")}</p>
       {preview.hostKeyConflicts.map((conflict) => <label className="import-conflict-row" key={conflict.id}><span>{conflict.id}<small>{t("settings.local")}: SHA256:{conflict.localFingerprint}<br />{t("settings.imported")}: SHA256:{conflict.importedFingerprint}</small></span><select aria-label={`${conflict.id} Host Key action`} value={hostKeyActions[conflict.id] ?? ""} onChange={(event) => onHostKeyAction(conflict.id, event.target.value as HostKeyConflictResolution)}><option value="">{t("settings.importSelectAction")}</option><option value="keep-local">{t("settings.keepLocal")}</option><option value="replace-host-key">{t("settings.replaceHostKey")}</option><option value="skip">{t("settings.skip")}</option></select></label>)}
     </div>}
+    {(preview.forwardingConflicts ?? []).length > 0 && <div className="import-conflict-group">
+      <strong>{t("settings.importForwardingConflicts")}</strong>
+      {(preview.forwardingConflicts ?? []).map((conflict) => <label className="import-conflict-row" key={conflict.id}><span>{conflict.name}<small>{conflict.hostId} / {conflict.localAddress}:{conflict.localPort} -&gt; {conflict.remoteAddress}:{conflict.remotePort}</small></span><select aria-label={`${conflict.name} forwarding action`} value={forwardingActions[conflict.id] ?? ""} onChange={(event) => onForwardingAction(conflict.id, event.target.value as ForwardingConflictResolution)}><option value="">{t("settings.importSelectAction")}</option><option value="keep-local">{t("settings.keepLocal")}</option><option value="use-imported">{t("settings.useImported")}</option><option value="create-copy">{t("settings.createCopy")}</option><option value="skip">{t("settings.skip")}</option></select></label>)}
+    </div>}
     {preview.hostKeys.total > 0 && <label className="import-checkbox-row"><input type="checkbox" checked={importHostKeys} onChange={(event) => onImportHostKeysChange(event.target.checked)} />{t("settings.importHostKeys")}</label>}
     {preview.hasSettings && <label className="import-checkbox-row"><input type="checkbox" checked={applySettings} onChange={(event) => onApplySettingsChange(event.target.checked)} />{t("settings.importSettings")}</label>}
     {preview.credentials.total > 0 && <label className="import-checkbox-row"><input type="checkbox" checked={importCredentials} onChange={(event) => onImportCredentialsChange(event.target.checked)} />{t("settings.importStoredCredentials")}</label>}
-    <button type="button" className="settings-action settings-action-primary" disabled={busy || !importReadyForPanel(preview, hostActions, hostKeyActions, importHostKeys)} onClick={onApply}><CheckCircle2 size={15} aria-hidden="true" />{t("settings.applyImport")}</button>
+    <button type="button" className="settings-action settings-action-primary" disabled={busy || !importReadyForPanel(preview, hostActions, hostKeyActions, forwardingActions, importHostKeys)} onClick={onApply}><CheckCircle2 size={15} aria-hidden="true" />{t("settings.applyImport")}</button>
   </div>
 }
 
-function importReadyForPanel(preview: ImportPreview, hostActions: Record<string, HostConflictResolution>, hostKeyActions: Record<string, HostKeyConflictResolution>, importHostKeys: boolean): boolean {
+function importReadyForPanel(preview: ImportPreview, hostActions: Record<string, HostConflictResolution>, hostKeyActions: Record<string, HostKeyConflictResolution>, forwardingActions: Record<string, ForwardingConflictResolution>, importHostKeys: boolean): boolean {
   if (preview.requiresPassword) return false
   if (preview.hostConflicts.some((conflict) => hostActions[conflict.id] === undefined)) return false
   if (importHostKeys && preview.hostKeyConflicts.some((conflict) => hostKeyActions[conflict.id] === undefined)) return false
+  if ((preview.forwardingConflicts ?? []).some((conflict) => forwardingActions[conflict.id] === undefined)) return false
   return true
 }

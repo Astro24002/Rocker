@@ -18,6 +18,7 @@ export type CommandId =
   | "session.duplicate-window"
   | "session.split-horizontal"
   | "session.close"
+  | "session.port-forwarding"
   | "navigation.hosts"
   | "navigation.trust"
   | "navigation.history"
@@ -74,6 +75,7 @@ export interface CommandActions {
     duplicateWindow(session: WorkspaceSession): void | Promise<void>
     splitHorizontal(session: WorkspaceSession): void | Promise<void>
     close(session: WorkspaceSession): void | Promise<void>
+    portForwarding?(session: WorkspaceSession): void | Promise<void>
   }
   navigation: {
     navigate(destination: NavigationCommand): void | Promise<void>
@@ -256,6 +258,15 @@ export const commandRegistry: readonly CommandDefinition[] = [
     keywords: ["disconnect", "remove"],
     isEnabled: hasSession,
     execute: executeForSession((context, session) => context.actions.session.close(session))
+  },
+  {
+    id: "session.port-forwarding",
+    label: "Port forwarding",
+    labelKey: "commands.portForwarding",
+    category: "session",
+    keywords: ["forward", "host"],
+    isEnabled: hasSession,
+    execute: executeForSession((context, session) => context.actions.session.portForwarding?.(session))
   },
   {
     id: "navigation.hosts",

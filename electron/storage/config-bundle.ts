@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto"
+import { normalizeForwardingProfile } from "./forwarding-profile-store"
 import { normalizeHostProfile } from "./host-store"
 import { normalizeSettings } from "./settings-store"
 import type { CredentialImportResult } from "./credentials"
-import type { CredentialKind, AppSettings, HostProfile } from "./types"
+import type { CredentialKind, AppSettings, ForwardingProfile, HostProfile } from "./types"
 import { createVault, openVault } from "./vault-crypto"
 import { validateEncryptedVault, type EncryptedVault } from "./vault-format"
 
@@ -14,6 +15,7 @@ const maximumBundleBytes = 12 * 1024 * 1024
 const maximumHosts = 10_000
 const maximumHostKeys = 10_000
 const maximumCredentials = 20_000
+const maximumForwardings = 20_000
 
 export interface HostKeyRecord {
   host: string
@@ -33,6 +35,7 @@ export interface ExportSnapshot {
   settings: AppSettings
   hostKeys?: HostKeyRecord[]
   credentials?: BundleCredential[]
+  profiles?: ForwardingProfile[]
 }
 
 export interface ConfigTemplate {
@@ -42,6 +45,7 @@ export interface ConfigTemplate {
   createdAt: string
   hosts: HostProfile[]
   settings: AppSettings
+  profiles: ForwardingProfile[]
 }
 
 export interface EncryptedConfigBundle {
@@ -74,6 +78,16 @@ export interface HostKeyConflictPreview {
   importedFingerprint: string
 }
 
+export interface ForwardingConflictPreview {
+  id: string
+  name: string
+  hostId: string
+  localAddress: ForwardingProfile["localAddress"]
+  localPort: number
+  remoteAddress: string
+  remotePort: number
+}
+
 export interface ImportPreview {
   format: typeof templateFormat | typeof bundleFormat
   encrypted: boolean
@@ -81,18 +95,22 @@ export interface ImportPreview {
   createdAt?: string
   hosts: BundleCounts
   hostKeys: BundleCounts
+  forwardings?: BundleCounts
   hostConflicts: HostConflictPreview[]
   hostKeyConflicts: HostKeyConflictPreview[]
+  forwardingConflicts?: ForwardingConflictPreview[]
   credentials: { total: number }
   hasSettings: boolean
 }
 
 export type HostConflictResolution = "keep-local" | "use-imported" | "create-copy" | "skip"
 export type HostKeyConflictResolution = "keep-local" | "replace-host-key" | "skip"
+export type ForwardingConflictResolution = "keep-local" | "use-imported" | "create-copy" | "skip"
 
 export interface ConflictResolution {
   hosts?: Record<string, HostConflictResolution>
   hostKeys?: Record<string, HostKeyConflictResolution>
+  forwardings?: Record<string, ForwardingConflictResolution>
   importHostKeys?: boolean
   applySettings?: boolean
   importCredentials?: boolean
@@ -107,6 +125,10 @@ export interface ImportResult {
   skippedHostKeys: number
   importedCredentials: number
   skippedCredentials: number
+  importedForwardings?: number
+  replacedForwardings?: number
+  copiedForwardings?: number
+  skippedForwardings?: number
   settingsApplied: boolean
 }
 
@@ -122,6 +144,8 @@ export interface ConfigImportTarget {
   removeHostKey(host: string, port: number, expected: string): Promise<void>
   assertCredentialsWritable(): Promise<void>
   importCredentials(values: Record<string, string>): Promise<CredentialImportResult>
+  listForwardingProfiles?(): Promise<ForwardingProfile[]>
+  replaceForwardingProfiles?(profiles: ForwardingProfile[]): Promise<void>
   journal?: ConfigurationImportJournalStore
 }
 
@@ -139,6 +163,10 @@ export interface ConfigurationImportJournal {
   settings?: {
     expected: AppSettings
     restore: AppSettings
+  }
+  forwardingProfiles?: {
+    expected: ForwardingProfile[]
+    restore: ForwardingProfile[]
   }
 }
 
@@ -158,6 +186,7 @@ interface ConfigPayload {
   settings: AppSettings
   hostKeys: HostKeyRecord[]
   credentials: BundleCredential[]
+  profiles: ForwardingProfile[]
 }
 
 interface DecodedBundle {
@@ -178,6 +207,13 @@ interface HostKeyPlan {
   expectedFingerprint?: string
 }
 
+interface ForwardingPlan {
+  imported: ForwardingProfile
+  profile?: ForwardingProfile
+  original?: ForwardingProfile
+  action: "new" | "matching" | "replace" | "copy" | "skip"
+}
+
 interface AppliedImportOperation {
   rollback(): Promise<void>
 }
@@ -190,7 +226,8 @@ export function exportTemplate(input: ExportSnapshot): ConfigTemplate {
     containsSecrets: false,
     createdAt: snapshot.createdAt,
     hosts: snapshot.hosts,
-    settings: snapshot.settings
+    settings: snapshot.settings,
+    profiles: snapshot.profiles
   }
 }
 
@@ -203,7 +240,8 @@ export async function exportEncryptedBundle(input: ExportSnapshot, password: str
     hosts: snapshot.hosts,
     settings: snapshot.settings,
     hostKeys: snapshot.hostKeys,
-    credentials: snapshot.credentials
+    credentials: snapshot.credentials,
+    profiles: snapshot.profiles
   }
   const vault = await createVault(password, { payload: JSON.stringify(payload) })
   return encode({ format: bundleFormat, version: currentVersion, encrypted: true, vault })
@@ -249,12 +287,16 @@ export class ConfigBundleService {
     const localHosts = await this.target.listHosts()
     const hostPlans = planHosts(decoded.payload.hosts, localHosts, {}, this.nextHostId, false)
     const hostKeyPlans = await this.planHostKeys(decoded.payload.hostKeys, {}, false)
+    const localForwardingProfiles = this.target.listForwardingProfiles ? await this.target.listForwardingProfiles() : []
+    const forwardingPlans = planForwardingProfiles(decoded.payload.profiles, localForwardingProfiles, hostPlans, {}, this.nextHostId, false)
     return {
       ...previewForPayload(decoded.payload, decoded.encrypted),
       hosts: countsForHostPlans(hostPlans),
       hostKeys: countsForHostKeyPlans(hostKeyPlans),
+      forwardings: countsForForwardingPlans(forwardingPlans),
       hostConflicts: hostConflictsForPlans(hostPlans),
-      hostKeyConflicts: hostKeyConflictsForPlans(hostKeyPlans)
+      hostKeyConflicts: hostKeyConflictsForPlans(hostKeyPlans),
+      forwardingConflicts: forwardingConflictsForPlans(forwardingPlans)
     }
   }
 
@@ -271,6 +313,13 @@ export class ConfigBundleService {
     const hostKeyPlans = resolution.importHostKeys === true
       ? await this.planHostKeys(decoded.payload.hostKeys, resolution.hostKeys ?? {}, true)
       : []
+    const localForwardingProfiles = this.target.listForwardingProfiles ? await this.target.listForwardingProfiles() : []
+    const forwardingPlans = this.target.replaceForwardingProfiles
+      ? planForwardingProfiles(decoded.payload.profiles, localForwardingProfiles, hostPlans, resolution.forwardings ?? {}, this.nextHostId, true)
+      : []
+    const nextForwardingProfiles = this.target.replaceForwardingProfiles
+      ? mergeForwardingProfiles(localForwardingProfiles, forwardingPlans)
+      : localForwardingProfiles
     const originalSettings = resolution.applySettings === true ? await this.target.getSettings() : undefined
     if (resolution.importCredentials === true && decoded.payload.credentials.length > 0) {
       await this.target.assertCredentialsWritable()
@@ -278,7 +327,7 @@ export class ConfigBundleService {
     const credentials = resolution.importCredentials === true
       ? remapCredentials(decoded.payload.credentials, hostPlans)
       : {}
-    const journal = createConfigurationImportJournal(hostPlans, hostKeyPlans, originalSettings, decoded.payload.settings)
+    const journal = createConfigurationImportJournal(hostPlans, hostKeyPlans, originalSettings, decoded.payload.settings, localForwardingProfiles, nextForwardingProfiles)
     if (journal && this.target.journal) await this.target.journal.begin(journal)
     const applied: AppliedImportOperation[] = []
     let credentialImport: CredentialImportResult = { imported: [], skippedExisting: [] }
@@ -341,6 +390,14 @@ export class ConfigBundleService {
           )
         }
       }
+      if (this.target.replaceForwardingProfiles && forwardingPlans.length > 0) {
+        applied.push({
+          rollback: async () => {
+            await this.target.replaceForwardingProfiles!(localForwardingProfiles)
+          }
+        })
+        await this.target.replaceForwardingProfiles(nextForwardingProfiles)
+      }
       if (Object.keys(credentials).length > 0) credentialImport = await this.target.importCredentials(credentials)
     } catch {
       const rolledBack = await rollbackImport(applied)
@@ -362,6 +419,10 @@ export class ConfigBundleService {
       skippedCredentials: resolution.importCredentials === true
         ? decoded.payload.credentials.length - credentialImport.imported.length
         : 0,
+      importedForwardings: forwardingPlans.filter((plan) => plan.action === "new").length,
+      replacedForwardings: forwardingPlans.filter((plan) => plan.action === "replace").length,
+      copiedForwardings: forwardingPlans.filter((plan) => plan.action === "copy").length,
+      skippedForwardings: forwardingPlans.filter((plan) => plan.action === "skip").length,
       settingsApplied: resolution.applySettings === true
     }
   }
@@ -398,7 +459,9 @@ function createConfigurationImportJournal(
   hostPlans: HostPlan[],
   hostKeyPlans: HostKeyPlan[],
   originalSettings: AppSettings | undefined,
-  importedSettings: AppSettings
+  importedSettings: AppSettings,
+  originalForwardingProfiles: ForwardingProfile[],
+  importedForwardingProfiles: ForwardingProfile[]
 ): ConfigurationImportJournal | undefined {
   const hosts: ConfigurationImportHostRollback[] = []
   for (const plan of hostPlans) {
@@ -428,13 +491,17 @@ function createConfigurationImportJournal(
       })
     }
   }
-  if (hosts.length === 0 && hostKeys.length === 0 && !originalSettings) return undefined
+  const forwardingProfiles = JSON.stringify(originalForwardingProfiles) === JSON.stringify(importedForwardingProfiles)
+    ? undefined
+    : { expected: importedForwardingProfiles, restore: originalForwardingProfiles }
+  if (hosts.length === 0 && hostKeys.length === 0 && !originalSettings && !forwardingProfiles) return undefined
   return {
     version: 1,
     state: "pending",
     hosts,
     hostKeys,
-    ...(originalSettings ? { settings: { expected: importedSettings, restore: originalSettings } } : {})
+    ...(originalSettings ? { settings: { expected: importedSettings, restore: originalSettings } } : {}),
+    ...(forwardingProfiles ? { forwardingProfiles } : {})
   }
 }
 
@@ -470,7 +537,7 @@ function parseDocument(input: Uint8Array): ConfigTemplate | EncryptedConfigBundl
 
 async function decodeDocument(document: ConfigTemplate | EncryptedConfigBundle, password: string | undefined): Promise<DecodedBundle> {
   if (!isEncryptedBundle(document)) {
-    return { encrypted: false, payload: { ...document, format: payloadFormat, hostKeys: [], credentials: [] } }
+    return { encrypted: false, payload: { ...document, format: payloadFormat, hostKeys: [], credentials: [], profiles: document.profiles } }
   }
   if (password === undefined) throw new Error("Bundle password is required")
   try {
@@ -490,8 +557,9 @@ function normalizeExportSnapshot(value: ExportSnapshot): Required<ExportSnapshot
   const settings = normalizeSettings(value.settings)
   const hostKeys = normalizeHostKeys(value.hostKeys ?? [], hosts)
   const credentials = normalizeCredentials(value.credentials ?? [], hosts)
+  const profiles = normalizeForwardingProfiles(value.profiles ?? [], hosts)
   if (!createdAt || !settings) throw new Error("Configuration export is invalid")
-  return { createdAt, hosts, settings, hostKeys, credentials }
+  return { createdAt, hosts, settings, hostKeys, credentials, profiles }
 }
 
 function normalizeTemplate(value: unknown): ConfigTemplate | undefined {
@@ -499,8 +567,9 @@ function normalizeTemplate(value: unknown): ConfigTemplate | undefined {
   const createdAt = normalizeTimestamp(value.createdAt)
   const hosts = normalizeHosts(value.hosts)
   const settings = normalizeSettings(value.settings)
+  const profiles = normalizeForwardingProfiles(value.profiles ?? [], hosts)
   if (!createdAt || !settings) return undefined
-  return { format: templateFormat, version: currentVersion, containsSecrets: false, createdAt, hosts, settings }
+  return { format: templateFormat, version: currentVersion, containsSecrets: false, createdAt, hosts, settings, profiles }
 }
 
 function normalizeEncryptedBundle(value: unknown): EncryptedConfigBundle | undefined {
@@ -515,6 +584,7 @@ function normalizePayload(value: unknown): ConfigPayload | undefined {
   const hosts = normalizeHosts(value.hosts)
   const settings = normalizeSettings(value.settings)
   const hostKeys = normalizeHostKeys(value.hostKeys, hosts)
+  const profiles = normalizeForwardingProfiles(value.profiles ?? [], hosts)
   if (!createdAt || !settings || !Array.isArray(value.credentials)) return undefined
   let credentials: BundleCredential[]
   try {
@@ -522,7 +592,7 @@ function normalizePayload(value: unknown): ConfigPayload | undefined {
   } catch {
     return undefined
   }
-  return { format: payloadFormat, version: currentVersion, createdAt, hosts, settings, hostKeys, credentials }
+  return { format: payloadFormat, version: currentVersion, createdAt, hosts, settings, hostKeys, credentials, profiles }
 }
 
 function normalizeHosts(value: unknown): HostProfile[] {
@@ -537,6 +607,24 @@ function normalizeHosts(value: unknown): HostProfile[] {
     hosts.push(host)
   }
   return hosts
+}
+
+function normalizeForwardingProfiles(value: unknown, hosts: HostProfile[]): ForwardingProfile[] {
+  if (!Array.isArray(value) || value.length > maximumForwardings) {
+    throw new Error("Configuration forwarding profiles are invalid")
+  }
+  const hostIds = new Set(hosts.map((host) => host.id))
+  const profiles: ForwardingProfile[] = []
+  const ids = new Set<string>()
+  for (const item of value) {
+    const profile = normalizeForwardingProfile(item)
+    if (!profile || !hostIds.has(profile.hostId) || ids.has(profile.id)) {
+      throw new Error("Configuration forwarding profiles are invalid")
+    }
+    ids.add(profile.id)
+    profiles.push(profile)
+  }
+  return profiles
 }
 
 function normalizeHostKeys(value: unknown, hosts: HostProfile[]): HostKeyRecord[] {
@@ -625,6 +713,54 @@ function remapCredentials(credentials: BundleCredential[], plans: HostPlan[]): R
   return values
 }
 
+function planForwardingProfiles(
+  imported: ForwardingProfile[],
+  local: ForwardingProfile[],
+  hostPlans: HostPlan[],
+  resolutions: Record<string, ForwardingConflictResolution>,
+  nextProfileId: () => string,
+  requireResolution: boolean
+): ForwardingPlan[] {
+  const hostMappings = new Map(
+    hostPlans
+      .filter((plan): plan is HostPlan & { profile: HostProfile } => plan.profile !== undefined)
+      .map((plan) => [plan.imported.id, plan.profile.id])
+  )
+  const localById = new Map(local.map((profile) => [profile.id, profile]))
+  return imported.map((source) => {
+    const mappedHostId = hostMappings.get(source.hostId)
+    if (!mappedHostId) return { imported: source, action: "skip" }
+    const importedProfile = mappedHostId === source.hostId ? source : { ...source, hostId: mappedHostId }
+    const existing = localById.get(importedProfile.id)
+    if (!existing) return { imported: source, profile: importedProfile, action: "new" }
+    if (sameForwardingProfile(existing, importedProfile)) {
+      return { imported: source, profile: existing, original: existing, action: "matching" }
+    }
+    const resolution = resolutions[source.id]
+    if (requireResolution && resolution === undefined) throw new Error("Import conflict requires resolution")
+    if (resolution === "use-imported") return { imported: source, profile: importedProfile, original: existing, action: "replace" }
+    if (resolution === "create-copy") {
+      return {
+        imported: source,
+        profile: { ...importedProfile, id: nextProfileId(), name: importedCopyName(importedProfile.name) },
+        original: existing,
+        action: "copy"
+      }
+    }
+    return { imported: source, action: "skip" }
+  })
+}
+
+function mergeForwardingProfiles(local: ForwardingProfile[], plans: ForwardingPlan[]): ForwardingProfile[] {
+  const merged = new Map(local.map((profile) => [profile.id, profile]))
+  for (const plan of plans) {
+    if (plan.profile && (plan.action === "new" || plan.action === "replace" || plan.action === "copy")) {
+      merged.set(plan.profile.id, plan.profile)
+    }
+  }
+  return [...merged.values()]
+}
+
 function previewForPayload(payload: ConfigPayload, encrypted: boolean): ImportPreview {
   return {
     format: encrypted ? bundleFormat : templateFormat,
@@ -633,8 +769,10 @@ function previewForPayload(payload: ConfigPayload, encrypted: boolean): ImportPr
     createdAt: payload.createdAt,
     hosts: { total: payload.hosts.length, new: 0, matching: 0, conflicts: 0 },
     hostKeys: { total: payload.hostKeys.length, new: 0, matching: 0, conflicts: 0 },
+    forwardings: { total: payload.profiles.length, new: 0, matching: 0, conflicts: 0 },
     hostConflicts: [],
     hostKeyConflicts: [],
+    forwardingConflicts: [],
     credentials: { total: payload.credentials.length },
     hasSettings: true
   }
@@ -647,8 +785,10 @@ function emptyEncryptedPreview(): ImportPreview {
     requiresPassword: true,
     hosts: { total: 0, new: 0, matching: 0, conflicts: 0 },
     hostKeys: { total: 0, new: 0, matching: 0, conflicts: 0 },
+    forwardings: { total: 0, new: 0, matching: 0, conflicts: 0 },
     hostConflicts: [],
     hostKeyConflicts: [],
+    forwardingConflicts: [],
     credentials: { total: 0 },
     hasSettings: false
   }
@@ -669,6 +809,15 @@ function countsForHostKeyPlans(plans: HostKeyPlan[]): BundleCounts {
     new: plans.filter((plan) => plan.action === "new").length,
     matching: plans.filter((plan) => plan.action === "matching").length,
     conflicts: plans.filter((plan) => plan.action === "replace" || plan.action === "skip").length
+  }
+}
+
+function countsForForwardingPlans(plans: ForwardingPlan[]): BundleCounts {
+  return {
+    total: plans.length,
+    new: plans.filter((plan) => plan.action === "new").length,
+    matching: plans.filter((plan) => plan.action === "matching").length,
+    conflicts: plans.filter((plan) => plan.action === "replace" || plan.action === "copy" || plan.action === "skip").length
   }
 }
 
@@ -696,6 +845,20 @@ function hostKeyConflictsForPlans(plans: HostKeyPlan[]): HostKeyConflictPreview[
     }))
 }
 
+function forwardingConflictsForPlans(plans: ForwardingPlan[]): ForwardingConflictPreview[] {
+  return plans
+    .filter((plan): plan is ForwardingPlan & { original: ForwardingProfile } => plan.action === "skip" && plan.original !== undefined)
+    .map((plan) => ({
+      id: plan.imported.id,
+      name: plan.imported.name,
+      hostId: plan.imported.hostId,
+      localAddress: plan.imported.localAddress,
+      localPort: plan.imported.localPort,
+      remoteAddress: plan.imported.remoteAddress,
+      remotePort: plan.imported.remotePort
+    }))
+}
+
 function isEncryptedBundle(value: ConfigTemplate | EncryptedConfigBundle): value is EncryptedConfigBundle {
   return value.format === bundleFormat
 }
@@ -705,6 +868,10 @@ function sameHost(left: HostProfile, right: HostProfile): boolean {
 }
 
 function sameSettings(left: AppSettings, right: AppSettings): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function sameForwardingProfile(left: ForwardingProfile, right: ForwardingProfile): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 

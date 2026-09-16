@@ -9,6 +9,8 @@ import type {
 } from "../../electron/ipc/bridge-contract"
 import type { StorageHealth, StorageKind } from "../../electron/storage/storage-result"
 import type { AppSettings, ForwardingInfo, HostCharset, HostEnvironment, HostProfile, HostThemeColor, StoredWorkspaceWindow } from "./types"
+import type { ForwardingProfileRequest, ForwardingProfileView } from "../../electron/ports/types"
+import type { ForwardingProfile } from "../../electron/storage/types"
 
 const demoHosts: HostProfile[] = [
   { id: "demo-g11", name: "G11", host: "47.97.162.53", port: 22, username: "root", authMethod: "agent", platform: "ubuntu", group: "Personal", environment: "development", tags: ["core", "linux"], favorite: true, notes: "" },
@@ -28,6 +30,34 @@ type TerminalEvent = Parameters<RockerBridge["events"]["onSessionEvent"]>[0] ext
 const mockListeners = new Set<(event: TerminalEvent) => void>()
 const mockSessions = new Map<string, PreviewSession>()
 const mockForwards = new Map<string, ForwardingInfo>()
+const mockProfiles = new Map<string, ForwardingProfile>([
+  ["preview-forward-g11", {
+    id: "preview-forward-g11",
+    hostId: "demo-g11",
+    name: "G11 Web Console",
+    description: "Shared development console",
+    localAddress: "127.0.0.1",
+    localPort: 18080,
+    remoteAddress: "127.0.0.1",
+    remotePort: 8080,
+    autoStart: false,
+    createdAt: "2026-09-01T08:00:00.000Z",
+    updatedAt: "2026-09-10T12:30:00.000Z"
+  }],
+  ["preview-forward-adcp", {
+    id: "preview-forward-adcp",
+    hostId: "demo-adcp",
+    name: "Release Metrics",
+    description: "Read-only metrics endpoint",
+    localAddress: "127.0.0.1",
+    localPort: 19090,
+    remoteAddress: "127.0.0.1",
+    remotePort: 9090,
+    autoStart: true,
+    createdAt: "2026-08-22T10:00:00.000Z",
+    updatedAt: "2026-09-12T09:00:00.000Z"
+  }]
+])
 let mockHosts = [...demoHosts]
 let mockWorkspace: StoredWorkspaceWindow | undefined
 let mockHostKeys: HostKeyInventorySnapshot = {
@@ -188,6 +218,39 @@ function createBrowserPreviewBridge(): RockerBridge {
       },
       stop: async (forwardingId) => { mockForwards.delete(forwardingId) },
       list: async () => [...mockForwards.values()],
+      listOverview: async () => previewForwardingViews(),
+      listForHost: async (hostId) => previewForwardingViews(hostId),
+      createProfile: async (hostId, request) => {
+        const profile = createPreviewProfile(hostId, request)
+        mockProfiles.set(profile.id, profile)
+        return profile
+      },
+      updateProfile: async (profileId, request) => {
+        const existing = mockProfiles.get(profileId)
+        if (!existing) throw new Error("Forwarding profile was not found")
+        const profile = { ...existing, ...normalizePreviewForwardingRequest(request), updatedAt: new Date().toISOString() }
+        mockProfiles.set(profileId, profile)
+        return profile
+      },
+      removeProfile: async (profileId) => {
+        mockProfiles.delete(profileId)
+        for (const [id, forwarding] of mockForwards) if (forwarding.profileId === profileId) mockForwards.delete(id)
+      },
+      startProfile: async (profileId) => {
+        const profile = mockProfiles.get(profileId)
+        if (!profile) throw new Error("Forwarding profile was not found")
+        const existing = [...mockForwards.values()].find((forwarding) => forwarding.profileId === profileId)
+        const forwarding: ForwardingInfo = {
+          ...profileToPreviewSpec(profile),
+          id: existing?.id ?? crypto.randomUUID(),
+          connectionId: existing?.connectionId ?? `preview-${profile.hostId}`,
+          hostId: profile.hostId,
+          profileId,
+          status: "forwarding"
+        }
+        mockForwards.set(forwarding.id, forwarding)
+        return forwarding
+      },
       openAddress: async () => undefined
     },
     workspace: {
@@ -266,7 +329,8 @@ function createBrowserPreviewBridge(): RockerBridge {
         mockListeners.add(listener)
         return () => mockListeners.delete(listener)
       },
-      onSessionLaunch: () => () => undefined
+      onSessionLaunch: () => () => undefined,
+      onForwardingEvent: () => () => undefined
     }
   }
 }
@@ -387,4 +451,47 @@ function emitPreviewOutput(sessionId: string, channelGeneration: number, data: s
       bytes: new TextEncoder().encode(data)
     }
   })
+}
+
+function previewForwardingViews(hostId?: string): ForwardingProfileView[] {
+  return [...mockProfiles.values()]
+    .filter((profile) => hostId === undefined || profile.hostId === hostId)
+    .map((profile) => ({
+      profile: { ...profile },
+      runtime: [...mockForwards.values()].find((forwarding) => forwarding.profileId === profile.id)
+    }))
+}
+
+function createPreviewProfile(hostId: string, request: ForwardingProfileRequest): ForwardingProfile {
+  const now = new Date().toISOString()
+  return {
+    id: crypto.randomUUID(),
+    hostId,
+    ...normalizePreviewForwardingRequest(request),
+    createdAt: now,
+    updatedAt: now
+  }
+}
+
+function normalizePreviewForwardingRequest(request: ForwardingProfileRequest): Omit<ForwardingProfile, "id" | "hostId" | "createdAt" | "updatedAt"> {
+  return {
+    name: request.name.trim(),
+    ...(request.description?.trim() ? { description: request.description.trim() } : {}),
+    localAddress: request.localAddress,
+    localPort: request.localPort,
+    remoteAddress: request.remoteAddress.trim(),
+    remotePort: request.remotePort,
+    autoStart: request.autoStart
+  }
+}
+
+function profileToPreviewSpec(profile: ForwardingProfile): Omit<ForwardingInfo, "id" | "connectionId" | "status"> {
+  return {
+    localAddress: profile.localAddress,
+    localPort: profile.localPort,
+    remoteAddress: profile.remoteAddress,
+    remotePort: profile.remotePort,
+    hostId: profile.hostId,
+    profileId: profile.id
+  }
 }

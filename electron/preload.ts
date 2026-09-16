@@ -7,7 +7,7 @@ import {
   type RockerBridge
 } from "./ipc/bridge-contract"
 import type { TerminalSessionEvent } from "./ssh/types"
-import type { SessionLaunchRequest } from "./ipc/bridge-contract"
+import type { ForwardingRuntimeEvent, SessionLaunchRequest } from "./ipc/bridge-contract"
 
 const bridge: RockerBridge = {
   app: {
@@ -44,6 +44,12 @@ const bridge: RockerBridge = {
     resume: (forwardingId) => ipcRenderer.invoke(ipcChannels.portsResume, forwardingId),
     stop: (forwardingId) => ipcRenderer.invoke(ipcChannels.portsStop, forwardingId),
     list: () => ipcRenderer.invoke(ipcChannels.portsList),
+    listOverview: () => ipcRenderer.invoke(ipcChannels.portsListOverview),
+    listForHost: (hostId) => ipcRenderer.invoke(ipcChannels.portsListForHost, hostId),
+    createProfile: (hostId, request) => ipcRenderer.invoke(ipcChannels.portsCreateProfile, hostId, request),
+    updateProfile: (profileId, request) => ipcRenderer.invoke(ipcChannels.portsUpdateProfile, profileId, request),
+    removeProfile: (profileId) => ipcRenderer.invoke(ipcChannels.portsRemoveProfile, profileId),
+    startProfile: (profileId) => ipcRenderer.invoke(ipcChannels.portsStartProfile, profileId),
     openAddress: (forwardingId) => ipcRenderer.invoke(ipcChannels.portsOpenAddress, forwardingId)
   },
   workspace: {
@@ -93,6 +99,11 @@ const bridge: RockerBridge = {
       const handler = (_event: Electron.IpcRendererEvent, payload: SessionLaunchRequest): void => listener(payload)
       ipcRenderer.on(ipcChannels.sessionLaunch, handler)
       return () => ipcRenderer.removeListener(ipcChannels.sessionLaunch, handler)
+    },
+    onForwardingEvent: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: ForwardingRuntimeEvent): void => listener(payload)
+      ipcRenderer.on(ipcChannels.portsEvent, handler)
+      return () => ipcRenderer.removeListener(ipcChannels.portsEvent, handler)
     }
   }
 }
