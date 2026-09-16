@@ -244,7 +244,6 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
   }
 
   public async acquire(request: ConnectionAcquireRequest): Promise<ConnectionLease> {
-    if (request.kind !== "terminal") throw new Error("Connection acquisition is only available for terminal leases")
     let resolved: ResolvedConnectionRequest
     try {
       resolved = await this.resolveRequest(request)
@@ -271,7 +270,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
           (record.verifiedFingerprint !== undefined && record.state === "retrying"))
       )
       if (reusable) {
-        const lease = this.addLease(reusable, request.owner, "terminal")
+        const lease = this.addLease(reusable, request.owner, request.kind)
         const ready = this.waitForReady(reusable, lease, request.signal)
         if (reusable.state === "retrying") this.retryNow(reusable.connectionId)
         try {
@@ -287,7 +286,7 @@ export class SshConnectionManager implements ConnectionLeaseController, Connecti
 
     const record = this.createRecord(request, resolved, identityKey)
     this.connections.set(record.connectionId, record)
-    const lease = this.addLease(record, request.owner, "terminal")
+    const lease = this.addLease(record, request.owner, request.kind)
     const ready = this.waitForReady(record, lease, request.signal)
     if (this.isCurrent(record) && record.leases.has(lease.id)) {
       void this.connect(record, resolved).catch((error: unknown) => {

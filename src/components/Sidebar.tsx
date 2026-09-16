@@ -196,6 +196,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
                     </div>}
                   </div>
                   <SessionMenuItem commandId="session.split-horizontal" disabled={!isSessionCommandEnabled("session.split-horizontal", session, commandContext)} onClick={() => dispatchSessionCommand("session.split-horizontal", session, commandContext, onSessionCommand, closeSessionMenu)}><Columns2 aria-hidden="true" size={14} /><span>{t("sidebar.splitHorizontal")}</span></SessionMenuItem>
+                  <SessionMenuItem commandId="session.port-forwarding" disabled={!isSessionCommandEnabled("session.port-forwarding", session, commandContext)} onClick={() => dispatchSessionCommand("session.port-forwarding", session, commandContext, onSessionCommand, closeSessionMenu)}><Network aria-hidden="true" size={14} /><span>{t("commands.portForwarding")}</span></SessionMenuItem>
                   <SessionMenuItem className="session-menu-danger" commandId="session.close" disabled={!isSessionCommandEnabled("session.close", session, commandContext)} onClick={() => dispatchSessionCommand("session.close", session, commandContext, onSessionCommand, closeSessionMenu)}><X aria-hidden="true" size={14} /><span>{t("sidebar.close")}</span></SessionMenuItem>
                 </div>}
               </div>
@@ -254,7 +255,8 @@ function createSessionCommandContext(commandContext: CommandContext | undefined,
         duplicate: () => undefined,
         duplicateWindow: () => undefined,
         splitHorizontal: () => undefined,
-        close: () => undefined
+        close: () => undefined,
+        portForwarding: () => undefined
       },
       navigation: { navigate: () => undefined }
     }

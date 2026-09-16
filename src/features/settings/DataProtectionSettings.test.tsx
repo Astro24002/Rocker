@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import type { ConfigurationImportChooseResult, RockerBridge } from "../../../electron/ipc/bridge-contract"
 import type { CredentialProtectionStatus } from "../../../electron/storage/credentials"
+import type { ImportPreview } from "../../../electron/storage/config-bundle"
 import { I18nProvider } from "../../i18n"
 import { DataProtectionSettings } from "./DataProtectionSettings"
 
@@ -194,6 +195,60 @@ describe("DataProtectionSettings", () => {
       resolution: {
         hosts: { "host-a": "keep-local" },
         hostKeys: {},
+        importHostKeys: false,
+        applySettings: false,
+        importCredentials: false
+      }
+    }))
+  })
+
+  it("shows forwarding conflicts and sends the selected resolution", async () => {
+    const bridge = createBridge()
+    const preview: ImportPreview = {
+      format: "rocker-config",
+      encrypted: false,
+      requiresPassword: false,
+      createdAt: "2026-09-15T00:00:00.000Z",
+      hosts: { total: 1, new: 0, matching: 1, conflicts: 0 },
+      hostKeys: { total: 0, new: 0, matching: 0, conflicts: 0 },
+      forwardings: { total: 1, new: 0, matching: 0, conflicts: 1 },
+      hostConflicts: [],
+      hostKeyConflicts: [],
+      forwardingConflicts: [{
+        id: "profile-a",
+        name: "Web console",
+        hostId: "host-a",
+        localAddress: "127.0.0.1",
+        localPort: 18080,
+        remoteAddress: "127.0.0.1",
+        remotePort: 8080
+      }],
+      credentials: { total: 0 },
+      hasSettings: false
+    }
+    bridge.configuration.chooseImport = vi.fn(async () => ({
+      canceled: false,
+      importId: "22222222-2222-4222-8222-222222222222",
+      preview
+    }))
+    render(<I18nProvider><DataProtectionSettings bridge={bridge} /></I18nProvider>)
+
+    fireEvent.click(screen.getByRole("button", { name: "Import configuration" }))
+    await waitFor(() => expect(screen.getByText("Forwarding profile conflicts")).toBeInTheDocument())
+    const apply = screen.getByRole("button", { name: "Apply import" })
+    expect(apply).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText("Web console forwarding action"), { target: { value: "use-imported" } })
+    expect(apply).toBeEnabled()
+    fireEvent.click(apply)
+
+    await waitFor(() => expect(bridge.configuration.applyImport).toHaveBeenCalledWith({
+      importId: "22222222-2222-4222-8222-222222222222",
+      password: undefined,
+      resolution: {
+        hosts: {},
+        hostKeys: {},
+        forwardings: { "profile-a": "use-imported" },
         importHostKeys: false,
         applySettings: false,
         importCredentials: false

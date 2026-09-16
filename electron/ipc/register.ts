@@ -9,8 +9,9 @@ import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import { diagnosticFileName, writeDiagnosticExport } from "../diagnostics/diagnostic-export"
 import type { ForwardingManager } from "../ports/forwarding-manager"
 import type { PortService } from "../ports/port-service"
-import type { ForwardingSpec } from "../ports/types"
+import type { ForwardingProfileRequest, ForwardingProfileView, ForwardingSpec } from "../ports/types"
 import type { CredentialVault } from "../storage/credentials"
+import type { ForwardingProfileStore } from "../storage/forwarding-profile-store"
 import type { SerializedOperationQueue } from "../storage/operation-queue"
 import {
   ConfigBundleService,
@@ -61,6 +62,7 @@ export interface IpcDependencies {
   connections: SshConnectionManager
   ports: PortService
   forwarding: ForwardingManager
+  forwardingProfiles?: Pick<ForwardingProfileStore, "list" | "get" | "save" | "remove" | "replace" | "flush">
   history: HistoryStore
   settings: SettingsStore
   diagnostics: DiagnosticLogger
@@ -128,6 +130,12 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   ipcMain.handle(ipcChannels.hostsRemove, async (_event, id: unknown) => {
     assertId(id, "host")
     await dependencies.mutations.run(async () => {
+      const profiles = dependencies.forwardingProfiles ? await dependencies.forwardingProfiles.list(id) : []
+      const runtimes = dependencies.forwarding.list().filter((runtime) => runtime.hostId === id || profiles.some((profile) => profile.id === runtime.profileId))
+      await Promise.all(runtimes.map((runtime) => dependencies.forwarding.stop(runtime.id)))
+      if (dependencies.forwardingProfiles) {
+        await Promise.all(profiles.map((profile) => dependencies.forwardingProfiles!.remove(profile.id)))
+      }
       await dependencies.hosts.remove(id)
       await Promise.all([
         dependencies.credentials.clear(id, "password"),
@@ -274,6 +282,71 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
         const forwardingOwner = dependencies.forwarding.ownerForForwarding(forwarding.id)
         return forwardingOwner !== undefined && sameRuntimeOwner(forwardingOwner, owner)
       })
+  })
+  ipcMain.handle(ipcChannels.portsListOverview, async (event): Promise<ForwardingProfileView[]> => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertCurrentOwner(dependencies, owner)
+    return listForwardingViews(dependencies, owner)
+  })
+  ipcMain.handle(ipcChannels.portsListForHost, async (event, hostId: unknown): Promise<ForwardingProfileView[]> => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(hostId, "host")
+    await requireHost(dependencies, hostId)
+    assertCurrentOwner(dependencies, owner)
+    return listForwardingViews(dependencies, owner, hostId)
+  })
+  ipcMain.handle(ipcChannels.portsCreateProfile, async (event, hostId: unknown, value: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(hostId, "host")
+    await requireHost(dependencies, hostId)
+    const request = normalizeForwardingProfileRequest(value)
+    const store = requireForwardingProfileStore(dependencies)
+    const now = new Date().toISOString()
+    const profile = {
+      id: randomUUID(),
+      hostId,
+      ...request,
+      createdAt: now,
+      updatedAt: now
+    }
+    assertCurrentOwner(dependencies, owner)
+    await dependencies.mutations.run(() => store.save(profile))
+    return profile
+  })
+  ipcMain.handle(ipcChannels.portsUpdateProfile, async (event, profileId: unknown, value: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(profileId, "forwarding profile")
+    const request = normalizeForwardingProfileRequest(value)
+    const store = requireForwardingProfileStore(dependencies)
+    const existing = await store.get(profileId)
+    if (!existing) throw new Error("Forwarding profile was not found")
+    await requireHost(dependencies, existing.hostId)
+    const profile = { ...existing, ...request, updatedAt: new Date().toISOString() }
+    assertCurrentOwner(dependencies, owner)
+    await dependencies.mutations.run(() => store.save(profile))
+    return profile
+  })
+  ipcMain.handle(ipcChannels.portsRemoveProfile, async (event, profileId: unknown): Promise<void> => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(profileId, "forwarding profile")
+    const store = requireForwardingProfileStore(dependencies)
+    const existing = await store.get(profileId)
+    if (!existing) return
+    assertCurrentOwner(dependencies, owner)
+    await dependencies.mutations.run(async () => {
+      await Promise.all(dependencies.forwarding.list().filter((runtime) => runtime.profileId === profileId).map((runtime) => dependencies.forwarding.stop(runtime.id)))
+      await store.remove(profileId)
+    })
+  })
+  ipcMain.handle(ipcChannels.portsStartProfile, async (event, profileId: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(profileId, "forwarding profile")
+    const store = requireForwardingProfileStore(dependencies)
+    const profile = await store.get(profileId)
+    if (!profile) throw new Error("Forwarding profile was not found")
+    await requireHost(dependencies, profile.hostId)
+    assertCurrentOwner(dependencies, owner)
+    return dependencies.forwarding.startProfile(profile, owner)
   })
   ipcMain.handle(ipcChannels.portsOpenAddress, async (event, forwardingId: unknown) => {
     const owner = currentOwnerForWebContents(dependencies, event.sender.id)
@@ -497,8 +570,13 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   const unsubscribe = dependencies.sessions.onEvent(({ owner, event }) => {
     dependencies.windows.sendToOwner(owner, ipcChannels.sessionEvent, event)
   })
+  const unsubscribeForwarding = dependencies.forwarding.onEvent?.((event) => {
+    const { owner, ...payload } = event
+    dependencies.windows.sendToOwner(owner, ipcChannels.portsEvent, payload)
+  })
   return () => {
     unsubscribe()
+    unsubscribeForwarding?.()
     pendingConfigurationImports.clear()
     for (const channel of Object.values(ipcChannels)) {
       if (channel !== ipcChannels.sessionEvent && channel !== ipcChannels.sessionLaunch) ipcMain.removeHandler(channel)
@@ -914,11 +992,12 @@ function normalizeConfigurationImportRequest(value: unknown): { importId: string
 
 function normalizeConflictResolution(value: unknown): ConflictResolution {
   if (!isPlainRecord(value)) throw new Error("Invalid configuration import resolution")
-  const allowed = new Set(["hosts", "hostKeys", "importHostKeys", "applySettings", "importCredentials"])
+  const allowed = new Set(["hosts", "hostKeys", "forwardings", "importHostKeys", "applySettings", "importCredentials"])
   if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("Invalid configuration import resolution")
   const result: ConflictResolution = {}
   if (value.hosts !== undefined) result.hosts = normalizeResolutionMap(value.hosts, ["keep-local", "use-imported", "create-copy", "skip"], 128)
   if (value.hostKeys !== undefined) result.hostKeys = normalizeResolutionMap(value.hostKeys, ["keep-local", "replace-host-key", "skip"], 600)
+  if (value.forwardings !== undefined) result.forwardings = normalizeResolutionMap(value.forwardings, ["keep-local", "use-imported", "create-copy", "skip"], 128)
   if (value.importHostKeys !== undefined) {
     if (typeof value.importHostKeys !== "boolean") throw new Error("Invalid configuration import resolution")
     result.importHostKeys = value.importHostKeys
@@ -1073,6 +1152,67 @@ function isNonBlankBoundedString(value: unknown, maximumLength: number): value i
 
 function assertId(value: unknown, kind: string): asserts value is string {
   if (!isBoundedString(value, 128)) throw new Error(`Invalid ${kind} identifier`)
+}
+
+function requireForwardingProfileStore(dependencies: IpcDependencies): NonNullable<IpcDependencies["forwardingProfiles"]> {
+  if (!dependencies.forwardingProfiles) throw new Error("Forwarding profile storage is unavailable")
+  return dependencies.forwardingProfiles
+}
+
+async function requireHost(dependencies: IpcDependencies, hostId: string): Promise<HostProfile> {
+  const host = (await dependencies.hosts.list()).find((candidate) => candidate.id === hostId)
+  if (!host) throw new Error("Host profile not found")
+  return host
+}
+
+async function listForwardingViews(
+  dependencies: IpcDependencies,
+  owner: RuntimeOwner,
+  hostId?: string
+): Promise<ForwardingProfileView[]> {
+  const store = requireForwardingProfileStore(dependencies)
+  const profiles = await store.list(hostId)
+  const runtimes = dependencies.forwarding.list()
+    .filter((runtime) => runtime.profileId !== undefined)
+    .filter((runtime) => hostId === undefined || runtime.hostId === hostId)
+    .filter((runtime) => runtime.status === "stopped" || (() => {
+      const runtimeOwner = dependencies.forwarding.ownerForForwarding(runtime.id)
+      return runtimeOwner !== undefined && sameRuntimeOwner(runtimeOwner, owner)
+    })())
+  const runtimeByProfile = new Map<string, typeof runtimes[number]>()
+  for (const runtime of runtimes) {
+    if (runtime.profileId) runtimeByProfile.set(runtime.profileId, runtime)
+  }
+  return profiles.map((profile) => ({
+    profile,
+    runtime: runtimeByProfile.get(profile.id)
+  }))
+}
+
+function normalizeForwardingProfileRequest(value: unknown): ForwardingProfileRequest {
+  if (!isPlainRecord(value)) throw new Error("Invalid forwarding profile request")
+  if (!isNonBlankBoundedString(value.name, 256)) throw new Error("Forwarding profile name is required")
+  if (value.description !== undefined && (typeof value.description !== "string" || value.description.length > 10_000)) {
+    throw new Error("Invalid forwarding profile description")
+  }
+  if (!isForwardingLocalAddress(value.localAddress)) throw new Error("Invalid local bind address")
+  if (!isValidRemotePort(value.localPort)) throw new Error("Local port must be between 1 and 65535")
+  if (!isNonBlankBoundedString(value.remoteAddress, 512)) throw new Error("Remote address is required")
+  if (!isValidRemotePort(value.remotePort)) throw new Error("Remote port must be between 1 and 65535")
+  if (typeof value.autoStart !== "boolean") throw new Error("Invalid auto-start setting")
+  return {
+    name: value.name.trim(),
+    ...(typeof value.description === "string" && value.description.trim() ? { description: value.description.trim() } : {}),
+    localAddress: value.localAddress,
+    localPort: value.localPort,
+    remoteAddress: value.remoteAddress.trim(),
+    remotePort: value.remotePort,
+    autoStart: value.autoStart
+  }
+}
+
+function isForwardingLocalAddress(value: unknown): value is "127.0.0.1" | "::1" | "0.0.0.0" {
+  return value === "127.0.0.1" || value === "::1" || value === "0.0.0.0"
 }
 
 function isValidForwardingSpec(value: unknown): value is ForwardingSpec {

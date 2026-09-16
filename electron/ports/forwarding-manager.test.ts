@@ -16,6 +16,8 @@ import {
   type LocalListenerFactory
 } from "./forwarding-manager"
 import type { ForwardingSpec } from "./types"
+import type { ForwardingInfo } from "./types"
+import type { ForwardingProfile } from "../storage/types"
 import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 
 const connectionId = "connection-a"
@@ -26,6 +28,19 @@ const loopbackSpec: ForwardingSpec = {
   localPort: 43123,
   remoteAddress: "127.0.0.1",
   remotePort: 3000
+}
+
+const profile: ForwardingProfile = {
+  id: "profile-dashboard",
+  hostId: "host-a",
+  name: "Dashboard",
+  localAddress: "127.0.0.1",
+  localPort: 43125,
+  remoteAddress: "127.0.0.1",
+  remotePort: 3000,
+  autoStart: false,
+  createdAt: "2026-09-15T00:00:00.000Z",
+  updatedAt: "2026-09-15T00:00:00.000Z"
 }
 
 describe("ForwardingManager", () => {
@@ -232,6 +247,116 @@ describe("ForwardingManager", () => {
 
     expect(clientEnd).toHaveBeenCalledOnce()
   })
+
+  it("starts a saved profile without a terminal and keeps it restartable after stop", async () => {
+    const connections = new FakeConnections()
+    const listeners = createListenerFactory()
+    const acquired: ConnectionLease[] = []
+    connections.acquire = vi.fn(async () => {
+      const lease: ConnectionLease = {
+        id: "profile-lease-" + String(acquired.length + 1),
+        connectionId,
+        owner,
+        kind: "forward"
+      }
+      acquired.push(lease)
+      connections.addLease(lease)
+      return lease
+    })
+    const forwards = new ForwardingManager(connections, { createListener: listeners.create })
+    const manager = forwards as unknown as {
+      startProfile(value: ForwardingProfile, nextOwner: RuntimeOwner): Promise<ForwardingInfo>
+    }
+
+    const started = await manager.startProfile(profile, owner)
+    await forwards.stop(started.id)
+
+    expect(forwards.get(started.id)).toMatchObject({
+      profileId: profile.id,
+      hostId: profile.hostId,
+      status: "stopped"
+    })
+
+    const restarted = await manager.startProfile(profile, owner)
+
+    expect(restarted.id).toBe(started.id)
+    expect(restarted.status).toBe("forwarding")
+    expect(connections.acquire).toHaveBeenCalledTimes(2)
+    expect(listeners.created).toHaveLength(2)
+  })
+
+  it("emits profile identity with forwarding lifecycle events", async () => {
+    const connections = new FakeConnections()
+    connections.acquire = vi.fn(async () => {
+      const lease: ConnectionLease = { id: "profile-lease", connectionId, owner, kind: "forward" }
+      connections.addLease(lease)
+      return lease
+    })
+    const events: ForwardingEvent[] = []
+    const forwards = new ForwardingManager(connections, {
+      createListener: createListenerFactory().create,
+      onEvent: (event) => events.push(event)
+    })
+    const manager = forwards as unknown as {
+      startProfile(value: ForwardingProfile, nextOwner: RuntimeOwner): Promise<ForwardingInfo>
+    }
+
+    const started = await manager.startProfile(profile, owner)
+    await forwards.stop(started.id)
+
+    expect(events.every((event) => event.profileId === profile.id && event.hostId === profile.hostId)).toBe(true)
+  })
+
+  it("resumes a suspended saved profile without acquiring a second lease", async () => {
+    const connections = new FakeConnections()
+    const listeners = createListenerFactory()
+    const acquire = vi.fn(async () => {
+      const lease: ConnectionLease = { id: "profile-lease", connectionId, owner, kind: "forward" }
+      connections.addLease(lease)
+      return lease
+    })
+    connections.acquire = acquire
+    const forwards = new ForwardingManager(connections, { createListener: listeners.create })
+    const manager = forwards as unknown as {
+      startProfile(value: ForwardingProfile, nextOwner: RuntimeOwner): Promise<ForwardingInfo>
+    }
+    const started = await manager.startProfile(profile, owner)
+
+    connections.emit({ kind: "lost", connectionId, owner, reason: "network" })
+    const resumed = await manager.startProfile(profile, owner)
+
+    expect(resumed.id).toBe(started.id)
+    expect(resumed.status).toBe("forwarding")
+    expect(acquire).toHaveBeenCalledOnce()
+    expect(listeners.created).toHaveLength(2)
+  })
+
+  it("rejects profile runtime replacement from another owner", async () => {
+    const connections = new FakeConnections()
+    const listeners = createListenerFactory()
+    connections.acquire = vi.fn(async () => {
+      const lease: ConnectionLease = { id: "profile-lease", connectionId, owner, kind: "forward" }
+      connections.addLease(lease)
+      return lease
+    })
+    const forwards = new ForwardingManager(connections, { createListener: listeners.create })
+    await forwards.startProfile(profile, owner)
+
+    await expect(forwards.createProfileRuntime(profile, connectionId, otherOwner)).rejects.toThrow("Port forwarding is owned by another window")
+    expect(listeners.created).toHaveLength(1)
+  })
+
+  it("rejects an invalid saved profile before acquiring a transport", async () => {
+    const connections = new FakeConnections()
+    const acquire = vi.fn(async () => {
+      throw new Error("should not acquire")
+    })
+    connections.acquire = acquire
+    const forwards = new ForwardingManager(connections, { createListener: createListenerFactory().create })
+
+    await expect(forwards.startProfile({ ...profile, localPort: 0 }, owner)).rejects.toThrow("Forwarding profile is invalid")
+    expect(acquire).not.toHaveBeenCalled()
+  })
 })
 
 class FakeConnections implements ForwardingConnectionAccess {
@@ -240,6 +365,7 @@ class FakeConnections implements ForwardingConnectionAccess {
   private readonly connectionOwners = new Map<string, RuntimeOwner>()
   private nextLease = 1
   private releases = 0
+  public acquire?: ForwardingConnectionAccess["acquire"]
 
   public retain(connectionId: string, owner: RuntimeOwner, kind: "forward"): ConnectionLease {
     const existingOwner = this.connectionOwners.get(connectionId)
@@ -257,6 +383,10 @@ class FakeConnections implements ForwardingConnectionAccess {
 
   public async release(leaseId: string): Promise<void> {
     if (this.leases.delete(leaseId)) this.releases += 1
+  }
+
+  public addLease(lease: ConnectionLease): void {
+    this.leases.set(lease.id, lease)
   }
 
   public async releaseOwner(owner: RuntimeOwner): Promise<void> {

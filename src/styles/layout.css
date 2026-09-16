@@ -169,6 +169,35 @@
   padding: 18px 30px;
 }
 
+@media (max-width: 980px) {
+  .ports-content {
+    padding: 16px 18px;
+  }
+
+  .ports-overview-table,
+  .ports-host-table {
+    overflow-x: auto;
+  }
+
+  .ports-overview-table .ports-heading,
+  .ports-overview-row,
+  .ports-host-table .ports-heading,
+  .ports-profile-row {
+    min-width: 760px;
+  }
+}
+
+@media (max-width: 680px) {
+  .view-header-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .forwarding-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .settings-list {
   padding-top: 0;
 }

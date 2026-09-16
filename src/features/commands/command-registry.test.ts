@@ -38,6 +38,7 @@ describe("command registry", () => {
       "session.duplicate-window",
       "session.split-horizontal",
       "session.close",
+      "session.port-forwarding",
       "navigation.hosts",
       "navigation.trust",
       "navigation.history",

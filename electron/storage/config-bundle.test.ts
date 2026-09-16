@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
   ConfigBundleService,
   exportEncryptedBundle,
@@ -9,6 +9,7 @@ import {
   type ExportSnapshot
 } from "./config-bundle"
 import type { AppSettings, HostProfile } from "./types"
+import type { ForwardingProfile } from "./types"
 
 const settings: AppSettings = {
   locale: "en",
@@ -146,6 +147,34 @@ describe("configuration bundles", () => {
 
     expect(target.credentials.get("host-a:password")).toBe("local-password")
   })
+
+  it("round-trips forwarding profiles in templates and encrypted bundles", async () => {
+    const template = exportTemplate(snapshot())
+    expect(template.profiles).toEqual([forwardingProfile()])
+
+    const bundle = await exportEncryptedBundle(snapshot(), "migration password")
+    await expect(inspectBundle(bundle, "migration password")).resolves.toMatchObject({
+      forwardings: { total: 1 }
+    })
+  })
+
+  it("previews forwarding conflicts and imports profiles without starting runtimes", async () => {
+    const target = createTarget()
+    target.forwardingProfiles = [{ ...forwardingProfile(), remotePort: 9090 }]
+    const replace = vi.spyOn(target, "replaceForwardingProfiles")
+    const service = new ConfigBundleService(target)
+    const bundle = await exportEncryptedBundle(snapshot(), "migration password")
+
+    await expect(service.preview(bundle, "migration password")).resolves.toMatchObject({
+      forwardings: { total: 1, conflicts: 1 }
+    })
+    await expect(service.import(bundle, "migration password", {
+      hosts: { "host-a": "use-imported" },
+      forwardings: { "forwarding-a": "use-imported" }
+    })).resolves.toMatchObject({ importedForwardings: 0, replacedForwardings: 1 })
+    expect(replace).toHaveBeenCalledOnce()
+    expect(target.forwardingProfiles[0]).toMatchObject({ remotePort: 8080 })
+  })
 })
 
 function snapshot(): ExportSnapshot {
@@ -163,7 +192,24 @@ function snapshot(): ExportSnapshot {
     }],
     settings,
     hostKeys: [{ host: "server.example", port: 22, fingerprint: "host-fingerprint" }],
-    credentials: [{ hostId: "host-a", kind: "password", value: "password-value" }]
+    credentials: [{ hostId: "host-a", kind: "password", value: "password-value" }],
+    profiles: [forwardingProfile()]
+  }
+}
+
+function forwardingProfile(): ForwardingProfile {
+  return {
+    id: "forwarding-a",
+    hostId: "host-a",
+    name: "Web console",
+    description: "Local console",
+    localAddress: "127.0.0.1",
+    localPort: 18080,
+    remoteAddress: "127.0.0.1",
+    remotePort: 8080,
+    autoStart: false,
+    createdAt: "2026-09-08T00:00:00.000Z",
+    updatedAt: "2026-09-08T00:00:00.000Z"
   }
 }
 
@@ -171,6 +217,7 @@ function createTarget(): ConfigImportTarget & {
   hosts: HostProfile[]
   hostKeys: Map<string, string>
   credentials: Map<string, string>
+  forwardingProfiles: ForwardingProfile[]
   settings: AppSettings
 } {
   const hosts: HostProfile[] = [{
@@ -185,11 +232,14 @@ function createTarget(): ConfigImportTarget & {
   }]
   const hostKeys = new Map([["server.example:22", "old-fingerprint"]])
   const credentials = new Map<string, string>()
+  let forwardingProfiles: ForwardingProfile[] = []
   let currentSettings = { ...settings }
   return {
     hosts,
     hostKeys,
     credentials,
+    get forwardingProfiles() { return forwardingProfiles },
+    set forwardingProfiles(profiles: ForwardingProfile[]) { forwardingProfiles = profiles },
     get settings() { return { ...currentSettings } },
     listHosts: async () => hosts.map((host) => ({ ...host })),
     saveHost: async (profile) => {
@@ -225,6 +275,8 @@ function createTarget(): ConfigImportTarget & {
         }
       }
       return { imported, skippedExisting }
-    }
+    },
+    listForwardingProfiles: async () => forwardingProfiles.map((profile) => ({ ...profile })),
+    replaceForwardingProfiles: async (profiles) => { forwardingProfiles = profiles.map((profile) => ({ ...profile })) }
   }
 }

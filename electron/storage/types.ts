@@ -75,6 +75,27 @@ export interface StoredWorkspaceDocument {
   windows: StoredWorkspaceWindow[]
 }
 
+export type ForwardingLocalAddress = "127.0.0.1" | "::1" | "0.0.0.0"
+
+export interface ForwardingProfile {
+  id: string
+  hostId: string
+  name: string
+  description?: string
+  localAddress: ForwardingLocalAddress
+  localPort: number
+  remoteAddress: string
+  remotePort: number
+  autoStart: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface StoredForwardingDocument {
+  version: 1
+  profiles: ForwardingProfile[]
+}
+
 export interface AppSettings {
   locale: "en" | "zh-CN"
   sidebarWidth: number

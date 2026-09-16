@@ -1,3 +1,5 @@
+import type { ForwardingLocalAddress, ForwardingProfile } from "../storage/types"
+
 export type PortSource = "ss" | "netstat" | "manual"
 export type PortStatus = "discovered" | "starting" | "forwarding" | "suspended" | "stopping" | "stopped" | "error"
 
@@ -21,9 +23,26 @@ export interface ForwardingSpec {
   remotePort: number
 }
 
+export interface ForwardingProfileRequest {
+  name: string
+  description?: string
+  localAddress: ForwardingLocalAddress
+  localPort: number
+  remoteAddress: string
+  remotePort: number
+  autoStart: boolean
+}
+
 export interface ForwardingInfo extends ForwardingSpec {
   id: string
-  connectionId: string
+  connectionId?: string
+  hostId?: string
+  profileId?: string
   status: PortStatus
   error?: string
+}
+
+export interface ForwardingProfileView {
+  profile: ForwardingProfile
+  runtime?: ForwardingInfo
 }

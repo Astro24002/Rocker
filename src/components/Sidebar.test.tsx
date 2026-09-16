@@ -117,6 +117,7 @@ describe("Sidebar session actions", () => {
       "Rename",
       "Duplicate",
       "Split horizontally",
+      "Port forwarding",
       "Close"
     ])
     const duplicate = screen.getByRole("menuitem", { name: "Duplicate" })
@@ -133,6 +134,17 @@ describe("Sidebar session actions", () => {
     expect(onSessionCommand).toHaveBeenCalledWith("session.duplicate", expect.objectContaining({ id: session.id }))
     expect(menu).not.toBeInTheDocument()
     expect(submenu).not.toBeInTheDocument()
+  })
+
+  it("dispatches the single Host-local forwarding entry", () => {
+    const onSessionCommand = vi.fn()
+    render(<I18nProvider><Sidebar width={220} activeNav="terminal" sessions={[session]} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Port forwarding" }))
+
+    expect(onSessionCommand).toHaveBeenCalledWith("session.port-forwarding", session)
+    expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
   })
 
   it("opens Duplicate with pointer hover and returns focus on Escape", () => {
