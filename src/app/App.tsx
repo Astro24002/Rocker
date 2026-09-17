@@ -921,10 +921,15 @@ function Workspace() {
     const sessionId = crypto.randomUUID()
     pendingOpens.current.set(sessionId, { hostId: host.id, forceNewConnection })
     setWorkspace((current) => {
+      const match = /^(.*?) ?\((\d+)\)$/.exec(session.label)
+      const baseLabel = match?.[1] ?? session.label
+      let suffix = match ? Number(match[2]) + 1 : 1
+      const labels = new Set(current.sessions.filter((candidate) => isSshSession(candidate) && candidate.hostId === session.hostId).map((candidate) => candidate.label))
+      while (labels.has(`${baseLabel} (${suffix})`) || labels.has(`${baseLabel}(${suffix})`)) suffix += 1
       const opened = openSession(current, {
         id: sessionId,
         hostId: session.hostId,
-        label: `${session.label}${split ? " split" : " copy"}`,
+        label: split ? `${session.label} split` : `${baseLabel} (${suffix})`,
         kind: "ssh"
       })
       if (!split) return opened
@@ -1273,6 +1278,7 @@ function Workspace() {
         activeNav={activeNav}
         sessions={workspace.sessions}
         activeSessionId={workspace.activeSessionId}
+        themeForHost={themeForHost}
         commandPaletteOpen={paletteOpen}
         contextMenuOwner={contextMenuOwner}
         onNavigate={navigateWorkspace}

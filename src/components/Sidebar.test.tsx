@@ -25,6 +25,28 @@ describe("Sidebar session actions", () => {
     expect(container.querySelector(".sidebar-resizer")).toBeNull()
   })
 
+  it.each(["connections", "history", "trust"] as const)("marks Connections as the current workspace for %s", (activeNav) => {
+    render(<I18nProvider><Sidebar width={220} activeNav={activeNav} sessions={[session]} activeSessionId={session.id} onNavigate={vi.fn()} /></I18nProvider>)
+
+    expect(screen.getByRole("button", { name: "Connections" })).toHaveAttribute("aria-current", "page")
+    expect(screen.getByRole("button", { name: "SSH G11" })).not.toHaveAttribute("aria-current")
+  })
+
+  it("visually marks only the session whose content is currently on stage", () => {
+    const themeForHost = vi.fn(() => "paper")
+    const { rerender } = render(<I18nProvider><Sidebar width={220} activeNav="terminal" sessions={[session]} activeSessionId={session.id} themeForHost={themeForHost} onNavigate={vi.fn()} /></I18nProvider>)
+
+    expect(screen.getByRole("button", { name: "SSH G11" })).toHaveAttribute("aria-current", "page")
+    expect(screen.getByRole("button", { name: "SSH G11" })).toHaveAttribute("data-theme", "paper")
+    expect(themeForHost).toHaveBeenCalledWith("host-1")
+    expect(screen.getByRole("button", { name: "Hosts" })).not.toHaveAttribute("aria-current")
+
+    rerender(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} activeSessionId={session.id} themeForHost={themeForHost} onNavigate={vi.fn()} /></I18nProvider>)
+    expect(screen.getByRole("button", { name: "SSH G11" })).not.toHaveAttribute("aria-current")
+    expect(screen.getByRole("button", { name: "SSH G11" })).not.toHaveAttribute("data-theme")
+    expect(screen.getByRole("button", { name: "Hosts" })).toHaveAttribute("aria-current", "page")
+  })
+
   it("activates a session on left click and opens its menu on right click", () => {
     const onNavigate = vi.fn()
     const onSessionActivate = vi.fn()
@@ -37,9 +59,12 @@ describe("Sidebar session actions", () => {
     expect(screen.queryByRole("button", { name: /Actions for G11/ })).not.toBeInTheDocument()
 
     fireEvent.contextMenu(sessionButton)
-    expect(screen.getByRole("menu", { name: "Session actions for G11" })).toBeInTheDocument()
-    expect(screen.getByRole("menuitem", { name: "Reconnect" })).toBeInTheDocument()
+    const menu = screen.getByRole("menu", { name: "Session actions for G11" })
+    expect(menu).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "SSH G11" }).closest(".sidebar-session-list")).not.toContainElement(menu)
+    expect(menu).toHaveStyle({ visibility: "visible" })
     expect(screen.getByRole("menuitem", { name: "Duplicate" })).toBeInTheDocument()
+    expect(screen.getByRole("menuitem", { name: "Duplicate in a new window" })).toBeInTheDocument()
     expect(screen.getByRole("menuitem", { name: "Close" })).toBeInTheDocument()
   })
 
@@ -106,34 +131,38 @@ describe("Sidebar session actions", () => {
     expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
   })
 
-  it("keeps Duplicate as a submenu and dispatches the selected existing command id", () => {
+  it("shows the requested flat menu order and duplicates in this window", () => {
     const onSessionCommand = vi.fn()
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state: "disconnected" }]} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     const menu = screen.getByRole("menu", { name: "Session actions for G11" })
     expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-      "Reconnect",
-      "Rename",
       "Duplicate",
-      "Split horizontally",
+      "Duplicate in a new window",
+      "Rename",
       "Port forwarding",
       "Close"
     ])
     const duplicate = screen.getByRole("menuitem", { name: "Duplicate" })
-    expect(duplicate).toHaveAttribute("aria-haspopup", "menu")
-    expect(screen.queryByRole("menu", { name: "Duplicate options" })).not.toBeInTheDocument()
-
-    fireEvent.keyDown(duplicate, { key: "ArrowRight" })
-    const submenu = screen.getByRole("menu", { name: "Duplicate options" })
-    expect(screen.getByRole("menuitem", { name: "In this window" })).toBeInTheDocument()
-    expect(screen.getByRole("menuitem", { name: "In a new window" })).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole("menuitem", { name: "In this window" }))
+    expect(duplicate).not.toHaveAttribute("aria-haspopup")
+    fireEvent.pointerEnter(duplicate)
+    expect(screen.getAllByRole("menu")).toHaveLength(1)
+    fireEvent.click(duplicate)
     expect(onSessionCommand).toHaveBeenCalledTimes(1)
     expect(onSessionCommand).toHaveBeenCalledWith("session.duplicate", expect.objectContaining({ id: session.id }))
     expect(menu).not.toBeInTheDocument()
-    expect(submenu).not.toBeInTheDocument()
+  })
+
+  it("dispatches Duplicate in a new window directly when available", () => {
+    const onSessionCommand = vi.fn()
+    render(<I18nProvider><Sidebar width={220} activeNav="terminal" sessions={[session]} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate in a new window" }))
+
+    expect(onSessionCommand).toHaveBeenCalledExactlyOnceWith("session.duplicate-window", session)
+    expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
   })
 
   it("dispatches the single Host-local forwarding entry", () => {
@@ -147,61 +176,41 @@ describe("Sidebar session actions", () => {
     expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
   })
 
-  it("opens Duplicate with pointer hover and returns focus on Escape", () => {
-    render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} /></I18nProvider>)
-
-    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
-    const duplicate = screen.getByRole("menuitem", { name: "Duplicate" })
-    fireEvent.pointerEnter(duplicate)
-    expect(screen.getByRole("menu", { name: "Duplicate options" })).toBeInTheDocument()
-    fireEvent.keyDown(screen.getByRole("menu", { name: "Duplicate options" }), { key: "Escape" })
-    expect(screen.queryByRole("menu", { name: "Duplicate options" })).not.toBeInTheDocument()
-    expect(duplicate).toHaveFocus()
-  })
-
-  it("only enables Reconnect for disconnected or error sessions", () => {
+  it("only enables new-window duplication for a connected SSH session", () => {
     const { rerender } = render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
-    expect(screen.getByRole("menuitem", { name: "Reconnect" })).toBeDisabled()
+    expect(screen.getByRole("menuitem", { name: "Duplicate in a new window" })).toBeEnabled()
 
     rerender(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state: "error" }]} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
     fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
-    expect(screen.getByRole("menuitem", { name: "Reconnect" })).toBeEnabled()
+    expect(screen.getByRole("menuitem", { name: "Duplicate in a new window" })).toBeDisabled()
   })
 
   it.each([
-    ["idle", { reconnect: false, rename: true, duplicate: false, duplicateWindow: false, split: false, close: true }],
-    ["restoring", { reconnect: false, rename: true, duplicate: false, duplicateWindow: false, split: false, close: true }],
-    ["connecting", { reconnect: false, rename: true, duplicate: false, duplicateWindow: false, split: false, close: true }],
-    ["connected", { reconnect: false, rename: true, duplicate: true, duplicateWindow: true, split: true, close: true }],
-    ["reconnecting", { reconnect: false, rename: true, duplicate: false, duplicateWindow: false, split: false, close: true }],
-    ["disconnected", { reconnect: true, rename: true, duplicate: true, duplicateWindow: false, split: false, close: true }],
-    ["error", { reconnect: true, rename: true, duplicate: true, duplicateWindow: false, split: false, close: true }],
-    ["closing", { reconnect: false, rename: false, duplicate: false, duplicateWindow: false, split: false, close: false }]
+    ["idle", { rename: true, duplicate: false, duplicateWindow: false, forwarding: true, close: true }],
+    ["restoring", { rename: true, duplicate: false, duplicateWindow: false, forwarding: true, close: true }],
+    ["connecting", { rename: true, duplicate: false, duplicateWindow: false, forwarding: true, close: true }],
+    ["connected", { rename: true, duplicate: true, duplicateWindow: true, forwarding: true, close: true }],
+    ["reconnecting", { rename: true, duplicate: false, duplicateWindow: false, forwarding: true, close: true }],
+    ["disconnected", { rename: true, duplicate: true, duplicateWindow: false, forwarding: true, close: true }],
+    ["error", { rename: true, duplicate: true, duplicateWindow: false, forwarding: true, close: true }],
+    ["closing", { rename: false, duplicate: false, duplicateWindow: false, forwarding: false, close: false }]
   ] as const)("derives every session action guard from the registry for %s sessions", (state, expected) => {
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state }]} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     const enabledByLabel = {
-      reconnect: "Reconnect",
-      rename: "Rename",
       duplicate: "Duplicate",
-      split: "Split horizontally",
+      duplicateWindow: "Duplicate in a new window",
+      rename: "Rename",
+      forwarding: "Port forwarding",
       close: "Close"
     } as const
-    for (const [key, label] of Object.entries(enabledByLabel) as Array<[Exclude<keyof typeof expected, "duplicateWindow">, string]>) {
+    for (const [key, label] of Object.entries(enabledByLabel) as Array<[keyof typeof expected, string]>) {
       const item = screen.getByRole("menuitem", { name: label })
       if (expected[key]) expect(item).toBeEnabled()
       else expect(item).toBeDisabled()
-    }
-    const duplicate = screen.getByRole("menuitem", { name: "Duplicate" })
-    if (expected.duplicate) {
-      fireEvent.pointerEnter(duplicate)
-      const child = screen.getByRole("menuitem", { name: "In this window" })
-      expect(child).toBeEnabled()
-      if (expected.duplicateWindow) expect(screen.getByRole("menuitem", { name: "In a new window" })).toBeEnabled()
-      else expect(screen.getByRole("menuitem", { name: "In a new window" })).toBeDisabled()
     }
   })
 
@@ -214,7 +223,7 @@ describe("Sidebar session actions", () => {
     expect(onSessionCommand).not.toHaveBeenCalled()
   })
 
-  it("renders mixed session kinds as badge and name only", () => {
+  it("renders mixed session kinds with aligned icons and accessible type names", () => {
     render(<I18nProvider><Sidebar width={220} activeNav="terminal" sessions={[
       session,
       { id: "session-2", hostId: "host-1", label: "G11 files", state: "idle", kind: "sftp", browser: { path: "/", entries: [], loading: false } },
@@ -224,6 +233,11 @@ describe("Sidebar session actions", () => {
     expect(screen.getByRole("button", { name: "SSH G11" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "SFTP G11 files" })).toHaveAttribute("data-active", "true")
     expect(screen.getByRole("button", { name: "PF G11 forward" })).toBeInTheDocument()
+    for (const [type, label] of [["SSH", "G11"], ["SFTP", "G11 files"], ["PF", "G11 forward"]]) {
+      const icon = screen.getByRole("button", { name: `${type} ${label}` }).querySelector(".session-type-icon")
+      expect(icon).toHaveAttribute("title", type)
+      expect(icon?.querySelector("svg")).toHaveAttribute("width", "18")
+    }
     expect(screen.queryByText("10.0.0.11")).not.toBeInTheDocument()
     expect(screen.queryByText("connected")).not.toBeInTheDocument()
   })

@@ -65,6 +65,12 @@ fitted. See the [RC2 verification record](docs/releases/v0.6.0-rc.2-verification
 numbered SSH session on double click (for example, G11 and G11(1)). See the
 [RC3 verification record](docs/releases/v0.6.0-rc.3-verification.md).
 
+`v0.6.0-rc.4` refines the unified Sidebar with continuous selected-item
+corners, aligned navigation and Session rows, and an overlay Session context
+menu that no longer scrolls its source row out of view. Duplicate creates an
+independent incrementally named Session such as G11 (1). See the
+[RC4 verification record](docs/releases/v0.6.0-rc.4-verification.md).
+
 ## Requirements
 
 - Node.js 20 or newer. CI uses Node.js 24.

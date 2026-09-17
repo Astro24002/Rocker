@@ -374,6 +374,34 @@ describe("desktop workspace shell", () => {
     expect(workspace().activeSessionId).toBe(workspace().sessions[2].id)
   })
 
+  it("numbers duplicates from the source session without reusing existing labels", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions[0]?.state).toBe("connected"))
+    const originalId = workspace().sessions[0].id
+    const duplicate = (label: string): void => {
+      fireEvent.contextMenu(screen.getByRole("button", { name: `SSH ${label}` }))
+      fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }))
+    }
+
+    duplicate("G11")
+    await waitFor(() => expect(workspace().sessions.map((session) => session.label)).toEqual(["G11", "G11 (1)"]))
+    const firstId = workspace().sessions[1].id
+    expect(firstId).not.toBe(originalId)
+    await waitFor(() => expect(workspace().sessions[1].state).toBe("connected"))
+
+    duplicate("G11")
+    await waitFor(() => expect(workspace().sessions.map((session) => session.label)).toEqual(["G11", "G11 (1)", "G11 (2)"]))
+    await waitFor(() => expect(workspace().sessions[2].state).toBe("connected"))
+
+    duplicate("G11 (1)")
+    await waitFor(() => expect(workspace().sessions.map((session) => session.label)).toEqual(["G11", "G11 (1)", "G11 (2)", "G11 (3)"]))
+    expect(new Set(workspace().sessions.map((session) => session.id)).size).toBe(4)
+    expect(workspace().activeSessionId).toBe(workspace().sessions[3].id)
+    await waitFor(() => expect(bridge.sessions.open).toHaveBeenCalledWith(expect.objectContaining({ sessionId: workspace().sessions[3].id, hostId: host.id })))
+  })
+
   it("keeps HostEditor save errors when the host mutation rejects", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
     bridge.hosts.save.mockRejectedValue(new Error("storage details"))
@@ -683,7 +711,7 @@ describe("desktop workspace shell", () => {
     await waitFor(() => expect(activeSurface.focus).toHaveBeenCalledTimes(1))
   })
 
-  it("preserves the current leaf when splitting a connected hidden session", async () => {
+  it("preserves the current leaf when splitting a connected session from the command palette", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshotWithTwoSessionsAndLayout(host.id)))
     render(<App />)
 
@@ -691,8 +719,11 @@ describe("desktop workspace shell", () => {
     await waitFor(() => expect(workspace().sessions.every((session) => session.state === "connected")).toBe(true))
     const firstSession = workspace().sessions[0]
     const secondSession = workspace().sessions[1]
-    fireEvent.contextMenu(screen.getByRole("button", { name: `SSH ${secondSession.label}` }))
-    fireEvent.click(screen.getByRole("menuitem", { name: "Split horizontally" }))
+    fireEvent.click(screen.getByRole("button", { name: `SSH ${secondSession.label}` }))
+    openPaletteShortcut()
+    const query = screen.getByRole("searchbox", { name: "Search commands" })
+    fireEvent.change(query, { target: { value: "split horizontally" } })
+    fireEvent.keyDown(query, { key: "Enter" })
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(3))
     const newSession = workspace().sessions.find((session) => session.id !== firstSession.id && session.id !== secondSession.id)
@@ -1022,12 +1053,10 @@ describe("desktop workspace shell", () => {
 
     const openCallCount = bridge.sessions.open.mock.calls.length
     fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
-    const reconnect = screen.getByRole("menuitem", { name: "Reconnect" })
     const duplicate = screen.getByRole("menuitem", { name: "Duplicate" })
-    expect(reconnect).toBeDisabled()
+    expect(screen.queryByRole("menuitem", { name: "Reconnect" })).not.toBeInTheDocument()
     expect(duplicate).toBeDisabled()
 
-    fireEvent.click(reconnect)
     fireEvent.click(duplicate)
 
     expect(bridge.sessions.reconnect).not.toHaveBeenCalled()

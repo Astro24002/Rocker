@@ -6,6 +6,20 @@
   box-sizing: border-box;
 }
 
+/* Preserve border-radius fallbacks; circular indicators must stay round. */
+@supports (corner-shape: squircle) {
+  .app-shell,
+  .app-shell * {
+    corner-shape: squircle;
+  }
+
+  .app-shell .session-state-dot,
+  .app-shell .theme-swatch,
+  .app-shell .editor-switch > span::after {
+    corner-shape: round;
+  }
+}
+
 html,
 body,
 #root {
