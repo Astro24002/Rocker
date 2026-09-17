@@ -107,7 +107,10 @@ describe("TerminalView", () => {
     vi.clearAllMocks()
   })
 
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
 
   it("confirms a multi-line paste and lets unselected Ctrl+C reach the shell", () => {
     const onInput = vi.fn()
@@ -190,6 +193,26 @@ describe("TerminalView", () => {
     expect(terminal.options.cursorBlink).toBe(false)
     expect(terminal.options.bellStyle).toBe("none")
     await waitFor(() => expect(fit.addons[0].fit).toHaveBeenCalled())
+  })
+
+  it("keeps a connected terminal stable across resize and state updates", async () => {
+    let notifyResize: ResizeObserverCallback | undefined
+    vi.stubGlobal("ResizeObserver", class {
+      public constructor(callback: ResizeObserverCallback) { notifyResize = callback }
+      public observe() {}
+      public disconnect() {}
+    })
+    const onResize = vi.fn()
+    const { rerender } = render(<TerminalView {...createProps({ onResize, session: { ...session, state: "connecting" } })} />)
+    await waitFor(() => expect(onResize).toHaveBeenCalledTimes(1))
+
+    rerender(<TerminalView {...createProps({ onResize })} />)
+    notifyResize?.([], {} as ResizeObserver)
+    await waitFor(() => expect(fit.addons[0].fit).toHaveBeenCalledTimes(2))
+
+    expect(xterm.terminals).toHaveLength(1)
+    expect(xterm.terminals[0].dispose).not.toHaveBeenCalled()
+    expect(onResize).toHaveBeenCalledTimes(1)
   })
 
   it("registers its controller for the stable session and clears it on disposal", () => {

@@ -39,7 +39,7 @@ SFTP and Snippets are visible navigation placeholders. Cloud sync, mobile
 clients, ProxyJump, remote forwarding, and Dynamic SOCKS5 are not part of the
 first release.
 
-## v0.6.0-rc.1 release status
+## v0.6.0 release candidates
 
 The `v0.6.0-rc.1` candidate contains the unified untitled Sessions workspace,
 host cards with favorites and sorting, internal Connections History/Trust tabs,
@@ -53,9 +53,13 @@ contain a main-process SFTP service or bridge contract for real directory and
 transfer operations. Browser Preview is also deferred until HTTP/HTTPS can be
 confirmed explicitly rather than inferred from a port.
 
-The candidate is published by pushing tag `v0.6.0-rc.1`; GitHub Actions builds
+The RC1 candidate was published from tag `v0.6.0-rc.1`; GitHub Actions builds
 the six Windows/macOS installer and archive assets and marks the GitHub Release
-as a prerelease. See the [candidate verification record](docs/releases/v0.6.0-rc.1-verification.md).
+as a prerelease. See the [RC1 verification record](docs/releases/v0.6.0-rc.1-verification.md).
+
+`v0.6.0-rc.2` constrains the SSH terminal surface to the available stage height
+so xterm output cannot resize its own measured container while the terminal is
+fitted. See the [RC2 verification record](docs/releases/v0.6.0-rc.2-verification.md).
 
 ## Requirements
 

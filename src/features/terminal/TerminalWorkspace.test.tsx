@@ -1,8 +1,12 @@
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { I18nProvider } from "../../i18n"
 import type { TerminalWorkspaceState } from "./session-state"
 import { TerminalWorkspace } from "./TerminalWorkspace"
+
+const layoutCss = readFileSync(resolve(process.cwd(), "src/styles/layout.css"), "utf8")
 
 vi.mock("./TerminalView", () => ({
   TerminalView: ({ session, visible, onSearchController }: { session: { id: string }; visible: boolean; onSearchController: () => void }) => (
@@ -28,6 +32,8 @@ describe("TerminalWorkspace layout", () => {
     expect(terminalWorkspace.querySelector("[data-testid='terminal-monitor']")).toBeNull()
     expect(terminalWorkspace.querySelector(".monitor-hud-header")).toBeNull()
     expect(terminalWorkspace.querySelector(".terminal-session-toolbar")).toBeNull()
+    expect(layoutCss).toMatch(/\.terminal-stack\s*\{[^}]*overflow:\s*hidden;/)
+    expect(layoutCss).toMatch(/\.terminal-surface\s*\{[^}]*height:\s*100%;/)
   })
 
   it("renders every session surface but hides non-visible layout leaves", () => {
