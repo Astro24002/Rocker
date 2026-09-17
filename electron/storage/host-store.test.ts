@@ -153,10 +153,7 @@ describe("host profile mutations", () => {
       port: 22,
       username: "root",
       authMethod: "agent",
-      group: "Production",
       platform: "ubuntu",
-      environment: "production",
-      tags: ["core", "linux"],
       charset: "gb18030",
       themeColor: "amber",
       favorite: false,
@@ -165,6 +162,9 @@ describe("host profile mutations", () => {
     expect(duplicate.id).not.toBe("host-a")
     expect(duplicate).not.toHaveProperty("identityFile")
     expect(duplicate).not.toHaveProperty("snippetCollection")
+    expect(duplicate).not.toHaveProperty("group")
+    expect(duplicate).not.toHaveProperty("environment")
+    expect(duplicate).not.toHaveProperty("tags")
     expect(duplicate.snippetsEnabled).toBe(false)
     expect(duplicate.publicKeyEnabled).toBe(false)
   })

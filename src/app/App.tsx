@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react"
-import { ComingSoonView } from "../components/ComingSoonView"
 import { RecoveryBanner } from "../components/RecoveryBanner"
 import { Sidebar, type ContextMenuOwner, type SessionCommandId, type WorkspaceNavKey } from "../components/Sidebar"
 import { WorkspaceResizeHandle } from "../components/WorkspaceResizeHandle"
 import { WindowChrome } from "../components/WindowChrome"
 import { HostEditor } from "../features/hosts/HostEditor"
 import { HostList } from "../features/hosts/HostList"
-import { hostForSshTarget, parseSshCommand, recentHostIds as deriveRecentHostIds, upsertHost } from "../features/hosts/host-state"
+import { hostForSshTarget, parseSshCommand, upsertHost } from "../features/hosts/host-state"
 import { HistoryView } from "../features/history/HistoryView"
 import { PortsView } from "../features/ports/PortsView"
 import { SettingsView } from "../features/settings/SettingsView"
 import { TrustView } from "../features/trust/TrustView"
+import { ConnectionsView } from "../features/connections/ConnectionsView"
+import { HostWorkspacePicker, SnippetsView } from "../features/workspace/WorkspaceLandingViews"
 import { CommandPalette, type CommandPaletteFocusRequest } from "../features/commands/CommandPalette"
 import { executeCommand, isCommandEnabled, type CommandActions, type CommandContext, type CommandId, type TerminalCommandSurface } from "../features/commands/command-registry"
 import { matchGlobalShortcut, shouldIgnoreGlobalShortcutTarget } from "../features/commands/command-shortcuts"
@@ -24,12 +25,21 @@ import {
   attachChannel,
   closeSession,
   createTerminalWorkspaceState,
+  forwardingToSessionState,
+  isPortForwardingSession,
+  isSftpSession,
+  isSshSession,
   openSession,
+  patchSession,
+  sessionKind,
+  synchronizePortForwardingSessions,
   type TerminalWorkspaceState,
+  type WorkspaceSessionPatch,
   type WorkspaceSession
 } from "../features/terminal/session-state"
 import { recentSessionIds, recordSessionFocus, removeRecentSession, type RecentSessionState } from "../features/sessions/recent-sessions"
 import { TerminalWorkspace } from "../features/terminal/TerminalWorkspace"
+import { SessionContentView, SessionInfoBar } from "../features/sessions/SessionContentView"
 import { type TerminalController, type TerminalPreferences } from "../features/terminal/terminal-controller"
 import type { TerminalSearchController } from "../features/terminal/terminal-search"
 import { I18nProvider, useI18n } from "../i18n"
@@ -41,12 +51,15 @@ import type {
   AppSettings,
   ConnectionHistoryItem,
   HostProfile,
+  StoredWorkspaceSession,
+  ForwardingInfo,
   StoredWorkspaceWindow,
   TerminalDimensions,
   TerminalFailureReason,
   TerminalSessionEvent,
   TerminalStateEvent
 } from "./types"
+import type { ForwardingProfile } from "../../electron/storage/types"
 
 interface PendingTerminalOpen {
   hostId: string
@@ -77,6 +90,11 @@ interface PendingSettingsWrite {
 const settingsKeys: SettingsKey[] = [
   "locale",
   "sidebarWidth",
+  "globalThemeId",
+  "hostThemeOverrides",
+  "hostSort",
+  "hostFavoritesOnly",
+  "connectionsTab",
   "terminalFont",
   "terminalFontSize",
   "scrollback",
@@ -103,6 +121,11 @@ const terminalAppearanceKeys: SettingsKey[] = [
 const defaultSettings: AppSettings = {
   locale: "en",
   sidebarWidth: 220,
+  globalThemeId: "forest",
+  hostThemeOverrides: {},
+  hostSort: "name-asc",
+  hostFavoritesOnly: false,
+  connectionsTab: "history",
   terminalFont: "JetBrains Mono",
   terminalFontSize: 13,
   scrollback: 10000,
@@ -133,7 +156,6 @@ function Workspace() {
   const [hostKeyInventory, setHostKeyInventory] = useState<HostKeyInventorySnapshot>({ entries: [], history: [] })
   const [hostKeyLoading, setHostKeyLoading] = useState(false)
   const [hostKeyLoadError, setHostKeyLoadError] = useState(false)
-  const recentHostIdSet = useMemo(() => new Set(deriveRecentHostIds(history)), [history])
   const [editor, setEditor] = useState<{ open: boolean; profile?: HostProfile }>({ open: false })
   const [workspace, setWorkspace] = useState<TerminalWorkspaceState>(createTerminalWorkspaceState)
   const [bootstrapState, dispatchBootstrap] = useReducer(bootstrapReducer, undefined, createBootstrapState)
@@ -189,6 +211,7 @@ function Workspace() {
     settings.cursorBlink,
     settings.terminalBell
   ])
+  const themeForHost = useCallback((hostId: string): string => settings.hostThemeOverrides?.[hostId] ?? settings.globalThemeId ?? "forest", [settings.globalThemeId, settings.hostThemeOverrides])
 
   const refreshHostKeys = useCallback(async (): Promise<void> => {
     setHostKeyLoading(true)
@@ -276,7 +299,7 @@ function Workspace() {
   const markSessionState = useCallback((sessionId: string, state: TerminalStateEvent["state"], reason?: TerminalFailureReason): void => {
     setWorkspace((current) => {
       const session = current.sessions.find((candidate) => candidate.id === sessionId)
-      return session
+      return isSshSession(session)
         ? applyTerminalState(current, {
             kind: "state",
             sessionId,
@@ -327,7 +350,7 @@ function Workspace() {
   const handleTerminalResize = useCallback((sessionId: string, channelGeneration: number, dimensions: TerminalDimensions): void => {
     setWorkspace((current) => {
       const session = current.sessions.find((candidate) => candidate.id === sessionId)
-      if (!session || sameDimensions(session.dimensions, dimensions)) return current
+      if (!isSshSession(session) || sameDimensions(session.dimensions, dimensions)) return current
       return {
         ...current,
         sessions: current.sessions.map((candidate) => candidate.id === sessionId ? { ...candidate, dimensions } : candidate)
@@ -395,14 +418,94 @@ function Workspace() {
     if (!capabilities.sshAvailable) return
     const sessionId = crypto.randomUUID()
     pendingOpens.current.set(sessionId, { hostId: host.id, forceNewConnection: options.forceNewConnection })
-    setWorkspace((current) => openSession(current, { id: sessionId, hostId: host.id, label }))
+    setWorkspace((current) => openSession(current, { id: sessionId, hostId: host.id, label, kind: "ssh" }))
     setActiveNav("terminal")
   }, [capabilities.sshAvailable])
+
+  const openSftpSession = useCallback((host: HostProfile): void => {
+    const existing = workspaceRef.current.sessions.find((session) => sessionKind(session) === "sftp" && session.hostId === host.id)
+    if (isSftpSession(existing)) {
+      setWorkspace((current) => activateSession(current, existing.id))
+      setRecentSessionState((current) => recordSessionFocus(current, existing.id))
+      setActiveNav("terminal")
+      return
+    }
+    const sessionId = crypto.randomUUID()
+    setWorkspace((current) => openSession(current, {
+      id: sessionId,
+      hostId: host.id,
+      label: host.name,
+      kind: "sftp",
+      path: "/"
+    }))
+    setActiveNav("terminal")
+  }, [])
+
+  const openPfSession = useCallback((profile: ForwardingProfile, runtime?: ForwardingInfo): void => {
+    const existing = workspaceRef.current.sessions.find((session) => isPortForwardingSession(session) && session.hostId === profile.hostId)
+    if (isPortForwardingSession(existing)) {
+      setWorkspace((current) => patchSession(activateSession(current, existing.id), existing.id, {
+        kind: "pf",
+        profileId: profile.id,
+        label: profile.name,
+        forwardingId: runtime?.id,
+        forwardingStatus: runtime?.status ?? existing.forwardingStatus,
+        state: runtime ? forwardingToSessionState(runtime.status) : existing.state
+      }))
+      setRecentSessionState((current) => recordSessionFocus(current, existing.id))
+      setActiveNav("terminal")
+      return
+    }
+    const sessionId = crypto.randomUUID()
+    setWorkspace((current) => openSession(current, {
+      id: sessionId,
+      hostId: profile.hostId,
+      label: profile.name,
+      kind: "pf",
+      profileId: profile.id,
+      forwardingId: runtime?.id,
+      forwardingStatus: runtime?.status ?? "stopped"
+    }))
+    setActiveNav("terminal")
+  }, [])
+
+  const openHostForwardingFromHost = useCallback((host: HostProfile): void => {
+    const session = workspaceRef.current.sessions.find((candidate) => candidate.hostId === host.id && isSshSession(candidate))
+    if (session) {
+      setWorkspace((current) => activateSession(current, session.id))
+      setRecentSessionState((current) => recordSessionFocus(current, session.id))
+    }
+    setHostForwardingHostId(host.id)
+    setActiveNav("ports")
+  }, [])
+
+  const patchWorkspaceSession = useCallback((sessionId: string, patch: WorkspaceSessionPatch): void => {
+    setWorkspace((current) => patchSession(current, sessionId, patch))
+  }, [])
 
   useEffect(() => {
     const unsubscribeSession = bridge.events.onSessionEvent(handleSessionEvent)
     return unsubscribeSession
   }, [bridge, handleSessionEvent])
+
+  useEffect(() => {
+    if (bootstrapState.phase === "loading" || bootstrapState.phase === "error") return
+    let cancelled = false
+    const synchronize = async (): Promise<void> => {
+      try {
+        const rows = await bridge.ports.listOverview()
+        if (!cancelled) setWorkspace((current) => synchronizePortForwardingSessions(current, rows))
+      } catch {
+        // The dedicated forwarding views retain their existing error handling.
+      }
+    }
+    void synchronize()
+    const unsubscribe = bridge.events.onForwardingEvent(() => { void synchronize() })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [bootstrapState.phase, bridge])
 
   useEffect(() => {
     const unsubscribeLaunch = bridge.events.onSessionLaunch(({ hostId }) => {
@@ -599,7 +702,7 @@ function Workspace() {
         }
         for (const [sessionId] of pendingRestoreEntries) {
           const session = restoreSource.sessions.find((candidate) => candidate.id === sessionId)
-          void openPendingSession(sessionId, session?.dimensions ?? { cols: 120, rows: 40 }, true)
+          void openPendingSession(sessionId, isSshSession(session) ? session.dimensions ?? { cols: 120, rows: 40 } : { cols: 120, rows: 40 }, true)
         }
       }
       if (selectedResources.includes("workspace") && !result.workspace) workspaceWritable.current = false
@@ -704,6 +807,14 @@ function Workspace() {
 
   const connectHost = (host: HostProfile): void => {
     if (!capabilities.sshAvailable) return
+    const existing = recentSessionIds(recentSessionState, workspaceRef.current.sessions)
+      .map((sessionId) => workspaceRef.current.sessions.find((session) => session.id === sessionId))
+      .find((session) => isSshSession(session) && session.hostId === host.id && session.state !== "closing")
+      ?? workspaceRef.current.sessions.find((session) => isSshSession(session) && session.hostId === host.id && session.state !== "closing")
+    if (existing) {
+      activateExistingSession(existing.id)
+      return
+    }
     queueSessionOpen(host, host.name)
   }
 
@@ -726,7 +837,6 @@ function Workspace() {
           port: target.port,
           username: "",
           authMethod: "agent",
-          group: "Personal",
           favorite: false,
           notes: "Created from direct SSH command."
         }
@@ -740,7 +850,6 @@ function Workspace() {
       port: target.port,
       username: target.username,
       authMethod: "agent",
-      group: "Personal",
       favorite: false,
       notes: "Created from direct SSH command."
     }
@@ -760,8 +869,13 @@ function Workspace() {
   const navigateWorkspace = useCallback((destination: WorkspaceNavKey): void => {
     // Sidebar and navigation commands always target the global workspace view.
     setHostForwardingHostId(undefined)
+    if (destination === "history" || destination === "trust") {
+      updateSettings({ connectionsTab: destination })
+      setActiveNav("connections")
+      return
+    }
     setActiveNav(destination)
-  }, [])
+  }, [updateSettings])
 
   const openHostForwarding = useCallback((session: WorkspaceSession): void => {
     if (!workspaceRef.current.sessions.some((candidate) => candidate.id === session.id)) return
@@ -791,7 +905,7 @@ function Workspace() {
   }, [activateExistingSession])
 
   const duplicateSession = (session: WorkspaceSession, forceNewConnection = false, split = false): void => {
-    if (!capabilities.sshAvailable) return
+    if (!capabilities.sshAvailable || sessionKind(session) !== "ssh") return
     const host = hosts.find((candidate) => candidate.id === session.hostId)
     if (!host) return
     const sessionId = crypto.randomUUID()
@@ -800,7 +914,8 @@ function Workspace() {
       const opened = openSession(current, {
         id: sessionId,
         hostId: session.hostId,
-        label: `${session.label}${split ? " split" : " copy"}`
+        label: `${session.label}${split ? " split" : " copy"}`,
+        kind: "ssh"
       })
       if (!split) return opened
       const layout = current.layout ?? { kind: "leaf" as const, sessionId: current.activeSessionId ?? session.id }
@@ -819,6 +934,7 @@ function Workspace() {
   }
 
   const closeTerminalSession = (session: WorkspaceSession): void => {
+    const kind = sessionKind(session)
     pendingOpens.current.delete(session.id)
     releaseRestoreAdmission(session.id)
     connectionIds.current.delete(session.id)
@@ -826,15 +942,16 @@ function Workspace() {
     searchControllers.current.delete(session.id)
     terminalSurfaces.current.delete(session.id)
     setRecentSessionState((current) => removeRecentSession(current, session.id))
-    void bridge.sessions.close(session.id).catch(() => undefined)
+    if (kind === "ssh") void bridge.sessions.close(session.id).catch(() => undefined)
     setWorkspace((current) => closeSession(current, session.id))
-    const anotherSessionForHost = workspace.sessions.some((candidate) => candidate.id !== session.id && candidate.hostId === session.hostId)
-    const leavingHostForwarding = hostForwardingHostId === session.hostId && !anotherSessionForHost
+    const remaining = workspace.sessions.filter((candidate) => candidate.id !== session.id)
+    const anotherSshForHost = remaining.some((candidate) => candidate.hostId === session.hostId && sessionKind(candidate) === "ssh")
+    const leavingHostForwarding = hostForwardingHostId === session.hostId && !anotherSshForHost
     if (leavingHostForwarding) {
       setHostForwardingHostId(undefined)
       setActiveNav("ports")
     }
-    if (workspace.sessions.length <= 1) {
+    if (remaining.length === 0 && activeNavigationRef.current === "terminal") {
       setHostForwardingHostId(undefined)
       setActiveNav(leavingHostForwarding ? "ports" : "hosts")
     }
@@ -843,6 +960,8 @@ function Workspace() {
   const focusCurrentTerminal = useCallback((): boolean => {
     if (activeNavigationRef.current !== "terminal") return false
     const sessionId = activeSessionIdRef.current
+    const current = workspaceRef.current.sessions.find((session) => session.id === sessionId)
+    if (current && sessionKind(current) !== "ssh") return false
     if (!sessionId) return false
     const surface = terminalSurfaces.current.get(sessionId)
     if (surface) {
@@ -929,10 +1048,10 @@ function Workspace() {
     },
     session: {
       activate: activateExistingSession,
-      reconnect: (session) => capabilities.sshAvailable ? bridge.sessions.reconnect(session.id) : undefined,
+      reconnect: (session) => capabilities.sshAvailable && sessionKind(session) === "ssh" ? bridge.sessions.reconnect(session.id) : undefined,
       rename: renameTerminalSession,
       duplicate: (session) => duplicateSession(session),
-      duplicateWindow: (session) => capabilities.sshAvailable ? bridge.sessions.duplicateInNewWindow(session.hostId) : undefined,
+      duplicateWindow: (session) => capabilities.sshAvailable && sessionKind(session) === "ssh" ? bridge.sessions.duplicateInNewWindow(session.hostId) : undefined,
       splitHorizontal: (session) => duplicateSession(session, false, true),
       close: closeTerminalSession,
       portForwarding: openHostForwarding
@@ -950,7 +1069,7 @@ function Workspace() {
   const commandContext: CommandContext = {
     activeSession,
     connectionState: activeSession?.state,
-    terminalBufferAvailable: activeSession !== undefined,
+    terminalBufferAvailable: activeSession !== undefined && sessionKind(activeSession) === "ssh",
     terminal: activeTerminalSurface,
     selection: { hasSelection: activeTerminalSurface?.hasSelection() ?? false },
     clipboard: { canPaste: activeSession?.state === "connected" },
@@ -970,7 +1089,7 @@ function Workspace() {
       ...context,
       activeSession: session,
       connectionState: session.state,
-      terminalBufferAvailable: surface !== undefined,
+      terminalBufferAvailable: surface !== undefined && sessionKind(session) === "ssh",
       terminal: surface,
       selection: { hasSelection: surface?.hasSelection() ?? false },
       clipboard: { canPaste: session.state === "connected" }
@@ -1033,7 +1152,7 @@ function Workspace() {
         ...commandContext,
         activeSession: terminalMenuSession,
         connectionState: terminalMenuSession.state,
-        terminalBufferAvailable: terminalMenuSurface !== undefined,
+        terminalBufferAvailable: terminalMenuSurface !== undefined && sessionKind(terminalMenuSession) === "ssh",
         terminal: terminalMenuSurface,
         selection: { hasSelection: terminalMenuSurface?.hasSelection() ?? false },
         clipboard: { canPaste: terminalMenuSession.state === "connected" },
@@ -1115,13 +1234,21 @@ function Workspace() {
       hosts={hosts}
       disabled={!capabilities.hostMutationsAvailable}
       onConnect={connectHost}
+      onOpenSftp={openSftpSession}
+      onOpenForwarding={openHostForwardingFromHost}
       onConnectCommand={(command) => void connectSshCommand(command)}
       onAdd={() => setEditor({ open: true })}
       onEdit={(profile) => setEditor({ open: true, profile })}
       onDuplicate={duplicateHost}
       onToggleFavorite={toggleHostFavorite}
       onRemove={removeHost}
-      recentHostIds={recentHostIdSet}
+      history={history}
+      sort={settings.hostSort ?? "name-asc"}
+      favoritesOnly={settings.hostFavoritesOnly === true}
+      onPreferencesChange={(update) => updateSettings({
+        ...(update.sort ? { hostSort: update.sort } : {}),
+        ...(update.favoritesOnly !== undefined ? { hostFavoritesOnly: update.favoritesOnly } : {})
+      })}
       onImport={() => {
         if (!capabilities.hostMutationsAvailable) return
         void bridge.hosts.importSshConfig().then(() => bridge.hosts.list()).then(setHosts).catch(() => undefined)
@@ -1130,7 +1257,7 @@ function Workspace() {
   )
 
   return (
-    <div className="app-shell" data-ui-style="modern-professional">
+    <div className="app-shell" data-theme={settings.globalThemeId ?? "forest"} data-ui-style="modern-professional">
       <Sidebar
         width={sidebarWidth}
         activeNav={activeNav}
@@ -1150,14 +1277,15 @@ function Workspace() {
           <WindowChrome />
           <RecoveryBanner state={bootstrapState} onRetry={retryBootstrap} onExportDiagnostics={() => bridge.diagnostics.export()} />
           <div className="workspace-stage" data-testid="workspace-stage" ref={workspaceStageRef} tabIndex={-1}>
-          {workspace.sessions.length > 0 && (
-            <div className="terminal-workspace-host" hidden={activeNav !== "terminal"}>
+          {workspace.sessions.some((session) => sessionKind(session) === "ssh") && (
+            <div className="terminal-workspace-host" hidden={activeNav !== "terminal" || sessionKind(activeSession) !== "ssh"}>
               <TerminalWorkspace
                 workspace={workspace}
-                workspaceVisible={activeNav === "terminal"}
+                workspaceVisible={activeNav === "terminal" && sessionKind(activeSession) === "ssh"}
+                themeForHost={themeForHost}
                 overlay={<>
                   <TerminalConnectionOverlay
-                    session={activeSession}
+                    session={isSshSession(activeSession) ? activeSession : undefined}
                     onCancel={() => { if (activeSession) void bridge.sessions.cancelReconnect(activeSession.id).catch(() => undefined) }}
                     reconnectDisabled={!capabilities.sshAvailable}
                     onReconnectNow={() => { if (activeSession && capabilities.sshAvailable) void bridge.sessions.reconnect(activeSession.id).catch(() => undefined) }}
@@ -1178,11 +1306,30 @@ function Workspace() {
               />
             </div>
           )}
+          {workspace.sessions.filter((session) => sessionKind(session) !== "ssh").map((session) => (
+            <div
+              className="session-content-host"
+              data-session-id={session.id}
+              data-theme={themeForHost(session.hostId)}
+              hidden={activeNav !== "terminal" || workspace.activeSessionId !== session.id}
+              key={session.id}
+            >
+              <SessionContentView
+                session={session}
+                host={hosts.find((candidate) => candidate.id === session.hostId)}
+                bridge={bridge}
+                onPatch={patchWorkspaceSession}
+              />
+            </div>
+          ))}
+          {activeNav === "terminal" && activeSession ? (
+            <SessionInfoBar session={activeSession} host={activeHost} themeId={themeForHost(activeSession.hostId)} />
+          ) : null}
           <div className="workspace-destination" data-destination="hosts" hidden={activeNav !== "hosts" && !(activeNav === "terminal" && workspace.sessions.length === 0)}>
             {hostList}
           </div>
           {activeNav === "settings" ? (
-            <SettingsView locale={locale} settings={settings} bridge={hasDataProtectionBridge(bridge) ? bridge : undefined} onConfigurationImported={refreshConfigurationAfterImport} disabled={!settingsMutationsAvailable} terminalAppearanceDisabled={false} persistenceUnavailable={!settingsMutationsAvailable || settingsPersistenceFailed} onLocaleChange={(next) => {
+            <SettingsView locale={locale} settings={settings} hosts={hosts} bridge={hasDataProtectionBridge(bridge) ? bridge : undefined} onConfigurationImported={refreshConfigurationAfterImport} disabled={!settingsMutationsAvailable} terminalAppearanceDisabled={false} persistenceUnavailable={!settingsMutationsAvailable || settingsPersistenceFailed} onLocaleChange={(next) => {
               if (!settingsMutationsAvailable) return
               setLocale(next)
               updateSettings({ locale: next })
@@ -1191,34 +1338,31 @@ function Workspace() {
             null
           ) : activeNav === "hosts" ? (
             null
-          ) : activeNav === "trust" ? (
-            <TrustView
-              entries={hostKeyInventory.entries}
-              history={hostKeyInventory.history}
-              hosts={hosts}
-              disabled={!hostKeysAvailable}
-              loading={hostKeyLoading}
-              error={hostKeyLoadError}
-              onRemove={removeHostKey}
+          ) : activeNav === "connections" || activeNav === "history" || activeNav === "trust" ? (
+            <ConnectionsView
+              tab={activeNav === "trust" ? "trust" : activeNav === "history" ? "history" : settings.connectionsTab ?? "history"}
+              onTabChange={(connectionsTab) => updateSettings({ connectionsTab })}
+              history={<HistoryView items={history} hosts={hosts} disabled={!capabilities.historyWritable} reconnectDisabled={!capabilities.sshAvailable} onReconnect={connectHost} onClear={() => {
+                if (!capabilities.historyWritable) return
+                void bridge.history.clear().then(() => setHistory([])).catch(() => undefined)
+              }} />}
+              trust={<TrustView entries={hostKeyInventory.entries} history={hostKeyInventory.history} hosts={hosts} disabled={!hostKeysAvailable} loading={hostKeyLoading} error={hostKeyLoadError} onRemove={removeHostKey} />}
             />
-          ) : activeNav === "history" ? (
-            <HistoryView items={history} hosts={hosts} disabled={!capabilities.historyWritable} reconnectDisabled={!capabilities.sshAvailable} onReconnect={connectHost} onClear={() => {
-              if (!capabilities.historyWritable) return
-              void bridge.history.clear().then(() => setHistory([])).catch(() => undefined)
-            }} />
           ) : activeNav === "ports" ? (
             hostForwardingHostId ? (
               (() => {
-                const hostSession = workspace.sessions.find((candidate) => candidate.hostId === hostForwardingHostId)
+                const hostSession = workspace.sessions.find((candidate) => candidate.hostId === hostForwardingHostId && isSshSession(candidate))
                 const hostConnectionId = hostSession && canUseConnection(hostSession.state) ? connectionIds.current.get(hostSession.id) : undefined
                 const host = hosts.find((candidate) => candidate.id === hostForwardingHostId)
-                return <PortsView mode="host" bridge={bridge} hostId={hostForwardingHostId} connectionId={hostConnectionId} session={hostSession} username={host?.username} bindAddress={settings.bindAddress} />
+                return <PortsView mode="host" bridge={bridge} hostId={hostForwardingHostId} connectionId={hostConnectionId} session={hostSession} username={host?.username} bindAddress={settings.bindAddress} onOpenSession={openPfSession} />
               })()
             ) : (
-              <PortsView mode="global" bridge={bridge} hosts={hosts} onOpenHost={openHostWorkspace} />
+              <PortsView mode="global" bridge={bridge} hosts={hosts} onOpenHost={openHostWorkspace} onOpenSession={openPfSession} />
             )
+          ) : activeNav === "sftp" ? (
+            <HostWorkspacePicker kind="sftp" hosts={hosts} onOpen={openSftpSession} />
           ) : (
-            <ComingSoonView feature={activeNav} />
+            <SnippetsView sessions={workspace.sessions} onSelect={activateExistingSession} />
           )}
           </div>
       </main>
@@ -1241,11 +1385,27 @@ function restoreWorkspace(snapshot: StoredWorkspaceWindow, hosts: HostProfile[],
   for (const stored of snapshot.sessions) {
     if (seenSessionIds.has(stored.sessionId)) continue
     seenSessionIds.add(stored.sessionId)
+    const kind = stored.kind ?? "ssh"
+    if (kind === "sftp") {
+      workspace = openSession(workspace, { id: stored.sessionId, hostId: stored.hostId, label: stored.label, kind, path: stored.path ?? "/" })
+      continue
+    }
+    if (kind === "pf" && stored.profileId) {
+      workspace = openSession(workspace, {
+        id: stored.sessionId,
+        hostId: stored.hostId,
+        label: stored.label,
+        kind,
+        profileId: stored.profileId,
+        applicationProtocol: stored.applicationProtocol
+      })
+      continue
+    }
     workspace = openSession(workspace, {
       id: stored.sessionId,
       hostId: stored.hostId,
       label: stored.label,
-      dimensions: validDimensions(stored.cols, stored.rows) ? { cols: stored.cols, rows: stored.rows } : undefined
+      dimensions: validDimensions(stored.cols, stored.rows) ? { cols: stored.cols!, rows: stored.rows! } : undefined
     })
     const isAvailable = !hostsKnown || availableHostIds.has(stored.hostId)
     workspace = applyTerminalState(workspace, {
@@ -1282,18 +1442,28 @@ function normalizeLayout(layout: TerminalLayout | undefined, sessionIds: Set<str
 
 function serializeWorkspace(workspace: TerminalWorkspaceState): {
   activeSessionId?: string
-  sessions: Array<{ sessionId: string; hostId: string; label: string; cols: number; rows: number }>
+  sessions: StoredWorkspaceSession[]
   layout?: TerminalLayout
 } {
-  const sessions = workspace.sessions
-    .filter((session) => session.dimensions && validDimensions(session.dimensions.cols, session.dimensions.rows))
-    .map((session) => ({
-      sessionId: session.id,
-      hostId: session.hostId,
-      label: session.label,
-      cols: session.dimensions!.cols,
-      rows: session.dimensions!.rows
-    }))
+  const sessions: StoredWorkspaceSession[] = []
+  for (const session of workspace.sessions) {
+    if (isSshSession(session)) {
+      if (session.dimensions && validDimensions(session.dimensions.cols, session.dimensions.rows)) {
+        sessions.push({ sessionId: session.id, hostId: session.hostId, label: session.label, cols: session.dimensions.cols, rows: session.dimensions.rows })
+      }
+    } else if (isSftpSession(session)) {
+      sessions.push({ sessionId: session.id, hostId: session.hostId, label: session.label, kind: "sftp", path: session.browser.path })
+    } else {
+      sessions.push({
+        sessionId: session.id,
+        hostId: session.hostId,
+        label: session.label,
+        kind: "pf" as const,
+        profileId: session.profileId,
+        ...(session.applicationProtocol ? { applicationProtocol: session.applicationProtocol } : {})
+      })
+    }
+  }
   const sessionIds = new Set(sessions.map((session) => session.sessionId))
   return {
     activeSessionId: workspace.activeSessionId && sessionIds.has(workspace.activeSessionId) ? workspace.activeSessionId : undefined,
@@ -1314,8 +1484,8 @@ function sameDimensions(left: TerminalDimensions | undefined, right: TerminalDim
   return left?.cols === right.cols && left.rows === right.rows
 }
 
-function validDimensions(cols: number, rows: number): boolean {
-  return Number.isInteger(cols) && cols >= 1 && cols <= 1_000 && Number.isInteger(rows) && rows >= 1 && rows <= 1_000
+function validDimensions(cols: unknown, rows: unknown): boolean {
+  return typeof cols === "number" && Number.isInteger(cols) && cols >= 1 && cols <= 1_000 && typeof rows === "number" && Number.isInteger(rows) && rows >= 1 && rows <= 1_000
 }
 
 function terminalPreferencesForSettings(settings: AppSettings): TerminalPreferences {

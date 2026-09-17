@@ -116,11 +116,41 @@ describe("SettingsStore", () => {
     expect(result).toMatchObject({
       status: "ok",
       value: {
+        globalThemeId: "forest",
+        hostThemeOverrides: {},
+        hostSort: "name-asc",
+        hostFavoritesOnly: false,
+        connectionsTab: "history",
         scrollback: 10000,
         cursorStyle: "bar",
         cursorBlink: true,
         terminalBell: true
       }
+    })
+  })
+
+  it("keeps only known Theme and workspace preference values", () => {
+    const normalized = normalizeSettings({
+      locale: "zh-CN",
+      sidebarWidth: 220,
+      terminalFont: "JetBrains Mono",
+      terminalFontSize: 13,
+      connectionTimeout: 15,
+      autoReconnect: true,
+      bindAddress: "127.0.0.1",
+      globalThemeId: "dracula",
+      hostThemeOverrides: { "host-a": "paper", bad: "invalid" },
+      hostSort: "recent",
+      hostFavoritesOnly: true,
+      connectionsTab: "trust"
+    })
+
+    expect(normalized).toMatchObject({
+      globalThemeId: "dracula",
+      hostThemeOverrides: { "host-a": "paper" },
+      hostSort: "recent",
+      hostFavoritesOnly: true,
+      connectionsTab: "trust"
     })
   })
 

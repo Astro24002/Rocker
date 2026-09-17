@@ -1,14 +1,14 @@
-import { ChevronRight, Clock3, Columns2, Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, RotateCw, Server, Settings, ShieldCheck, X } from "lucide-react"
+import { ChevronRight, Columns2, Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, RotateCw, Server, Settings, ShieldCheck, X } from "lucide-react"
 import { forwardRef, useCallback, useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactElement } from "react"
 import { useI18n } from "../i18n"
 import { isCommandEnabled, type CommandContext, type CommandId } from "../features/commands/command-registry"
 import { NavItem } from "./NavItem"
 import { isCompactSidebar, normalizeSidebarWidth } from "../shared/sidebar-width"
 import rockerMark from "../../build/icon.svg"
-import type { WorkspaceSession } from "../features/terminal/session-state"
+import { sessionKind, type SessionKind, type WorkspaceSession } from "../features/terminal/session-state"
 
-export type NavKey = "hosts" | "trust" | "sftp" | "ports" | "snippets" | "history" | "settings"
-export type WorkspaceNavKey = NavKey | "terminal"
+export type NavKey = "hosts" | "sftp" | "snippets" | "ports" | "connections" | "settings"
+export type WorkspaceNavKey = NavKey | "terminal" | "history" | "trust"
 export type SessionCommandId = Extract<CommandId, `session.${string}`>
 export type ContextMenuOwner = "sidebar" | "terminal"
 
@@ -29,11 +29,10 @@ interface SidebarProps {
 
 const navItems: Array<{ key: NavKey; icon: typeof Server }> = [
   { key: "hosts", icon: Server },
-  { key: "trust", icon: ShieldCheck },
   { key: "sftp", icon: FolderClosed },
   { key: "snippets", icon: FileCode2 },
   { key: "ports", icon: Network },
-  { key: "history", icon: Clock3 }
+  { key: "connections", icon: ShieldCheck }
 ]
 
 export const clampSidebarWidth = normalizeSidebarWidth
@@ -112,10 +111,10 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
 
   return (
     <aside className="sidebar" data-compact={isCompactSidebar(width)} style={{ width: normalizeSidebarWidth(width) }}>
-      <div className="sidebar-brand">
+      <button aria-label="Rocker" className="sidebar-brand" type="button" onClick={() => onNavigate("hosts")}>
         <img alt="" aria-hidden="true" src={rockerMark} />
         <span>Rocker</span>
-      </div>
+      </button>
 
       <nav className="primary-nav" aria-label={t("sidebar.primaryNavigation")}>
         {navItems.map(({ key, icon }) => (
@@ -135,15 +134,12 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
         />
       </nav>
 
-      <section className="session-section">
-        <div className="sidebar-section-heading">
-          <span>{t("sidebar.sessions")}</span>
-        </div>
-        {sessions.length === 0 ? <p className="sidebar-empty">{t("sidebar.noSessions")}</p> : (
+      <section className="session-section" aria-label={t("sidebar.workspaceSessions")}>
+        {sessions.length === 0 ? null : (
           <div className="sidebar-session-list">
             {sessions.map((session) => (
               <div key={session.id} className="sidebar-session-row">
-                <button aria-expanded={menuSessionId === session.id} aria-haspopup="menu" data-active={session.id === activeSessionId} data-session-id={session.id} ref={(element) => { if (element && menuSessionId === session.id) menuTriggerRef.current = element }} type="button" onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openSessionMenu(session.id, event.currentTarget) }} onKeyDown={(event) => {
+                <button aria-expanded={menuSessionId === session.id} aria-haspopup="menu" aria-label={`${kindBadge(sessionKind(session))} ${session.label}`} data-active={session.id === activeSessionId} data-session-id={session.id} data-session-kind={sessionKind(session)} ref={(element) => { if (element && menuSessionId === session.id) menuTriggerRef.current = element }} type="button" onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openSessionMenu(session.id, event.currentTarget) }} onKeyDown={(event) => {
                   const opensMenu = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)
                   if (!opensMenu) return
                   event.preventDefault()
@@ -153,8 +149,8 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, comm
                   onSessionActivate?.(session.id)
                   onNavigate("terminal")
                 }}>
-                  <span className="session-state-dot" data-state={session.state} />
-                  <span>{session.label}</span>
+                  <span className="session-type-badge" data-kind={sessionKind(session)}>{kindBadge(sessionKind(session))}</span>
+                  <span className="session-name">{session.label}</span>
                 </button>
                 {menuSessionId === session.id && <div aria-label={t("sidebar.sessionActions").replace("{label}", session.label)} className="session-menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key !== "Escape") return; event.preventDefault(); closeSessionMenu() }} ref={menuRef} role="menu" tabIndex={-1}>
                   <SessionMenuItem commandId="session.reconnect" disabled={!isSessionCommandEnabled("session.reconnect", session, commandContext)} onClick={() => dispatchSessionCommand("session.reconnect", session, commandContext, onSessionCommand, closeSessionMenu)}><RotateCw aria-hidden="true" size={14} /><span>{t("commands.reconnect")}</span></SessionMenuItem>
@@ -221,6 +217,12 @@ function dispatchSessionCommand(commandId: SessionCommandId, session: WorkspaceS
   if (!isSessionCommandEnabled(commandId, session, commandContext)) return
   onSessionCommand?.(commandId, session)
   closeSessionMenu()
+}
+
+function kindBadge(kind: SessionKind): string {
+  if (kind === "sftp") return "SFTP"
+  if (kind === "pf") return "PF"
+  return "SSH"
 }
 
 function isSessionCommandEnabled(commandId: SessionCommandId, session: WorkspaceSession, commandContext: CommandContext | undefined): boolean {

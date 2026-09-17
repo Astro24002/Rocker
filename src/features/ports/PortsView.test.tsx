@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import { I18nProvider } from "../../i18n"
@@ -25,13 +25,15 @@ describe("PortsView", () => {
         openAddress: vi.fn()
       }
     } as unknown as RockerBridge
+    const onOpenSession = vi.fn()
 
-    render(<I18nProvider><PortsView bridge={bridge} mode="global" /></I18nProvider>)
+    render(<I18nProvider><PortsView bridge={bridge} mode="global" onOpenSession={onOpenSession} /></I18nProvider>)
 
     expect(screen.queryByRole("button", { name: /new forward/i })).not.toBeInTheDocument()
     expect(await screen.findByText("Web console")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Start forwarding" }))
     expect(startProfile).toHaveBeenCalledWith("profile-1")
+    await waitFor(() => expect(onOpenSession).toHaveBeenCalledWith(profileFixture(), expect.objectContaining({ id: "runtime-1", status: "forwarding" })))
   })
 
   it("saves a Host-local profile without starting it", async () => {
@@ -48,8 +50,9 @@ describe("PortsView", () => {
         openAddress: vi.fn()
       }
     } as unknown as RockerBridge
+    const onOpenSession = vi.fn()
 
-    render(<I18nProvider><PortsView bridge={bridge} mode="host" hostId="host-a" session={sessionFixture()} /></I18nProvider>)
+    render(<I18nProvider><PortsView bridge={bridge} mode="host" hostId="host-a" session={sessionFixture()} onOpenSession={onOpenSession} /></I18nProvider>)
     fireEvent.click(await screen.findByRole("button", { name: "New forwarding" }))
     fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: "Web console" } })
     fireEvent.change(screen.getByLabelText("Remote address"), { target: { value: "127.0.0.1" } })
@@ -59,6 +62,7 @@ describe("PortsView", () => {
 
     expect(await createProfile).toHaveBeenCalledWith("host-a", expect.objectContaining({ name: "Web console", remotePort: 8080 }))
     expect(startProfile).not.toHaveBeenCalled()
+    await waitFor(() => expect(onOpenSession).toHaveBeenCalledWith(profileFixture(), undefined))
   })
 
   it("offers save and start for a Host-local profile and warns on public binds", async () => {

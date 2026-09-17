@@ -12,7 +12,7 @@ describe("rocker package scaffold", () => {
     }
 
     expect(packageJson.name).toBe("rocker")
-    expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/)
     expect(packageJson.build.appId).toBe("rocker")
     expect(packageJson.scripts).toMatchObject({
       dev: expect.any(String),

@@ -19,7 +19,7 @@ describe("Sidebar session actions", () => {
     expect(screen.getByRole("button", { name: "Settings" })).not.toHaveAttribute("aria-current")
     expect(screen.queryByText("Current host")).not.toBeInTheDocument()
     expect(screen.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Hosts", "Trust", "SFTP", "Snippets", "Port Forwarding", "History", "Settings"
+      "Rocker", "Hosts", "SFTP", "Snippets", "Port Forwarding", "Connections", "Settings"
     ])
     expect(onNavigate).not.toHaveBeenCalled()
     expect(container.querySelector(".sidebar-resizer")).toBeNull()
@@ -30,7 +30,7 @@ describe("Sidebar session actions", () => {
     const onSessionActivate = vi.fn()
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={onNavigate} onSessionActivate={onSessionActivate} /></I18nProvider>)
 
-    const sessionButton = screen.getByRole("button", { name: "G11" })
+    const sessionButton = screen.getByRole("button", { name: "SSH G11" })
     fireEvent.click(sessionButton)
     expect(onSessionActivate).toHaveBeenCalledWith("session-1")
     expect(onNavigate).toHaveBeenCalledWith("terminal")
@@ -46,7 +46,7 @@ describe("Sidebar session actions", () => {
   it("focuses the session menu and closes it on Escape", () => {
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} /></I18nProvider>)
 
-    const sessionButton = screen.getByRole("button", { name: "G11" })
+    const sessionButton = screen.getByRole("button", { name: "SSH G11" })
     fireEvent.contextMenu(sessionButton)
     const menu = screen.getByRole("menu", { name: "Session actions for G11" })
 
@@ -59,7 +59,7 @@ describe("Sidebar session actions", () => {
   it.each(["ContextMenu", "F10"] as const)("opens the Session menu with %s keyboard input", (key) => {
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} /></I18nProvider>)
 
-    const sessionButton = screen.getByRole("button", { name: "G11" })
+    const sessionButton = screen.getByRole("button", { name: "SSH G11" })
     sessionButton.focus()
     fireEvent.keyDown(sessionButton, { key, shiftKey: key === "F10" })
 
@@ -69,7 +69,7 @@ describe("Sidebar session actions", () => {
   it("restores focus to the session row after an outside dismissal", () => {
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} /></I18nProvider>)
 
-    const sessionButton = screen.getByRole("button", { name: "G11" })
+    const sessionButton = screen.getByRole("button", { name: "SSH G11" })
     fireEvent.contextMenu(sessionButton)
     fireEvent.click(document.body)
 
@@ -80,26 +80,26 @@ describe("Sidebar session actions", () => {
   it("closes a Session menu and restores its origin focus after destination changes", () => {
     const { rerender } = render(<I18nProvider><Sidebar width={220} activeNav="terminal" sessions={[session]} onNavigate={vi.fn()} /></I18nProvider>)
 
-    const sessionButton = screen.getByRole("button", { name: "G11" })
+    const sessionButton = screen.getByRole("button", { name: "SSH G11" })
     fireEvent.contextMenu(sessionButton)
     expect(screen.getByRole("menu", { name: "Session actions for G11" })).toBeInTheDocument()
 
     rerender(<I18nProvider><Sidebar width={58} activeNav="hosts" sessions={[session]} activeSessionId={session.id} onNavigate={vi.fn()} /></I18nProvider>)
 
     expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "G11" })).toHaveFocus()
-    expect(screen.getByRole("button", { name: "G11" })).toHaveAttribute("data-active", "true")
+    expect(screen.getByRole("button", { name: "SSH G11" })).toHaveFocus()
+    expect(screen.getByRole("button", { name: "SSH G11" })).toHaveAttribute("data-active", "true")
   })
 
   it("clears its row menu when the command palette opens", () => {
     const { rerender } = render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} commandPaletteOpen={false} /></I18nProvider>)
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     expect(screen.getByRole("menu", { name: "Session actions for G11" })).toBeInTheDocument()
 
     rerender(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} commandPaletteOpen /></I18nProvider>)
     expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
-    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
 
     rerender(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} commandPaletteOpen={false} /></I18nProvider>)
@@ -110,7 +110,7 @@ describe("Sidebar session actions", () => {
     const onSessionCommand = vi.fn()
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state: "disconnected" }]} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     const menu = screen.getByRole("menu", { name: "Session actions for G11" })
     expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
       "Reconnect",
@@ -140,7 +140,7 @@ describe("Sidebar session actions", () => {
     const onSessionCommand = vi.fn()
     render(<I18nProvider><Sidebar width={220} activeNav="terminal" sessions={[session]} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     fireEvent.click(screen.getByRole("menuitem", { name: "Port forwarding" }))
 
     expect(onSessionCommand).toHaveBeenCalledWith("session.port-forwarding", session)
@@ -150,7 +150,7 @@ describe("Sidebar session actions", () => {
   it("opens Duplicate with pointer hover and returns focus on Escape", () => {
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} /></I18nProvider>)
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     const duplicate = screen.getByRole("menuitem", { name: "Duplicate" })
     fireEvent.pointerEnter(duplicate)
     expect(screen.getByRole("menu", { name: "Duplicate options" })).toBeInTheDocument()
@@ -162,11 +162,11 @@ describe("Sidebar session actions", () => {
   it("only enables Reconnect for disconnected or error sessions", () => {
     const { rerender } = render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     expect(screen.getByRole("menuitem", { name: "Reconnect" })).toBeDisabled()
 
     rerender(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state: "error" }]} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
-    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     expect(screen.getByRole("menuitem", { name: "Reconnect" })).toBeEnabled()
   })
 
@@ -182,7 +182,7 @@ describe("Sidebar session actions", () => {
   ] as const)("derives every session action guard from the registry for %s sessions", (state, expected) => {
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state }]} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     const enabledByLabel = {
       reconnect: "Reconnect",
       rename: "Rename",
@@ -209,16 +209,30 @@ describe("Sidebar session actions", () => {
     const onSessionCommand = vi.fn()
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state: "connecting" }]} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }))
     expect(onSessionCommand).not.toHaveBeenCalled()
+  })
+
+  it("renders mixed session kinds as badge and name only", () => {
+    render(<I18nProvider><Sidebar width={220} activeNav="terminal" sessions={[
+      session,
+      { id: "session-2", hostId: "host-1", label: "G11 files", state: "idle", kind: "sftp", browser: { path: "/", entries: [], loading: false } },
+      { id: "session-3", hostId: "host-1", label: "G11 forward", state: "disconnected", kind: "pf", profileId: "profile-1", forwardingStatus: "stopped" }
+    ]} activeSessionId="session-2" onNavigate={vi.fn()} /></I18nProvider>)
+
+    expect(screen.getByRole("button", { name: "SSH G11" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "SFTP G11 files" })).toHaveAttribute("data-active", "true")
+    expect(screen.getByRole("button", { name: "PF G11 forward" })).toBeInTheDocument()
+    expect(screen.queryByText("10.0.0.11")).not.toBeInTheDocument()
+    expect(screen.queryByText("connected")).not.toBeInTheDocument()
   })
 
   it("does not dispatch rename or close for a closing session", () => {
     const onSessionCommand = vi.fn()
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state: "closing" }]} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "G11" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }))
     expect(onSessionCommand).not.toHaveBeenCalled()
   })

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ComponentProps } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { WorkspaceSession } from "./session-state"
+import type { SshWorkspaceSession } from "./session-state"
 import { TerminalView } from "./TerminalView"
 import type { TerminalPreferences } from "./terminal-controller"
 import "../../styles/base.css"
@@ -89,7 +89,7 @@ vi.mock("@xterm/xterm", () => ({ Terminal: xterm.Terminal }))
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: fit.FitAddon }))
 vi.mock("@xterm/addon-search", () => ({ SearchAddon: search.SearchAddon }))
 
-const session: WorkspaceSession = {
+const session: SshWorkspaceSession = {
   id: "11111111-1111-4111-8111-111111111111",
   hostId: "host-a",
   label: "G11",

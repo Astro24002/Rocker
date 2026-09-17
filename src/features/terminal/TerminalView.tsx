@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm"
 import { useCallback, useEffect, useRef, type ClipboardEvent as ReactClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import type { TerminalDimensions } from "../../../electron/ssh/types"
 import type { TerminalCommandSurface } from "../commands/command-registry"
-import type { WorkspaceSession } from "./session-state"
+import type { SshWorkspaceSession } from "./session-state"
 import { createTerminalSearchAdapter, TerminalSearchController } from "./terminal-search"
 import { readRockerTerminalTheme } from "./terminal-theme"
 import { TerminalController, type TerminalPreferences } from "./terminal-controller"
@@ -12,7 +12,7 @@ type TerminalOptionsWithBell = ConstructorParameters<typeof Terminal>[0] & { bel
 type TerminalRuntimeOptions = TerminalOptionsWithBell & { bellStyle: "sound" | "none" }
 
 export interface TerminalViewProps {
-  session: WorkspaceSession
+  session: SshWorkspaceSession
   visible: boolean
   preferences: TerminalPreferences
   confirmMultilinePaste: boolean
@@ -24,6 +24,7 @@ export interface TerminalViewProps {
   onSearchController?(sessionId: string, controller: TerminalSearchController | undefined): void
   onCommandSurface?(sessionId: string, surface: TerminalCommandSurface | undefined): void
   onContextMenu?(event: MouseEvent): void
+  themeId?: string
 }
 
 export function TerminalView(props: TerminalViewProps) {
@@ -66,7 +67,7 @@ export function TerminalView(props: TerminalViewProps) {
       lineHeight: 1.25,
       scrollback: propsRef.current.preferences.scrollback,
       bellStyle: propsRef.current.preferences.terminalBell ? "sound" : "none",
-      theme: readRockerTerminalTheme()
+      theme: readRockerTerminalTheme(container)
     } as TerminalOptionsWithBell)
     const terminalOptions = terminal.options as TerminalRuntimeOptions
     const fitAddon = new FitAddon()
@@ -177,6 +178,13 @@ export function TerminalView(props: TerminalViewProps) {
   }, [props.preferences, scheduleFit])
 
   useEffect(() => {
+    const terminal = terminalRef.current
+    const container = containerRef.current
+    if (!terminal || !container) return
+    terminal.options.theme = readRockerTerminalTheme(container)
+  }, [props.themeId])
+
+  useEffect(() => {
     if (props.visible) scheduleFit()
   }, [props.visible, scheduleFit])
 
@@ -199,6 +207,7 @@ export function TerminalView(props: TerminalViewProps) {
       className="terminal-surface"
       data-active={props.visible}
       data-session-id={props.session.id}
+      data-theme={props.themeId}
       data-testid="terminal-surface"
       data-visible={props.visible}
       onClick={() => controllerRef.current?.focus()}

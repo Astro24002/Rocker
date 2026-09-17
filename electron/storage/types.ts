@@ -6,6 +6,10 @@ export type HostCharset = "utf-8" | "gb18030" | "iso-8859-1"
 
 export type HostThemeColor = "rocker" | "amber" | "ocean" | "slate"
 
+export type ThemeId = "forest" | "dracula" | "paper"
+
+export type HostSort = "name-asc" | "name-desc" | "recent" | "favorites"
+
 export type HostEnvironment = "production" | "staging" | "development" | "personal"
 
 export type CredentialKind = "password" | "passphrase"
@@ -57,8 +61,13 @@ export interface StoredWorkspaceSession {
   sessionId: string
   hostId: string
   label: string
-  cols: number
-  rows: number
+  /** Omitted by legacy records; it always means SSH. */
+  kind?: "ssh" | "sftp" | "pf"
+  cols?: number
+  rows?: number
+  path?: string
+  profileId?: string
+  applicationProtocol?: "http" | "https"
 }
 
 export interface StoredWorkspaceWindow {
@@ -99,6 +108,11 @@ export interface StoredForwardingDocument {
 export interface AppSettings {
   locale: "en" | "zh-CN"
   sidebarWidth: number
+  globalThemeId?: ThemeId
+  hostThemeOverrides?: Record<string, ThemeId | undefined>
+  hostSort?: HostSort
+  hostFavoritesOnly?: boolean
+  connectionsTab?: "history" | "trust"
   terminalFont: string
   terminalFontSize: number
   scrollback: 1000 | 5000 | 10000 | 25000 | 50000

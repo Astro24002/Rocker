@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import type { TerminalSessionState } from "../../../electron/ssh/types"
+import type { WorkspaceSession } from "../terminal/session-state"
 import {
   commandRegistry,
   executeCommand,
@@ -15,7 +16,8 @@ const session = {
   hostId: "host-1",
   label: "G11",
   state: "connected" as const,
-  channelGeneration: 1
+  channelGeneration: 1,
+  kind: "ssh" as const
 }
 
 describe("command registry", () => {
@@ -257,14 +259,31 @@ describe("command registry", () => {
     const groups = groupCommands(filterCommands(commandRegistry, "recon"))
     expect(groups).toEqual([{ category: "session", commands: [getCommand("session.reconnect")] }])
   })
+
+  it("disables terminal and SSH-only session commands for SFTP and PF sessions", () => {
+    for (const kind of ["sftp", "pf"] as const) {
+      const context = createContext("connected", true, kind)
+      expect(getCommand("terminal.search")?.isEnabled(context)).toBe(false)
+      expect(getCommand("terminal.copy")?.isEnabled(context)).toBe(false)
+      expect(getCommand("session.reconnect")?.isEnabled(context)).toBe(false)
+      expect(getCommand("session.duplicate")?.isEnabled(context)).toBe(false)
+      expect(getCommand("session.duplicate-window")?.isEnabled(context)).toBe(false)
+      expect(getCommand("session.split-horizontal")?.isEnabled(context)).toBe(false)
+      expect(getCommand("session.rename")?.isEnabled(context)).toBe(true)
+      expect(getCommand("session.close")?.isEnabled(context)).toBe(true)
+    }
+  })
 })
 
-function createContext(state: TerminalSessionState | undefined, hasSelection: boolean): CommandContext {
-  const activeSession = state ? { ...session, state } : undefined
+function createContext(state: TerminalSessionState | undefined, hasSelection: boolean, kind: "ssh" | "sftp" | "pf" = "ssh"): CommandContext {
+  let activeSession: WorkspaceSession | undefined
+  if (state && kind === "ssh") activeSession = { ...session, state }
+  if (state && kind === "sftp") activeSession = { id: session.id, hostId: session.hostId, label: session.label, state, kind, browser: { path: "/", entries: [], loading: false } }
+  if (state && kind === "pf") activeSession = { id: session.id, hostId: session.hostId, label: session.label, state, kind, profileId: "profile-1", forwardingStatus: "forwarding" }
   return {
     activeSession,
     connectionState: state,
-    terminalBufferAvailable: Boolean(activeSession),
+    terminalBufferAvailable: Boolean(activeSession) && kind === "ssh",
     terminal: {
       hasSelection: vi.fn(() => hasSelection),
       copy: vi.fn(),

@@ -1,4 +1,4 @@
-import { AlertTriangle, Clipboard, ExternalLink, Pencil, Play, Plus, RefreshCw, Server, Square, Trash2, X } from "lucide-react"
+import { AlertTriangle, Clipboard, ExternalLink, PanelTopOpen, Pencil, Play, Plus, RefreshCw, Server, Square, Trash2, X } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import type { ForwardingProfileRequest, ForwardingProfileView } from "../../../electron/ports/types"
@@ -20,6 +20,7 @@ interface PortsViewProps {
   bindAddress?: AppSettings["bindAddress"]
   hosts?: readonly HostProfile[]
   onOpenHost?(hostId: string): void
+  onOpenSession?(profile: ForwardingProfile, runtime?: ForwardingInfo): void
 }
 
 export function PortsView(props: PortsViewProps) {
@@ -166,7 +167,7 @@ function LegacyPortsView({ bridge, connectionId, session, username, bindAddress 
   )
 }
 
-function GlobalPortsView({ bridge, hosts, onOpenHost }: PortsViewProps) {
+function GlobalPortsView({ bridge, hosts, onOpenHost, onOpenSession }: PortsViewProps) {
   const { t } = useI18n()
   const [rows, setRows] = useState<ForwardingProfileView[]>([])
   const [loading, setLoading] = useState(true)
@@ -198,6 +199,7 @@ function GlobalPortsView({ bridge, hosts, onOpenHost }: PortsViewProps) {
     try {
       const runtime = await bridge.ports.startProfile(profile.id)
       setRows((current) => current.map((row) => row.profile.id === profile.id ? { ...row, runtime } : row))
+      onOpenSession?.(profile, runtime)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     }
@@ -250,6 +252,7 @@ function GlobalPortsView({ bridge, hosts, onOpenHost }: PortsViewProps) {
                   <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
                   <span className="port-connection-summary">{connectionSummary(status, t)}</span>
                   <div className="port-actions">
+                    {onOpenSession && <IconButton label={t("session.open")} onClick={() => onOpenSession(profile, runtime)}><PanelTopOpen size={14} /></IconButton>}
                     {active && runtime ? <>
                       {status === "forwarding" && <IconButton label={t("ports.openAddress")} onClick={() => void bridge.ports.openAddress(runtime.id)}><ExternalLink size={14} /></IconButton>}
                       <IconButton label={t("ports.stopForwarding")} onClick={() => void stop(runtime)}><Square size={13} /></IconButton>
@@ -281,7 +284,7 @@ interface HostForwardingFormState {
   autoStart: boolean
 }
 
-function HostPortsView({ bridge, hostId, connectionId, session, username, bindAddress = "127.0.0.1" }: PortsViewProps) {
+function HostPortsView({ bridge, hostId, connectionId, session, username, bindAddress = "127.0.0.1", onOpenSession }: PortsViewProps) {
   const { t } = useI18n()
   const canCreateProfile = Boolean(hostId && session)
   const [rows, setRows] = useState<ForwardingProfileView[]>([])
@@ -382,8 +385,9 @@ function HostPortsView({ bridge, hostId, connectionId, session, username, bindAd
       const profile = editing
         ? await bridge.ports.updateProfile(editing.id, request)
         : await bridge.ports.createProfile(hostId, request)
+      let runtime = rows.find((row) => row.profile.id === profile.id)?.runtime
       if (startAfterSave) {
-        const runtime = await bridge.ports.startProfile(profile.id)
+        runtime = await bridge.ports.startProfile(profile.id)
         setRows((current) => {
           const next = current.filter((row) => row.profile.id !== profile.id)
           return [...next, { profile, runtime }]
@@ -394,6 +398,7 @@ function HostPortsView({ bridge, hostId, connectionId, session, username, bindAd
           return [...next, { profile, runtime: current.find((row) => row.profile.id === profile.id)?.runtime }]
         })
       }
+      onOpenSession?.(profile, runtime)
       setEditorOpen(false)
       setError(undefined)
     } catch (reason) {
@@ -407,6 +412,7 @@ function HostPortsView({ bridge, hostId, connectionId, session, username, bindAd
     try {
       const runtime = await bridge.ports.startProfile(profile.id)
       setRows((current) => current.map((row) => row.profile.id === profile.id ? { ...row, runtime } : row))
+      onOpenSession?.(profile, runtime)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     }
@@ -491,6 +497,7 @@ function HostPortsView({ bridge, hostId, connectionId, session, username, bindAd
               <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
               <span>{profile.autoStart ? t("ports.autoStart") : t("ports.manualStart")}</span>
               <div className="port-actions">
+                {onOpenSession && <IconButton label={t("session.open")} onClick={() => onOpenSession(profile, runtime)}><PanelTopOpen size={14} /></IconButton>}
                 {runtime?.status === "forwarding" && <>
                   <IconButton label={t("ports.copyAddress")} onClick={() => void navigator.clipboard?.writeText(formatAddress(runtime.localAddress, runtime.localPort))}><Clipboard size={14} /></IconButton>
                   <IconButton label={t("ports.openAddress")} onClick={() => void bridge.ports.openAddress(runtime.id)}><ExternalLink size={14} /></IconButton>

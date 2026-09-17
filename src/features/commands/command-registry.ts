@@ -29,7 +29,7 @@ export type CommandId =
   | "palette.open"
 
 export type CommandCategory = "terminal" | "session" | "navigation" | "palette"
-export type NavigationCommand = "hosts" | "trust" | "history" | "ports" | "settings" | "sftp" | "snippets" | "terminal"
+export type NavigationCommand = "hosts" | "trust" | "history" | "connections" | "ports" | "settings" | "sftp" | "snippets" | "terminal"
 
 export interface TerminalCommandSurface {
   hasSelection(): boolean
@@ -211,7 +211,7 @@ export const commandRegistry: readonly CommandDefinition[] = [
     labelKey: "commands.reconnect",
     category: "session",
     keywords: ["retry", "connection"],
-    isEnabled: (context) => sessionState(context) === "disconnected" || sessionState(context) === "error",
+    isEnabled: (context) => isSshSession(context) && (sessionState(context) === "disconnected" || sessionState(context) === "error"),
     execute: executeForSession((context, session) => context.actions.session.reconnect(session))
   },
   {
@@ -438,20 +438,25 @@ function hasSession(context: CommandContext): boolean {
 }
 
 function canDuplicateSession(context: CommandContext): boolean {
+  if (!isSshSession(context)) return false
   const state = sessionState(context)
   return state === "connected" || state === "disconnected" || state === "error"
 }
 
 function canDuplicateWindow(context: CommandContext): boolean {
-  return sessionState(context) === "connected"
+  return isSshSession(context) && sessionState(context) === "connected"
 }
 
 function canSplitSession(context: CommandContext): boolean {
-  return sessionState(context) === "connected"
+  return isSshSession(context) && sessionState(context) === "connected"
+}
+
+function isSshSession(context: CommandContext): boolean {
+  return (context.activeSession?.kind ?? "ssh") === "ssh"
 }
 
 function hasTerminalBuffer(context: CommandContext): boolean {
-  return hasSession(context) && context.terminalBufferAvailable !== false
+  return hasSession(context) && isSshSession(context) && context.terminalBufferAvailable !== false
 }
 
 function hasSelection(context: CommandContext): boolean {

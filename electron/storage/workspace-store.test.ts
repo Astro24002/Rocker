@@ -74,6 +74,28 @@ describe("WorkspaceSnapshotStore", () => {
     })
   })
 
+  it("keeps SFTP and PF workspace metadata without treating it as a terminal", async () => {
+    const filePath = await temporaryFilePath()
+    const store = new WorkspaceSnapshotStore(filePath)
+    store.saveWindow({
+      workspaceId,
+      maximized: false,
+      activeSessionId: secondSessionId,
+      sessions: [
+        { sessionId, hostId: "host-a", label: "G11", cols: 120, rows: 40 },
+        { sessionId: secondSessionId, hostId: "host-a", label: "G11 files", kind: "sftp", path: "/srv" },
+        { sessionId: "44444444-4444-4444-8444-444444444444", hostId: "host-a", label: "Web", kind: "pf", profileId: "profile-a", applicationProtocol: "https" }
+      ]
+    })
+    await store.flush()
+
+    expect((await store.load()).windows[0].sessions).toEqual([
+      { sessionId, hostId: "host-a", label: "G11", cols: 120, rows: 40 },
+      { sessionId: secondSessionId, hostId: "host-a", label: "G11 files", kind: "sftp", path: "/srv" },
+      { sessionId: "44444444-4444-4444-8444-444444444444", hostId: "host-a", label: "Web", kind: "pf", profileId: "profile-a", applicationProtocol: "https" }
+    ])
+  })
+
   it("drops an invalid layout leaf without blocking startup", async () => {
     const filePath = await temporaryFilePath()
     await writeFile(filePath, JSON.stringify({

@@ -1,10 +1,10 @@
 import { AlertTriangle, LoaderCircle, RotateCw, X } from "lucide-react"
 import { useI18n } from "../../i18n"
-import type { WorkspaceSession } from "./session-state"
+import type { SshWorkspaceSession } from "./session-state"
 import { getTerminalFailurePresentation } from "./terminal-error"
 
 interface TerminalConnectionOverlayProps {
-  session?: WorkspaceSession
+  session?: SshWorkspaceSession
   onCancel(): void
   onReconnectNow(): void
   reconnectDisabled?: boolean

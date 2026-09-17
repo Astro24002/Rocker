@@ -1,15 +1,17 @@
-import { Copy, Import, Pencil, Plus, Search, Server, Star, StarOff, Trash2 } from "lucide-react"
+import { Copy, FolderClosed, Import, Network, Pencil, Plus, Search, Server, Star, StarOff, TerminalSquare, Trash2 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import ubuntuMark from "../../assets/platforms/ubuntu.svg"
 import debianMark from "../../assets/platforms/debian.svg"
-import type { HostEnvironment, HostProfile } from "../../app/types"
+import type { ConnectionHistoryItem, HostProfile, HostSort } from "../../app/types"
 import { useI18n } from "../../i18n"
-import { filterHosts, getHostPlatform, isCompleteSshCommand } from "./host-state"
+import { filterHosts, getHostPlatform, isCompleteSshCommand, sortHosts } from "./host-state"
 
 interface HostListProps {
   hosts: HostProfile[]
   disabled?: boolean
   onConnect(host: HostProfile): void
+  onOpenSftp?(host: HostProfile): void
+  onOpenForwarding?(host: HostProfile): void
   onConnectCommand?(command: string): void
   onAdd(): void
   onEdit(host: HostProfile): void
@@ -17,7 +19,12 @@ interface HostListProps {
   onDuplicate(host: HostProfile): Promise<HostProfile>
   onToggleFavorite(host: HostProfile): Promise<HostProfile>
   onRemove(host: HostProfile): Promise<void>
+  history?: readonly ConnectionHistoryItem[]
+  /** Compatibility-only input from the retired Recent filter. */
   recentHostIds?: ReadonlySet<string>
+  sort?: HostSort
+  favoritesOnly?: boolean
+  onPreferencesChange?(preferences: { sort?: HostSort; favoritesOnly?: boolean }): void
 }
 
 interface HostContextMenuState {
@@ -27,12 +34,14 @@ interface HostContextMenuState {
 }
 
 const hostContextMenuWidth = 224
-const hostContextMenuHeight = 156
+const hostContextMenuHeight = 328
 
 export function HostList({
   hosts,
   disabled = false,
   onConnect,
+  onOpenSftp,
+  onOpenForwarding,
   onConnectCommand,
   onAdd,
   onEdit,
@@ -40,48 +49,26 @@ export function HostList({
   onDuplicate,
   onToggleFavorite,
   onRemove,
-  recentHostIds,
+  history = [],
+  sort = "name-asc",
+  favoritesOnly = false,
+  onPreferencesChange = () => undefined,
 }: HostListProps) {
   const { t } = useI18n()
   const [query, setQuery] = useState("")
-  const [group, setGroup] = useState("all")
-  const [environment, setEnvironment] = useState<HostEnvironment | "all">("all")
-  const [tag, setTag] = useState("all")
-  const [recentOnly, setRecentOnly] = useState(false)
   const [selectedHostId, setSelectedHostId] = useState<string>()
   const [actionBusy, setActionBusy] = useState(false)
   const [actionError, setActionError] = useState(false)
   const [hostContextMenu, setHostContextMenu] = useState<HostContextMenuState>()
   const hostContextMenuRef = useRef<HTMLDivElement>(null)
   const hostContextMenuTriggerRef = useRef<HTMLButtonElement>(null)
-  const groups = useMemo(() => [...new Set(hosts.map((host) => host.group).filter(Boolean))] as string[], [hosts])
-  const environments = useMemo(() => environmentOrder.filter((candidate) => hosts.some((host) => host.environment === candidate)), [hosts])
-  const tags = useMemo(() => {
-    const unique = new Map<string, string>()
-    for (const candidate of hosts.flatMap((host) => host.tags ?? [])) {
-      const tag = candidate.trim()
-      if (tag && !unique.has(tag.toLowerCase())) unique.set(tag.toLowerCase(), tag)
-    }
-    return [...unique.values()].sort((left, right) => left.localeCompare(right))
-  }, [hosts])
-  const environmentLabels: Record<HostEnvironment, string> = {
-    production: t("hosts.environment.production"),
-    staging: t("hosts.environment.staging"),
-    development: t("hosts.environment.development"),
-    personal: t("hosts.environment.personal")
-  }
   const commandReady = isCompleteSshCommand(query)
   const contextHost = hostContextMenu ? hosts.find((host) => host.id === hostContextMenu.hostId) : undefined
-  const filtered = useMemo(() => {
-    const filter = { group, query: /^ssh(?:\s|$)/i.test(query.trim()) ? "" : query, recentOnly, recentHostIds, environment, tag }
-    return filterHosts(hosts, filter)
-  }, [environment, group, hosts, query, recentHostIds, recentOnly, tag])
-
-  const selectHost = (host: HostProfile): void => {
-    if (!disabled) {
-      setSelectedHostId(host.id)
-    }
-  }
+  const filtered = useMemo(() => sortHosts(
+    filterHosts(hosts, { query: /^ssh(?:\s|$)/i.test(query.trim()) ? "" : query, favoritesOnly }),
+    sort,
+    history
+  ), [favoritesOnly, history, hosts, query, sort])
 
   const connectCommand = (): void => {
     if (disabled || !commandReady) return
@@ -137,6 +124,27 @@ export function HostList({
     return () => window.removeEventListener("click", closeOnOutsideClick)
   }, [contextHost, disabled, hostContextMenu])
 
+  const openSshContextHost = (): void => {
+    if (!contextHost || disabled) return
+    const host = contextHost
+    closeHostContextMenu(false)
+    onConnect(host)
+  }
+
+  const openSftpContextHost = (): void => {
+    if (!contextHost || disabled || !onOpenSftp) return
+    const host = contextHost
+    closeHostContextMenu(false)
+    onOpenSftp(host)
+  }
+
+  const openForwardingContextHost = (): void => {
+    if (!contextHost || disabled || !onOpenForwarding) return
+    const host = contextHost
+    closeHostContextMenu(false)
+    onOpenForwarding(host)
+  }
+
   const editContextHost = (): void => {
     if (!contextHost || disabled || actionBusy) return
     const host = contextHost
@@ -164,8 +172,7 @@ export function HostList({
   const removeContextHost = (): void => {
     if (!contextHost) return
     const host = contextHost
-    const confirmationKey = host.environment === "production" ? "hosts.action.deleteProductionConfirm" : "hosts.action.deleteConfirm"
-    if (!window.confirm(t(confirmationKey).replace("{name}", host.name))) {
+    if (!window.confirm(t("hosts.action.deleteConfirm").replace("{name}", host.name))) {
       closeHostContextMenu()
       return
     }
@@ -205,24 +212,16 @@ export function HostList({
           <button className="host-connect-command" type="button" aria-label={t("hosts.connect")} disabled={disabled || !commandReady} onClick={connectCommand}>{t("hosts.connect")} <kbd>↵</kbd></button>
         </div>
 
-        <div className="host-filter-row" aria-label={t("hosts.hostGroups")}>
-          <button aria-pressed={group === "all"} type="button" data-active={group === "all"} onClick={() => setGroup("all")}>{t("hosts.allHosts")} <span>{hosts.length}</span></button>
-          <button aria-pressed={recentOnly} type="button" data-active={recentOnly} onClick={() => setRecentOnly((active) => !active)}>{t("hosts.recent")}</button>
-          {groups.map((name) => (
-            <button key={name} aria-pressed={group === name} type="button" data-active={group === name} onClick={() => setGroup(name)}>{name}<span>{hosts.filter((host) => host.group === name).length}</span></button>
-          ))}
+        <div className="host-filter-row" aria-label={t("hosts.filters")}>
+          <button aria-pressed={!favoritesOnly} type="button" data-active={!favoritesOnly} onClick={() => onPreferencesChange({ favoritesOnly: false })}>{t("hosts.allHosts")} <span>{hosts.length}</span></button>
+          <button aria-pressed={favoritesOnly} type="button" data-active={favoritesOnly} onClick={() => onPreferencesChange({ favoritesOnly: true })}>{t("hosts.favorites")}</button>
           <label className="host-filter-select">
-            <span>{t("hosts.environmentFilter")}</span>
-            <select aria-label={t("hosts.environmentFilter")} value={environment} onChange={(event) => setEnvironment(event.target.value as HostEnvironment | "all")}>
-              <option value="all">{t("hosts.allEnvironments")}</option>
-              {environments.map((candidate) => <option key={candidate} value={candidate}>{environmentLabels[candidate]}</option>)}
-            </select>
-          </label>
-          <label className="host-filter-select">
-            <span>{t("hosts.tagFilter")}</span>
-            <select aria-label={t("hosts.tagFilter")} value={tag} onChange={(event) => setTag(event.target.value)}>
-              <option value="all">{t("hosts.allTags")}</option>
-              {tags.map((candidate) => <option key={candidate} value={candidate}>{candidate}</option>)}
+            <span>{t("hosts.sort")}</span>
+            <select aria-label={t("hosts.sort")} value={sort} onChange={(event) => onPreferencesChange({ sort: event.target.value as HostSort })}>
+              <option value="name-asc">{t("hosts.sortNameAsc")}</option>
+              <option value="name-desc">{t("hosts.sortNameDesc")}</option>
+              <option value="recent">{t("hosts.sortRecent")}</option>
+              <option value="favorites">{t("hosts.sortFavorites")}</option>
             </select>
           </label>
           <span className="host-result-count">{commandReady ? t("hosts.sshCommandReady") : t(filtered.length === 1 ? "hosts.hostCount" : "hosts.hostCounts").replace("{count}", String(filtered.length))}</span>
@@ -248,7 +247,7 @@ export function HostList({
                   aria-expanded={hostContextMenu?.hostId === host.id}
                   aria-haspopup="menu"
                   disabled={disabled}
-                  onClick={() => selectHost(host)}
+                  onClick={() => onConnect(host)}
                   onContextMenu={(event) => {
                     event.preventDefault()
                     event.stopPropagation()
@@ -263,19 +262,21 @@ export function HostList({
                       openHostContextMenu(host, event.currentTarget)
                       return
                     }
-                    if (event.key === " ") {
-                      event.preventDefault()
-                      selectHost(host)
-                    } else if (event.key === "Enter") {
+                    if (event.key === "Enter") {
                       event.preventDefault()
                       onConnect(host)
                     }
                   }}
-                  onDoubleClick={() => { if (!disabled) onConnect(host) }}
                 >
                   <HostPlatformMark host={host} />
                   <span className="host-card-copy"><strong>{host.name}</strong><small><b>SSH</b> · {host.username}</small></span>
                 </button>
+                <div className="host-card-inline-actions">
+                  <button aria-label={host.favorite ? t("hosts.action.unfavorite") : t("hosts.action.favorite")} className="icon-button" type="button" disabled={disabled || actionBusy} onClick={(event) => { event.stopPropagation(); void runHostAction(async () => { await onToggleFavorite(host) }) }}>
+                    {host.favorite ? <Star aria-hidden="true" size={14} fill="currentColor" /> : <StarOff aria-hidden="true" size={14} />}
+                  </button>
+                  <button aria-label={t("hosts.action.edit")} className="icon-button" type="button" disabled={disabled} onClick={(event) => { event.stopPropagation(); onEdit(host) }}><Pencil aria-hidden="true" size={14} /></button>
+                </div>
               </div>
             ))}
           </div>
@@ -296,6 +297,10 @@ export function HostList({
           style={{ left: hostContextMenu.x, top: hostContextMenu.y }}
           tabIndex={-1}
         >
+          <button type="button" role="menuitem" disabled={disabled} onClick={openSshContextHost}><TerminalSquare aria-hidden="true" size={14} /><span>{t("hosts.action.openSsh")}</span></button>
+          <button type="button" role="menuitem" disabled={disabled || !onOpenSftp} onClick={openSftpContextHost}><FolderClosed aria-hidden="true" size={14} /><span>{t("hosts.action.openSftp")}</span></button>
+          <button type="button" role="menuitem" disabled={disabled || !onOpenForwarding} onClick={openForwardingContextHost}><Network aria-hidden="true" size={14} /><span>{t("hosts.action.openForwarding")}</span></button>
+          <div className="session-menu-separator" />
           <button type="button" role="menuitem" disabled={disabled || actionBusy} onClick={editContextHost}><Pencil aria-hidden="true" size={14} /><span>{t("hosts.action.edit")}</span></button>
           <button type="button" role="menuitem" disabled={disabled || actionBusy} onClick={duplicateContextHost}><Copy aria-hidden="true" size={14} /><span>{t("hosts.action.duplicate")}</span></button>
           <button type="button" role="menuitem" disabled={disabled || actionBusy} onClick={toggleContextHostFavorite}>{contextHost.favorite ? <StarOff aria-hidden="true" size={14} /> : <Star aria-hidden="true" size={14} />}<span>{contextHost.favorite ? t("hosts.action.unfavorite") : t("hosts.action.favorite")}</span></button>
@@ -306,8 +311,6 @@ export function HostList({
     </section>
   )
 }
-
-const environmentOrder: HostEnvironment[] = ["production", "staging", "development", "personal"]
 
 function HostPlatformMark({ host }: { host: HostProfile }) {
   const { t } = useI18n()

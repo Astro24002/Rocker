@@ -31,7 +31,8 @@ describe("ConfigImportJournalStore", () => {
 
     await expect(journal.recover(target)).resolves.toBeUndefined()
     expect(target.hosts[0]).toMatchObject({ name: "Local", host: "old.example" })
-    expect(target.settings).toEqual(localSettings())
+    expect(target.settings).toMatchObject(localSettings())
+    expect(target.settings).toMatchObject({ globalThemeId: "forest", connectionsTab: "history" })
     expect(target.hostKeys.get("server.example:22")).toBe("old-fingerprint")
   })
 

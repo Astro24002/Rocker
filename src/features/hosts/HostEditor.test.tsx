@@ -46,34 +46,19 @@ describe("HostEditor", () => {
     expect(saved).not.toHaveProperty("snippetCollection")
   })
 
-  it("omits a cleared parent group instead of submitting an empty group", () => {
+  it("does not expose or write retired organization metadata", () => {
     const onSave = vi.fn()
-    renderEditor(undefined, onSave)
+    renderEditor({ ...baseProfile, environment: "production", tags: ["core"] }, onSave)
     fillRequiredIdentity()
 
-    fireEvent.change(screen.getByLabelText("Parent group"), { target: { value: "   " } })
-    fireEvent.click(screen.getByRole("button", { name: "Save host" }))
+    expect(screen.queryByLabelText("Parent group")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Environment")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Tags")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
 
     expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("group")
-  })
-
-  it("saves an optional environment and trimmed comma-separated tags", () => {
-    const onSave = vi.fn()
-    renderEditor(undefined, onSave)
-    fillRequiredIdentity()
-
-    fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "production" } })
-    fireEvent.change(screen.getByLabelText("Tags"), { target: { value: " core, linux,core " } })
-    fireEvent.click(screen.getByRole("button", { name: "Save host" }))
-
-    expect(onSave.mock.calls[0]?.[0]).toMatchObject({ environment: "production", tags: ["core", "linux"] })
-  })
-
-  it("keeps an existing ungrouped host blank instead of applying the new-host default", () => {
-    const { group: _group, ...ungroupedProfile } = baseProfile
-    renderEditor(ungroupedProfile)
-
-    expect(screen.getByLabelText("Parent group")).toHaveValue("")
+    expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("environment")
+    expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("tags")
   })
 
   it("shows and validates the public-key field only when public-key login is enabled", () => {

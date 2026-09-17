@@ -6,6 +6,11 @@ import { normalizeSidebarWidth } from "../../src/shared/sidebar-width"
 export const defaultSettings: AppSettings = {
   locale: "en",
   sidebarWidth: 220,
+  globalThemeId: "forest",
+  hostThemeOverrides: {},
+  hostSort: "name-asc",
+  hostFavoritesOnly: false,
+  connectionsTab: "history",
   terminalFont: "JetBrains Mono",
   terminalFontSize: 13,
   scrollback: 10000,
@@ -55,6 +60,11 @@ export function normalizeSettings(value: unknown): AppSettings | undefined {
   return {
     locale: settings.locale === "zh-CN" ? "zh-CN" : "en",
     sidebarWidth: normalizeSidebarWidth(settings.sidebarWidth ?? defaultSettings.sidebarWidth),
+    globalThemeId: isThemeId(settings.globalThemeId) ? settings.globalThemeId : defaultSettings.globalThemeId,
+    hostThemeOverrides: normalizeHostThemeOverrides(settings.hostThemeOverrides),
+    hostSort: isHostSort(settings.hostSort) ? settings.hostSort : defaultSettings.hostSort,
+    hostFavoritesOnly: settings.hostFavoritesOnly === true,
+    connectionsTab: settings.connectionsTab === "trust" ? "trust" : "history",
     terminalFont: typeof settings.terminalFont === "string" && settings.terminalFont.length <= 80 ? settings.terminalFont : defaultSettings.terminalFont,
     terminalFontSize: clamp(settings.terminalFontSize ?? defaultSettings.terminalFontSize, 10, 24, 13),
     scrollback: isScrollback(settings.scrollback) ? settings.scrollback : defaultSettings.scrollback,
@@ -98,4 +108,22 @@ function isScrollback(value: unknown): value is AppSettings["scrollback"] {
 
 function isCursorStyle(value: unknown): value is AppSettings["cursorStyle"] {
   return value === "block" || value === "underline" || value === "bar"
+}
+
+function isThemeId(value: unknown): value is AppSettings["globalThemeId"] {
+  return value === "forest" || value === "dracula" || value === "paper"
+}
+
+function isHostSort(value: unknown): value is AppSettings["hostSort"] {
+  return value === "name-asc" || value === "name-desc" || value === "recent" || value === "favorites"
+}
+
+function normalizeHostThemeOverrides(value: unknown): AppSettings["hostThemeOverrides"] {
+  if (!isRecord(value)) return {}
+  const result: AppSettings["hostThemeOverrides"] = {}
+  for (const [hostId, themeId] of Object.entries(value)) {
+    if (hostId.length > 128 || !isThemeId(themeId)) continue
+    result[hostId] = themeId
+  }
+  return result
 }

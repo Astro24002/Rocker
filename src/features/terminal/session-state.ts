@@ -1,11 +1,22 @@
+import type { ForwardingProfileView, PortStatus } from "../../../electron/ports/types"
 import type { TerminalDimensions, TerminalFailureReason, TerminalSessionInfo, TerminalSessionState, TerminalStateEvent } from "../../../electron/ssh/types"
 import { removeSessionFromLayout, type TerminalLayout } from "./layout"
 
-export interface WorkspaceSession {
+export type SessionKind = "ssh" | "sftp" | "pf"
+
+/** Explicit application protocol for PF preview. Never inferred from a port number. */
+export type ApplicationProtocol = "http" | "https"
+
+interface WorkspaceSessionBase {
   id: string
   hostId: string
   label: string
   state: TerminalSessionState
+}
+
+export interface SshWorkspaceSession extends WorkspaceSessionBase {
+  /** Missing kind is the compatibility shape used by pre-unification workspace data. */
+  kind?: "ssh"
   channelGeneration: number
   dimensions?: TerminalDimensions
   reason?: TerminalFailureReason
@@ -13,10 +24,97 @@ export interface WorkspaceSession {
   nextRetryAt?: string
 }
 
+export interface SftpDirectoryEntry {
+  name: string
+  path: string
+  type: "file" | "directory" | "symlink" | "other"
+  size?: number
+  modifiedAt?: string
+}
+
+export interface SftpBrowserState {
+  path: string
+  entries: SftpDirectoryEntry[]
+  loading: boolean
+  error?: string
+}
+
+export interface SftpWorkspaceSession extends WorkspaceSessionBase {
+  kind: "sftp"
+  browser: SftpBrowserState
+}
+
+export interface PortForwardingWorkspaceSession extends WorkspaceSessionBase {
+  kind: "pf"
+  /** Stable profile identity. Runtime ids may change after stop/start. */
+  profileId: string
+  forwardingId?: string
+  forwardingStatus: PortStatus
+  applicationProtocol?: ApplicationProtocol
+}
+
+export type WorkspaceSession = SshWorkspaceSession | SftpWorkspaceSession | PortForwardingWorkspaceSession
+
 export interface TerminalWorkspaceState {
   sessions: WorkspaceSession[]
   activeSessionId?: string
   layout?: TerminalLayout
+}
+
+interface OpenSessionBase {
+  id: string
+  hostId: string
+  label: string
+}
+
+export type OpenSessionInput = OpenSessionBase & (
+  | {
+      kind?: "ssh"
+      dimensions?: TerminalDimensions
+    }
+  | {
+      kind: "sftp"
+      path?: string
+    }
+  | {
+      kind: "pf"
+      profileId: string
+      forwardingId?: string
+      forwardingStatus?: PortStatus
+      applicationProtocol?: ApplicationProtocol
+    }
+)
+
+export type WorkspaceSessionPatch =
+  | {
+      kind: "sftp"
+      state?: TerminalSessionState
+      browser?: Partial<SftpBrowserState>
+    }
+  | {
+      kind: "pf"
+      profileId?: string
+      label?: string
+      state?: TerminalSessionState
+      forwardingId?: string
+      forwardingStatus?: PortStatus
+      applicationProtocol?: ApplicationProtocol
+    }
+
+export function sessionKind(session: Pick<WorkspaceSession, "kind"> | undefined): SessionKind {
+  return session?.kind ?? "ssh"
+}
+
+export function isSshSession(session: WorkspaceSession | undefined): session is SshWorkspaceSession {
+  return sessionKind(session) === "ssh"
+}
+
+export function isSftpSession(session: WorkspaceSession | undefined): session is SftpWorkspaceSession {
+  return session?.kind === "sftp"
+}
+
+export function isPortForwardingSession(session: WorkspaceSession | undefined): session is PortForwardingWorkspaceSession {
+  return session?.kind === "pf"
 }
 
 export function createTerminalWorkspaceState(): TerminalWorkspaceState {
@@ -25,17 +123,55 @@ export function createTerminalWorkspaceState(): TerminalWorkspaceState {
 
 export function openSession(
   state: TerminalWorkspaceState,
-  input: Pick<WorkspaceSession, "id" | "hostId" | "label" | "dimensions">
+  input: OpenSessionInput,
+  options?: { activate?: boolean }
 ): TerminalWorkspaceState {
-  const session: WorkspaceSession = {
-    ...input,
-    state: "idle",
-    channelGeneration: 0
-  }
+  const session = createSession(input)
+  const activate = options?.activate !== false
   return {
     ...state,
     sessions: [...state.sessions, session],
-    activeSessionId: session.id
+    activeSessionId: activate ? session.id : state.activeSessionId
+  }
+}
+
+function createSession(input: OpenSessionInput): WorkspaceSession {
+  if (input.kind === "sftp") {
+    return {
+      id: input.id,
+      hostId: input.hostId,
+      label: input.label,
+      kind: "sftp",
+      state: "idle",
+      browser: {
+        path: input.path ?? "/",
+        entries: [],
+        loading: false
+      }
+    }
+  }
+  if (input.kind === "pf") {
+    const forwardingStatus = input.forwardingStatus ?? "stopped"
+    return {
+      id: input.id,
+      hostId: input.hostId,
+      label: input.label,
+      kind: "pf",
+      state: forwardingToSessionState(forwardingStatus),
+      profileId: input.profileId,
+      forwardingStatus,
+      ...(input.forwardingId ? { forwardingId: input.forwardingId } : {}),
+      ...(input.applicationProtocol ? { applicationProtocol: input.applicationProtocol } : {})
+    }
+  }
+  return {
+    id: input.id,
+    hostId: input.hostId,
+    label: input.label,
+    kind: "ssh",
+    state: "idle",
+    channelGeneration: 0,
+    ...(input.dimensions ? { dimensions: input.dimensions } : {})
   }
 }
 
@@ -59,11 +195,36 @@ export function activateSession(state: TerminalWorkspaceState, sessionId: string
     : state
 }
 
+export function patchSession(
+  state: TerminalWorkspaceState,
+  sessionId: string,
+  patch: WorkspaceSessionPatch
+): TerminalWorkspaceState {
+  if (!state.sessions.some((session) => session.id === sessionId)) return state
+  return {
+    ...state,
+    sessions: state.sessions.map((session) => {
+      if (session.id !== sessionId) return session
+      if (patch.kind === "sftp" && isSftpSession(session)) {
+        return {
+          ...session,
+          ...(patch.state ? { state: patch.state } : {}),
+          browser: patch.browser ? { ...session.browser, ...patch.browser } : session.browser
+        }
+      }
+      if (patch.kind === "pf" && isPortForwardingSession(session)) {
+        return { ...session, ...patch, kind: "pf" }
+      }
+      return session
+    })
+  }
+}
+
 export function applyTerminalState(state: TerminalWorkspaceState, event: TerminalStateEvent): TerminalWorkspaceState {
   return {
     ...state,
     sessions: state.sessions.map((session) => {
-      if (session.id !== event.sessionId || event.channelGeneration < session.channelGeneration) return session
+      if (session.id !== event.sessionId || !isSshSession(session) || event.channelGeneration < session.channelGeneration) return session
       const updated = {
         ...session,
         channelGeneration: event.channelGeneration,
@@ -83,8 +244,36 @@ export function applyTerminalState(state: TerminalWorkspaceState, event: Termina
 export function attachChannel(state: TerminalWorkspaceState, info: TerminalSessionInfo): TerminalWorkspaceState {
   return {
     ...state,
-    sessions: state.sessions.map((session) => session.id === info.sessionId
+    sessions: state.sessions.map((session) => session.id === info.sessionId && isSshSession(session)
       ? { ...session, channelGeneration: info.channelGeneration, state: info.state }
       : session)
   }
+}
+
+export function forwardingToSessionState(status: PortStatus): TerminalSessionState {
+  if (status === "starting" || status === "stopping") return "connecting"
+  if (status === "forwarding") return "connected"
+  if (status === "error") return "error"
+  if (status === "suspended" || status === "stopped") return "disconnected"
+  return "idle"
+}
+
+export function synchronizePortForwardingSessions(
+  state: TerminalWorkspaceState,
+  rows: readonly ForwardingProfileView[]
+): TerminalWorkspaceState {
+  return rows.reduce((current, { profile, runtime }) => {
+    const existing = current.sessions.find((session) => isPortForwardingSession(session) && session.profileId === profile.id)
+    const forwardingStatus = runtime?.status ?? "stopped"
+    if (isPortForwardingSession(existing)) {
+      return patchSession(current, existing.id, {
+        kind: "pf",
+        label: profile.name,
+        forwardingId: runtime?.id,
+        forwardingStatus,
+        state: forwardingToSessionState(forwardingStatus)
+      })
+    }
+    return current
+  }, state)
 }

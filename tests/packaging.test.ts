@@ -84,7 +84,7 @@ const sortedKeys = (dependencies: DependencyMap | undefined) => Object.keys(depe
 
 describe("desktop packaging metadata", () => {
   it("keeps package and lock metadata on the same release version", () => {
-    expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/)
     expect(lockfile.version).toBe(packageJson.version)
     expect(lockfile.packages[""].version).toBe(packageJson.version)
   })

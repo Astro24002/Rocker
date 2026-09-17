@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react"
 import { AlertTriangle, CheckCircle2, Download } from "lucide-react"
-import type { AppSettings } from "../../app/types"
+import type { AppSettings, HostProfile, ThemeId } from "../../app/types"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import type { Locale } from "../../i18n"
 import { useI18n } from "../../i18n"
@@ -18,6 +18,7 @@ interface SettingsViewProps {
   onExportDiagnostics(): Promise<{ canceled: boolean; path?: string }>
   bridge?: Pick<RockerBridge, "configuration" | "credentials">
   onConfigurationImported?(): void
+  hosts?: readonly HostProfile[]
 }
 
 type ExportStatus =
@@ -26,7 +27,7 @@ type ExportStatus =
   | { kind: "cancelled" }
   | { kind: "error" }
 
-export function SettingsView({ locale, disabled = false, terminalAppearanceDisabled = disabled, persistenceUnavailable = false, onLocaleChange, settings, onUpdate, onExportDiagnostics, bridge, onConfigurationImported }: SettingsViewProps) {
+export function SettingsView({ locale, disabled = false, terminalAppearanceDisabled = disabled, persistenceUnavailable = false, onLocaleChange, settings, onUpdate, onExportDiagnostics, bridge, onConfigurationImported, hosts = [] }: SettingsViewProps) {
   const { t } = useI18n()
   const [exporting, setExporting] = useState(false)
   const [exportStatus, setExportStatus] = useState<ExportStatus>({ kind: "idle" })
@@ -50,7 +51,19 @@ export function SettingsView({ locale, disabled = false, terminalAppearanceDisab
       <header className="view-header"><div><span className="view-eyebrow">Rocker</span><h1>{t("settings.title")}</h1><p>{t("settings.subtitle")}</p></div></header>
       {persistenceUnavailable && <p className="settings-persistence-status" role="status">{t("settings.persistenceUnavailable")}</p>}
       <div className="settings-list">
-        <ThemePreview />
+        <ThemePreview themeId={settings.globalThemeId ?? "forest"} />
+        <SettingRow title={t("settings.theme")} description={t("settings.themeHint")}>
+          <select aria-label={t("settings.theme")} disabled={disabled} value={settings.globalThemeId ?? "forest"} onChange={(event) => onUpdate({ globalThemeId: event.target.value as ThemeId })}><ThemeOptions /></select>
+        </SettingRow>
+        {hosts.map((host) => <SettingRow key={host.id} title={host.name} description={t("settings.hostThemeHint")}>
+          <select aria-label={`${t("settings.hostTheme")} ${host.name}`} disabled={disabled} value={settings.hostThemeOverrides?.[host.id] ?? ""} onChange={(event) => {
+            const overrides = { ...(settings.hostThemeOverrides ?? {}) }
+            const themeId = event.target.value as ThemeId | ""
+            if (themeId) overrides[host.id] = themeId
+            else delete overrides[host.id]
+            onUpdate({ hostThemeOverrides: overrides })
+          }}><option value="">{t("settings.useGlobalTheme")}</option><ThemeOptions /></select>
+        </SettingRow>)}
         <SettingRow title={t("settings.language")} description={t("settings.languageHint")}>
           <div className="segmented-control" aria-label={t("settings.language")}><button aria-pressed={locale === "en"} disabled={disabled} data-active={locale === "en"} type="button" onClick={() => { if (!disabled) onLocaleChange("en") }}>{t("settings.english")}</button><button aria-pressed={locale === "zh-CN"} disabled={disabled} data-active={locale === "zh-CN"} type="button" onClick={() => { if (!disabled) onLocaleChange("zh-CN") }}>{t("settings.chinese")}</button></div>
         </SettingRow>
@@ -81,6 +94,11 @@ export function SettingsView({ locale, disabled = false, terminalAppearanceDisab
       </div>
     </section>
   )
+}
+
+function ThemeOptions() {
+  const { t } = useI18n()
+  return <><option value="forest">{t("settings.theme.forest")}</option><option value="dracula">{t("settings.theme.dracula")}</option><option value="paper">{t("settings.theme.paper")}</option></>
 }
 
 function SettingRow({ title, description, children }: { title: string; description: string; children: ReactNode }) {

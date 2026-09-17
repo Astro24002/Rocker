@@ -632,8 +632,22 @@ function normalizeWorkspaceSession(value: unknown): StoredWorkspaceSession {
   if (!isRecord(value) || !isValidSessionId(value.sessionId) || !isBoundedString(value.hostId, 128) || !isBoundedString(value.label, 128)) {
     throw new Error("Invalid workspace snapshot")
   }
-  const dimensions = normalizeDimensions(value.cols, value.rows)
-  return { sessionId: value.sessionId, hostId: value.hostId, label: value.label, ...dimensions }
+  const kind = value.kind === "sftp" || value.kind === "pf" ? value.kind : "ssh"
+  if (kind === "ssh") return { sessionId: value.sessionId, hostId: value.hostId, label: value.label, ...normalizeDimensions(value.cols, value.rows) }
+  if (kind === "sftp") {
+    if (value.path !== undefined && !isBoundedString(value.path, 4_096)) throw new Error("Invalid workspace snapshot")
+    return { sessionId: value.sessionId, hostId: value.hostId, label: value.label, kind, path: typeof value.path === "string" ? value.path : "/" }
+  }
+  if (!isBoundedString(value.profileId, 128)) throw new Error("Invalid workspace snapshot")
+  if (value.applicationProtocol !== undefined && value.applicationProtocol !== "http" && value.applicationProtocol !== "https") throw new Error("Invalid workspace snapshot")
+  return {
+    sessionId: value.sessionId,
+    hostId: value.hostId,
+    label: value.label,
+    kind,
+    profileId: value.profileId,
+    ...(value.applicationProtocol ? { applicationProtocol: value.applicationProtocol } : {})
+  }
 }
 
 function normalizeDimensions(cols: unknown, rows: unknown): { cols: number; rows: number } {

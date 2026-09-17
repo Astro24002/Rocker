@@ -39,6 +39,24 @@ SFTP and Snippets are visible navigation placeholders. Cloud sync, mobile
 clients, ProxyJump, remote forwarding, and Dynamic SOCKS5 are not part of the
 first release.
 
+## v0.6.0-rc.1 release status
+
+The `v0.6.0-rc.1` candidate contains the unified untitled Sessions workspace,
+host cards with favorites and sorting, internal Connections History/Trust tabs,
+scoped themes, real SSH/xterm/PTy session reuse, and the v0.6 forwarding
+manager integration. SSH copies remain independent sessions; PF lifecycle is
+owned by the main process and is independent of page visibility.
+
+This is a release candidate. SFTP currently provides an on-demand workspace
+route and persisted browser-state metadata, but the repository does not yet
+contain a main-process SFTP service or bridge contract for real directory and
+transfer operations. Browser Preview is also deferred until HTTP/HTTPS can be
+confirmed explicitly rather than inferred from a port.
+
+The candidate is published by pushing tag `v0.6.0-rc.1`; GitHub Actions builds
+the six Windows/macOS installer and archive assets and marks the GitHub Release
+as a prerelease. See the [candidate verification record](docs/releases/v0.6.0-rc.1-verification.md).
+
 ## Requirements
 
 - Node.js 20 or newer. CI uses Node.js 24.

@@ -1,4 +1,4 @@
-import type { ConnectionHistoryItem, HostEnvironment, HostPlatform, HostProfile } from "../../app/types"
+import type { ConnectionHistoryItem, HostEnvironment, HostPlatform, HostProfile, HostSort } from "../../app/types"
 
 export type HostIconPlatform = HostPlatform | "rocker"
 
@@ -54,8 +54,10 @@ export function toggleFavorite(hosts: HostProfile[], id: string): HostProfile[] 
 }
 
 export interface HostFilterOptions {
-  group: string
   query: string
+  favoritesOnly?: boolean
+  /** Retired organization filters are accepted only so old callers can load safely. */
+  group?: string
   recentOnly?: boolean
   recentHostIds?: ReadonlySet<string>
   environment?: HostEnvironment | "all"
@@ -82,16 +84,42 @@ export function recentHostIds(
 }
 
 export function filterHosts(hosts: HostProfile[], options: HostFilterOptions): HostProfile[] {
-  const normalizedGroup = options.group.trim().toLowerCase()
   const normalizedQuery = options.query.trim().toLowerCase()
+  const normalizedGroup = options.group?.trim().toLowerCase()
   const normalizedEnvironment = options.environment?.trim().toLowerCase()
   const normalizedTag = options.tag?.trim().toLowerCase()
   return hosts.filter((host) => {
-    const matchesGroup = normalizedGroup === "all" || host.group?.trim().toLowerCase() === normalizedGroup
+    const searchable = `${host.name} ${host.host} ${host.username}`.toLowerCase()
+    // Legacy filters remain readable for callers restoring old UI state. New UI does not
+    // expose or persist these concepts.
+    const matchesGroup = !normalizedGroup || normalizedGroup === "all" || host.group?.trim().toLowerCase() === normalizedGroup
     const matchesRecent = !options.recentOnly || options.recentHostIds?.has(host.id) === true
     const matchesEnvironment = !normalizedEnvironment || normalizedEnvironment === "all" || host.environment === normalizedEnvironment
     const matchesTag = !normalizedTag || normalizedTag === "all" || host.tags?.some((tag) => tag.trim().toLowerCase() === normalizedTag) === true
-    const searchable = `${host.name} ${host.host} ${host.username} ${host.group ?? ""} ${host.environment ?? ""} ${(host.tags ?? []).join(" ")}`.toLowerCase()
-    return matchesGroup && matchesRecent && matchesEnvironment && matchesTag && (!normalizedQuery || searchable.includes(normalizedQuery))
+    const legacySearchable = `${searchable} ${host.group ?? ""} ${host.environment ?? ""} ${(host.tags ?? []).join(" ")}`.toLowerCase()
+    return (!options.favoritesOnly || host.favorite) && matchesGroup && matchesRecent && matchesEnvironment && matchesTag && (!normalizedQuery || legacySearchable.includes(normalizedQuery))
+  })
+}
+
+export function sortHosts(
+  hosts: HostProfile[],
+  sort: HostSort,
+  history: readonly Pick<ConnectionHistoryItem, "hostId" | "connectedAt">[] = []
+): HostProfile[] {
+  const latestUse = new Map<string, number>()
+  for (const item of history) {
+    const timestamp = Date.parse(item.connectedAt)
+    if (!Number.isFinite(timestamp)) continue
+    latestUse.set(item.hostId, Math.max(latestUse.get(item.hostId) ?? Number.NEGATIVE_INFINITY, timestamp))
+  }
+  return [...hosts].sort((left, right) => {
+    if (sort === "favorites" && left.favorite !== right.favorite) return left.favorite ? -1 : 1
+    if (sort === "recent") {
+      const byUse = (latestUse.get(right.id) ?? Number.NEGATIVE_INFINITY) - (latestUse.get(left.id) ?? Number.NEGATIVE_INFINITY)
+      if (byUse !== 0) return byUse
+    }
+    const byName = left.name.localeCompare(right.name)
+    if (byName !== 0) return sort === "name-desc" ? -byName : byName
+    return left.id.localeCompare(right.id)
   })
 }

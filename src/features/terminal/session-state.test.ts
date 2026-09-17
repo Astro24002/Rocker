@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { activateSession, applyTerminalState, attachChannel, closeSession, createTerminalWorkspaceState, openSession } from "./session-state"
+import { activateSession, applyTerminalState, attachChannel, closeSession, createTerminalWorkspaceState, openSession, patchSession, sessionKind, synchronizePortForwardingSessions } from "./session-state"
 
 describe("terminal workspace state", () => {
   it("stores session metadata without terminal output", () => {
@@ -35,7 +35,8 @@ describe("terminal workspace state", () => {
       hostId: "host-a",
       label: "A",
       state: "connected",
-      channelGeneration: 2
+      channelGeneration: 2,
+      kind: "ssh"
     })
   })
 
@@ -100,5 +101,92 @@ describe("terminal workspace state", () => {
 
     expect(state.activeSessionId).toBe("one")
     expect(state.sessions).toHaveLength(2)
+  })
+
+  it("defaults missing kind to SSH and stores mixed session kinds independently", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "ssh", hostId: "host-a", label: "A" })
+    state = openSession(state, { id: "sftp", hostId: "host-a", label: "A files", kind: "sftp", path: "/var" })
+    state = openSession(state, { id: "pf", hostId: "host-a", label: "A forward", kind: "pf", profileId: "profile-1" })
+
+    expect(sessionKind(state.sessions[0])).toBe("ssh")
+    expect(sessionKind(undefined)).toBe("ssh")
+    expect(state.sessions.map((session) => sessionKind(session))).toEqual(["ssh", "sftp", "pf"])
+    expect(state.activeSessionId).toBe("pf")
+  })
+
+  it("patches only the requested session fields", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "sftp", hostId: "host-a", label: "A", kind: "sftp", path: "/" })
+    state = patchSession(state, "sftp", { kind: "sftp", browser: { path: "/etc" }, state: "connected" })
+
+    expect(state.sessions[0]).toMatchObject({ id: "sftp", kind: "sftp", browser: { path: "/etc", entries: [], loading: false }, state: "connected" })
+  })
+
+  it("keeps neighboring mixed sessions after the active session closes", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "ssh", hostId: "host-a", label: "A", kind: "ssh" })
+    state = openSession(state, { id: "sftp", hostId: "host-a", label: "A files", kind: "sftp" })
+    state = openSession(state, { id: "pf", hostId: "host-b", label: "B forward", kind: "pf", profileId: "profile-1" })
+    state = closeSession(state, "pf")
+
+    expect(state.sessions.map((session) => session.id)).toEqual(["ssh", "sftp"])
+    expect(state.activeSessionId).toBe("sftp")
+  })
+
+  it("ignores SSH channel events for SFTP and PF sessions", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "sftp", hostId: "host-a", label: "A", kind: "sftp" })
+    state = applyTerminalState(state, { kind: "state", sessionId: "sftp", channelGeneration: 1, state: "connected" })
+    state = attachChannel(state, { sessionId: "sftp", hostId: "host-a", channelGeneration: 2, state: "connected" })
+
+    expect(state.sessions[0]).toMatchObject({ state: "idle", kind: "sftp", browser: { path: "/", entries: [], loading: false } })
+    expect(state.sessions[0]).not.toHaveProperty("channelGeneration")
+  })
+
+  it("does not create PF pages from a runtime until the user opens one", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "ssh", hostId: "host-a", label: "A" })
+    state = synchronizePortForwardingSessions(state, [{
+      profile: {
+        id: "profile-1",
+        hostId: "host-a",
+        name: "Web",
+        localAddress: "127.0.0.1",
+        localPort: 8080,
+        remoteAddress: "127.0.0.1",
+        remotePort: 80,
+        autoStart: false,
+        createdAt: "2026-09-17T00:00:00.000Z",
+        updatedAt: "2026-09-17T00:00:00.000Z"
+      },
+      runtime: {
+        id: "forward-1",
+        hostId: "host-a",
+        profileId: "profile-1",
+        localAddress: "127.0.0.1",
+        localPort: 8080,
+        remoteAddress: "127.0.0.1",
+        remotePort: 80,
+        status: "forwarding"
+      }
+    }])
+
+    expect(state.activeSessionId).toBe("ssh")
+    expect(state.sessions).toHaveLength(1)
+
+    state = openSession(state, { id: "pf", hostId: "host-a", label: "Web", kind: "pf", profileId: "profile-1" })
+    state = synchronizePortForwardingSessions(state, [{
+      profile: {
+        id: "profile-1",
+        hostId: "host-a",
+        name: "Web renamed",
+        localAddress: "127.0.0.1",
+        localPort: 8080,
+        remoteAddress: "127.0.0.1",
+        remotePort: 80,
+        autoStart: false,
+        createdAt: "2026-09-17T00:00:00.000Z",
+        updatedAt: "2026-09-17T00:00:00.000Z"
+      }
+    }])
+
+    expect(state.sessions).toHaveLength(2)
+    expect(state.sessions[1]).toMatchObject({ label: "Web renamed", forwardingStatus: "stopped", state: "disconnected" })
   })
 })

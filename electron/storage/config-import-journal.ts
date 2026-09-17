@@ -243,7 +243,11 @@ function sameHost(left: HostProfile, right: HostProfile): boolean {
 }
 
 function sameSettings(left: AppSettings, right: AppSettings): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
+  const normalizedLeft = normalizeSettings(left)
+  const normalizedRight = normalizeSettings(right)
+  return normalizedLeft !== undefined && normalizedRight !== undefined
+    ? JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight)
+    : JSON.stringify(left) === JSON.stringify(right)
 }
 
 function sameForwardingProfiles(left: ForwardingProfile[], right: ForwardingProfile[]): boolean {

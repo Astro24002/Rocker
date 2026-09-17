@@ -186,13 +186,22 @@ function normalizeSession(value: unknown): StoredWorkspaceSession | undefined {
   if (!isRecord(value) || !isUuid(value.sessionId) || !isBoundedString(value.hostId, 128) || !isBoundedString(value.label, 128)) {
     return undefined
   }
-  if (!isDimension(value.cols) || !isDimension(value.rows)) return undefined
+  const kind = value.kind === "sftp" || value.kind === "pf" ? value.kind : "ssh"
+  if (kind === "ssh") {
+    if (!isDimension(value.cols) || !isDimension(value.rows)) return undefined
+    return { sessionId: value.sessionId, hostId: value.hostId, label: value.label, cols: value.cols, rows: value.rows }
+  }
+  if (kind === "sftp") {
+    return { sessionId: value.sessionId, hostId: value.hostId, label: value.label, kind, path: isBoundedString(value.path, 4_096) ? value.path : "/" }
+  }
+  if (!isBoundedString(value.profileId, 128)) return undefined
   return {
     sessionId: value.sessionId,
     hostId: value.hostId,
     label: value.label,
-    cols: value.cols,
-    rows: value.rows
+    kind,
+    profileId: value.profileId,
+    ...(value.applicationProtocol === "http" || value.applicationProtocol === "https" ? { applicationProtocol: value.applicationProtocol } : {})
   }
 }
 

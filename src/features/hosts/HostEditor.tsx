@@ -117,9 +117,6 @@ export function HostEditor({ open, profile, onClose, onSave }: HostEditorProps):
               <Field label={t("hosts.editor.address")} wide>
                 <input required maxLength={512} value={draft.host} onChange={(event) => update("host", event.target.value)} placeholder="server.example.com" />
               </Field>
-              <Field label={t("hosts.editor.parentGroup")}>
-                <input maxLength={256} value={draft.group ?? ""} onChange={(event) => update("group", event.target.value)} placeholder={t("hosts.editor.personalGroup")} />
-              </Field>
               <Field label={t("hosts.editor.platform")}>
                 <select value={draft.platform ?? ""} onChange={(event) => update("platform", event.target.value ? event.target.value as NonNullable<HostProfile["platform"]> : undefined)}>
                   <option value="">{t("hosts.editor.platformDefault")}</option>
@@ -127,24 +124,6 @@ export function HostEditor({ open, profile, onClose, onSave }: HostEditorProps):
                   <option value="debian">Debian</option>
                   <option value="linux">Linux</option>
                 </select>
-              </Field>
-              <Field label={t("hosts.editor.environment")}>
-                <select value={draft.environment ?? ""} onChange={(event) => update("environment", event.target.value ? event.target.value as NonNullable<HostProfile["environment"]> : undefined)}>
-                  <option value="">{t("hosts.editor.environmentNone")}</option>
-                  <option value="production">{t("hosts.environment.production")}</option>
-                  <option value="staging">{t("hosts.environment.staging")}</option>
-                  <option value="development">{t("hosts.environment.development")}</option>
-                  <option value="personal">{t("hosts.environment.personal")}</option>
-                </select>
-              </Field>
-              <Field label={t("hosts.editor.tags")} wide hint={t("hosts.editor.tagsHint")}>
-                <input
-                  aria-label={t("hosts.editor.tags")}
-                  maxLength={1_024}
-                  value={draft.tags?.join(", ") ?? ""}
-                  onChange={(event) => update("tags", normalizeEditorTags(event.target.value))}
-                  placeholder={t("hosts.editor.tagsPlaceholder")}
-                />
               </Field>
             </EditorSection>
 
@@ -247,7 +226,7 @@ function draftFromProfile(profile?: HostEditorProfile): HostProfile {
   const source = profile as (HostProfile & { hasIdentityFile?: boolean }) | undefined
   const { identityFile: _identityFile, ...safeProfile } = source ?? {}
   return {
-    ...(profile ? { ...createEmptyHost(), group: undefined } : createEmptyHost()),
+    ...createEmptyHost(),
     ...safeProfile,
     charset: profile?.charset ?? "utf-8",
     themeColor: profile?.themeColor ?? "rocker",
@@ -257,14 +236,9 @@ function draftFromProfile(profile?: HostEditorProfile): HostProfile {
 }
 
 function buildSaveProfile(draft: HostProfile, options: { keyPath: string; publicKeyEnabled: boolean; hasExistingKey: boolean; snippetsEnabled: boolean }): HostSaveProfile {
-  const { identityFile: _identityFile, hasIdentityFile: _hasIdentityFile, snippetCollection: _snippetCollection, group, environment, tags, ...safeDraft } = draft as HostProfile & { hasIdentityFile?: boolean }
-  const normalizedGroup = group?.trim()
-  const normalizedTags = normalizeEditorTags(tags?.join(", ") ?? "")
+  const { identityFile: _identityFile, hasIdentityFile: _hasIdentityFile, snippetCollection: _snippetCollection, group: _group, environment: _environment, tags: _tags, ...safeDraft } = draft as HostProfile & { hasIdentityFile?: boolean }
   const base = {
     ...safeDraft,
-    ...(normalizedGroup ? { group: normalizedGroup } : {}),
-    ...(environment ? { environment } : {}),
-    ...(normalizedTags ? { tags: normalizedTags } : {}),
     authMethod: options.publicKeyEnabled ? "privateKey" as const : draft.authMethod === "privateKey" ? "password" as const : draft.authMethod,
     publicKeyEnabled: options.publicKeyEnabled,
     snippetsEnabled: options.snippetsEnabled,
@@ -297,7 +271,6 @@ function createEmptyHost(): HostProfile {
     port: 22,
     username: "",
     authMethod: "password",
-    group: "Personal",
     publicKeyEnabled: false,
     snippetsEnabled: false,
     charset: "utf-8",
@@ -305,18 +278,4 @@ function createEmptyHost(): HostProfile {
     favorite: false,
     notes: ""
   }
-}
-
-function normalizeEditorTags(value: string): string[] | undefined {
-  const tags: string[] = []
-  const seen = new Set<string>()
-  for (const candidate of value.split(",")) {
-    const tag = candidate.trim()
-    if (!tag) continue
-    const identity = tag.toLowerCase()
-    if (seen.has(identity)) continue
-    seen.add(identity)
-    tags.push(tag)
-  }
-  return tags.length > 0 ? tags : undefined
 }
