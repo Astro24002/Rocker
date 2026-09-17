@@ -414,11 +414,11 @@ function Workspace() {
     setWorkspace((current) => applyTerminalState(current, event))
   }, [])
 
-  const queueSessionOpen = useCallback((host: HostProfile, label: string, options: Pick<PendingTerminalOpen, "forceNewConnection"> = {}): void => {
+  const queueSessionOpen = useCallback((host: HostProfile, label: string | ((current: TerminalWorkspaceState) => string), options: Pick<PendingTerminalOpen, "forceNewConnection"> = {}): void => {
     if (!capabilities.sshAvailable) return
     const sessionId = crypto.randomUUID()
     pendingOpens.current.set(sessionId, { hostId: host.id, forceNewConnection: options.forceNewConnection })
-    setWorkspace((current) => openSession(current, { id: sessionId, hostId: host.id, label, kind: "ssh" }))
+    setWorkspace((current) => openSession(current, { id: sessionId, hostId: host.id, label: typeof label === "string" ? label : label(current), kind: "ssh" }))
     setActiveNav("terminal")
   }, [capabilities.sshAvailable])
 
@@ -816,6 +816,16 @@ function Workspace() {
       return
     }
     queueSessionOpen(host, host.name)
+  }
+
+  const openNewHostSession = (host: HostProfile): void => {
+    queueSessionOpen(host, (current) => {
+      const labels = new Set(current.sessions.filter((session) => isSshSession(session) && session.hostId === host.id).map((session) => session.label))
+      if (!labels.has(host.name)) return host.name
+      let suffix = 1
+      while (labels.has(`${host.name}(${suffix})`)) suffix += 1
+      return `${host.name}(${suffix})`
+    })
   }
 
   const connectSshCommand = async (command: string): Promise<void> => {
@@ -1233,7 +1243,7 @@ function Workspace() {
     <HostList
       hosts={hosts}
       disabled={!capabilities.hostMutationsAvailable}
-      onConnect={connectHost}
+      onConnect={openNewHostSession}
       onOpenSftp={openSftpSession}
       onOpenForwarding={openHostForwardingFromHost}
       onConnectCommand={(command) => void connectSshCommand(command)}

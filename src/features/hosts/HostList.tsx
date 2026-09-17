@@ -247,7 +247,8 @@ export function HostList({
                   aria-expanded={hostContextMenu?.hostId === host.id}
                   aria-haspopup="menu"
                   disabled={disabled}
-                  onClick={() => onConnect(host)}
+                  onClick={() => setSelectedHostId(host.id)}
+                  onDoubleClick={() => onConnect(host)}
                   onContextMenu={(event) => {
                     event.preventDefault()
                     event.stopPropagation()

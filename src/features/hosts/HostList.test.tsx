@@ -56,12 +56,17 @@ describe("HostList", () => {
     expect(onEdit).not.toHaveBeenCalled()
   })
 
-  it("connects directly from the host card", () => {
+  it("selects a host on single click and opens a session only on double click", () => {
     const onConnect = vi.fn()
     render(<I18nProvider><HostList hosts={[host]} onConnect={onConnect} onAdd={vi.fn()} onEdit={vi.fn()} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={vi.fn()} onRemove={vi.fn()} /></I18nProvider>)
 
     const card = screen.getByRole("button", { name: "Server A, SSH, root" })
     fireEvent.click(card)
+    expect(card).toHaveAttribute("aria-pressed", "true")
+    expect(onConnect).not.toHaveBeenCalled()
+    fireEvent.click(card, { detail: 2 })
+    fireEvent.doubleClick(card)
+    expect(onConnect).toHaveBeenCalledOnce()
     expect(onConnect).toHaveBeenCalledWith(host)
   })
 

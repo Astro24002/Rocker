@@ -61,6 +61,10 @@ as a prerelease. See the [RC1 verification record](docs/releases/v0.6.0-rc.1-ver
 so xterm output cannot resize its own measured container while the terminal is
 fitted. See the [RC2 verification record](docs/releases/v0.6.0-rc.2-verification.md).
 
+`v0.6.0-rc.3` selects a Host on single click and creates a new, independently
+numbered SSH session on double click (for example, G11 and G11(1)). See the
+[RC3 verification record](docs/releases/v0.6.0-rc.3-verification.md).
+
 ## Requirements
 
 - Node.js 20 or newer. CI uses Node.js 24.

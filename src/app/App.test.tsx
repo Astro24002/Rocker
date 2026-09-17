@@ -343,6 +343,37 @@ describe("desktop workspace shell", () => {
     confirmation.mockRestore()
   })
 
+  it("selects a Host without navigating and opens independent numbered SSH sessions on double click", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    await waitFor(() => expect(bridge.sessions.open).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole("button", { name: "Hosts" }))
+    const card = screen.getByRole("button", { name: "G11, SSH, root" })
+    const originalId = workspace().sessions[0].id
+    fireEvent.click(card)
+    expect(card).toHaveAttribute("aria-pressed", "true")
+    expect(screen.getByRole("heading", { name: "Hosts" })).toBeInTheDocument()
+    expect(workspace().sessions).toHaveLength(1)
+    expect(bridge.sessions.open).toHaveBeenCalledTimes(1)
+
+    fireEvent.doubleClick(card)
+    await waitFor(() => expect(workspace().sessions).toHaveLength(2))
+    const firstNewSession = workspace().sessions[1]
+    expect(firstNewSession).toMatchObject({ hostId: host.id, label: "G11(1)", kind: "ssh" })
+    expect(firstNewSession.id).not.toBe(originalId)
+    expect(workspace().activeSessionId).toBe(firstNewSession.id)
+    await waitFor(() => expect(bridge.sessions.open).toHaveBeenCalledWith(expect.objectContaining({ sessionId: firstNewSession.id, hostId: host.id })))
+
+    fireEvent.click(screen.getByRole("button", { name: "Hosts" }))
+    fireEvent.doubleClick(screen.getByRole("button", { name: "G11, SSH, root" }))
+    await waitFor(() => expect(workspace().sessions).toHaveLength(3))
+    expect(workspace().sessions.map((session) => session.label)).toEqual(["G11", "G11(1)", "G11(2)"])
+    expect(new Set(workspace().sessions.map((session) => session.id)).size).toBe(3)
+    expect(workspace().activeSessionId).toBe(workspace().sessions[2].id)
+  })
+
   it("keeps HostEditor save errors when the host mutation rejects", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
     bridge.hosts.save.mockRejectedValue(new Error("storage details"))
@@ -816,12 +847,12 @@ describe("desktop workspace shell", () => {
     expect(screen.getByRole("button", { name: "主机" })).toBeInTheDocument()
   })
 
-  it("opens a host directly and preserves the resulting session across destinations", async () => {
+  it("opens a host on double click and preserves the resulting session across destinations", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
     render(<App />)
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Hosts" })).toBeInTheDocument())
-    fireEvent.click(screen.getByRole("button", { name: "G11, SSH, root" }))
+    fireEvent.doubleClick(screen.getByRole("button", { name: "G11, SSH, root" }))
     await waitFor(() => expect(bridge.sessions.open).toHaveBeenCalledWith(expect.objectContaining({ hostId: host.id })))
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
