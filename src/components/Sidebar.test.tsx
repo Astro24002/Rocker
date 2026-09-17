@@ -68,6 +68,27 @@ describe("Sidebar session actions", () => {
     expect(screen.getByRole("menuitem", { name: "Close" })).toBeInTheDocument()
   })
 
+  it("dispatches the shared Close command from the row close button without activating the session", () => {
+    const onNavigate = vi.fn()
+    const onSessionActivate = vi.fn()
+    const onSessionCommand = vi.fn()
+    render(<I18nProvider><Sidebar width={220} activeNav="terminal" sessions={[session]} activeSessionId={session.id} onNavigate={onNavigate} onSessionActivate={onSessionActivate} onSessionCommand={onSessionCommand} /></I18nProvider>)
+
+    const closeButton = screen.getByRole("button", { name: "Close G11" })
+    expect(closeButton).toHaveAttribute("title", "Close")
+    fireEvent.click(closeButton)
+
+    expect(onSessionCommand).toHaveBeenCalledExactlyOnceWith("session.close", session)
+    expect(onSessionActivate).not.toHaveBeenCalled()
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it("disables the row close button while the session is closing", () => {
+    render(<I18nProvider><Sidebar width={220} activeNav="terminal" sessions={[{ ...session, state: "closing" }]} activeSessionId={session.id} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
+
+    expect(screen.getByRole("button", { name: "Close G11" })).toBeDisabled()
+  })
+
   it("focuses the session menu and closes it on Escape", () => {
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} /></I18nProvider>)
 

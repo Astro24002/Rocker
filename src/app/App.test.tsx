@@ -942,9 +942,9 @@ describe("desktop workspace shell", () => {
     expect(terminalHost).not.toHaveAttribute("hidden")
     expect(hostsDestination).toHaveAttribute("hidden")
     expect([...stage.children].filter((child) => !(child as HTMLElement).hidden).map((child) => child.className)).toEqual([
-      "terminal-workspace-host",
-      "session-info-bar"
+      "terminal-workspace-host"
     ])
+    expect(stage.querySelector(".session-info-bar")).not.toBeInTheDocument()
   })
 
   it("keeps the terminal event subscription stable while switching locale", async () => {
@@ -1377,7 +1377,7 @@ describe("desktop workspace shell", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "SFTP G11" })).toHaveAttribute("data-active", "true"))
     expect(screen.getByRole("heading", { name: "File Browser" })).toBeInTheDocument()
     expect(screen.getByTestId("terminal-workspace-mock").closest(".terminal-workspace-host")).toHaveAttribute("hidden")
-    expect(screen.getByTestId("workspace-stage").querySelector(".session-info-bar")).toHaveTextContent("SFTP")
+    expect(screen.getByTestId("workspace-stage").querySelector(".session-info-bar")).not.toBeInTheDocument()
 
     await openForwardingSession("G11, SSH, root")
     await waitFor(() => expect(screen.getByRole("button", { name: "PF G11" })).toHaveAttribute("data-active", "true"))
@@ -1436,7 +1436,7 @@ describe("desktop workspace shell", () => {
     expect(sftpHost).not.toHaveAttribute("hidden")
     expect(pfHost).toHaveAttribute("hidden")
     expect(screen.getByRole("textbox", { name: "Path" })).toHaveValue("/etc")
-    expect(screen.getByTestId("workspace-stage").querySelector(".session-info-bar")).toHaveTextContent("/etc")
+    expect(screen.getByTestId("workspace-stage").querySelector(".session-info-bar")).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "SSH G11" }))
     expect(sftpHost).toHaveAttribute("hidden")

@@ -39,7 +39,7 @@ import {
 } from "../features/terminal/session-state"
 import { recentSessionIds, recordSessionFocus, removeRecentSession, type RecentSessionState } from "../features/sessions/recent-sessions"
 import { TerminalWorkspace } from "../features/terminal/TerminalWorkspace"
-import { SessionContentView, SessionInfoBar } from "../features/sessions/SessionContentView"
+import { SessionContentView } from "../features/sessions/SessionContentView"
 import { type TerminalController, type TerminalPreferences } from "../features/terminal/terminal-controller"
 import type { TerminalSearchController } from "../features/terminal/terminal-search"
 import { I18nProvider, useI18n } from "../i18n"
@@ -1338,9 +1338,6 @@ function Workspace() {
               />
             </div>
           ))}
-          {activeNav === "terminal" && activeSession ? (
-            <SessionInfoBar session={activeSession} host={activeHost} themeId={themeForHost(activeSession.hostId)} />
-          ) : null}
           <div className="workspace-destination" data-destination="hosts" hidden={activeNav !== "hosts" && !(activeNav === "terminal" && workspace.sessions.length === 0)}>
             {hostList}
           </div>

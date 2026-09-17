@@ -134,10 +134,6 @@
   flex: 1;
 }
 
-.workspace-stage > .session-info-bar {
-  flex: 0 0 auto;
-}
-
 /* Keep destination views out of the flex track while they are cached. */
 .workspace-stage > [hidden] {
   display: none !important;
@@ -239,26 +235,6 @@
 .workspace-picker-row:hover { border-color: var(--accent); background: var(--workspace-hover); }
 .workspace-picker-row span { display: grid; min-width: 0; gap: 3px; }
 .workspace-picker-row small { color: var(--text-muted); }
-
-.session-info-bar {
-  display: flex;
-  flex: 0 0 auto;
-  min-height: 32px;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 18px;
-  padding: 6px 18px;
-  border-top: 1px solid var(--line);
-  color: var(--text-secondary);
-  background: var(--workspace-raised);
-  font-size: 12px;
-}
-
-.session-info-bar strong {
-  margin-right: 6px;
-  color: var(--text-muted);
-  font-weight: 650;
-}
 
 .ports-content,
 .settings-list {

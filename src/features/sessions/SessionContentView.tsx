@@ -10,7 +10,6 @@ import {
   forwardingToSessionState,
   isPortForwardingSession,
   isSftpSession,
-  sessionKind,
   type ApplicationProtocol,
   type PortForwardingWorkspaceSession,
   type SftpWorkspaceSession,
@@ -328,40 +327,6 @@ function statusKey(status: string): "ports.status.discovered" | "ports.status.st
     return `ports.status.${status}`
   }
   return "ports.status.stopped"
-}
-
-export function SessionInfoBar({
-  session,
-  host,
-  themeId
-}: {
-  session: WorkspaceSession
-  host?: HostProfile
-  themeId?: string
-}): ReactElement {
-  const { t } = useI18n()
-  const kind = sessionKind(session)
-  const target = host ? `${host.username}@${host.host}:${host.port}` : session.hostId
-  const typeLabel = t(`session.kind.${kind}`)
-  const statusLabel = isPortForwardingSession(session)
-    ? t(statusKey(session.forwardingStatus))
-    : t(`ports.sessionState.${session.state}`)
-  const extras = isSftpSession(session)
-    ? [{ label: t("session.sftp.path"), value: session.browser.path }]
-    : isPortForwardingSession(session)
-      ? [{ label: t("session.info.protocol"), value: session.applicationProtocol ? t(`session.protocol.${session.applicationProtocol}`) : t("session.protocol.unspecified") }]
-      : []
-
-  return (
-    <footer className="session-info-bar" data-session-id={session.id} data-session-kind={kind} data-theme={themeId}>
-      <span><strong>{t("session.info.target")}</strong> {target}</span>
-      <span><strong>{t("session.info.type")}</strong> {typeLabel}</span>
-      <span><strong>{t("session.info.status")}</strong> {statusLabel}</span>
-      {extras.map((item) => (
-        <span key={item.label}><strong>{item.label}</strong> {item.value}</span>
-      ))}
-    </footer>
-  )
 }
 
 export function forwardingStatusLabel(status: PortStatus | undefined): PortStatus {

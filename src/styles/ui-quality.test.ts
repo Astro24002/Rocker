@@ -55,18 +55,29 @@ describe("UI quality stylesheet contract", () => {
 
   it("aligns navigation and session icons, labels, and text sizes", () => {
     const nav = componentStyles.match(/\.nav-item\s*\{([^}]*)\}/)?.[1]
-    const session = componentStyles.match(/^\.sidebar-session-list button\s*\{([^}]*)\}/m)?.[1]
+    const session = componentStyles.match(/^\.session-activate-button\s*\{([^}]*)\}/m)?.[1]
     expect(nav).toMatch(/grid-template-columns:\s*22px minmax\(0, 1fr\);/)
     expect(nav).toMatch(/column-gap:\s*15px;/)
     expect(nav).toMatch(/padding:\s*0 12px;/)
     expect(nav).toMatch(/font-size:\s*15px;/)
     expect(session).toMatch(/grid-template-columns:\s*22px minmax\(0, 1fr\);/)
     expect(session).toMatch(/column-gap:\s*15px;/)
-    expect(session).toMatch(/padding:\s*0 12px;/)
+    expect(session).toMatch(/padding:\s*0 40px 0 12px;/)
     expect(componentStyles).toMatch(/\.session-name\s*\{[^}]*font-size:\s*15px;/)
     expect(componentStyles).toMatch(/\.session-type-icon\s*\{[^}]*width:\s*22px;[^}]*height:\s*22px;/)
     expect(componentStyles).toMatch(/\.primary-nav\s*\{[^}]*gap:\s*5px;/)
     expect(componentStyles).toMatch(/\.nav-item > svg\s*\{[^}]*justify-self:\s*center;/)
+  })
+
+  it("keeps the session close control stable and reveals it without shifting the row", () => {
+    const close = componentStyles.match(/\.session-close-button\s*\{([^}]*)\}/)?.[1]
+    expect(close).toMatch(/position:\s*absolute;/)
+    expect(close).toMatch(/width:\s*26px;/)
+    expect(close).toMatch(/height:\s*26px;/)
+    expect(close).toMatch(/opacity:\s*0;/)
+    expect(close).toMatch(/pointer-events:\s*none;/)
+    expect(componentStyles).toMatch(/\.sidebar-session-row:hover \.session-close-button,[\s\S]*?\.session-close-button:focus-visible\s*\{[^}]*opacity:\s*1;[^}]*pointer-events:\s*auto;/)
+    expect(componentStyles).toMatch(/\.sidebar\[data-compact="true"\] \.sidebar-session-row:hover \.session-type-icon,[\s\S]*?opacity:\s*0;/)
   })
 
   it("uses continuous corners on rounded app surfaces with circular indicator exceptions", () => {

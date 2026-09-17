@@ -159,7 +159,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, them
           <div className="sidebar-session-list" ref={sessionListRef}>
             {sessions.map((session) => (
               <div key={session.id} className="sidebar-session-row">
-                <button aria-current={activeNav === "terminal" && session.id === activeSessionId ? "page" : undefined} aria-expanded={menuSessionId === session.id} aria-haspopup="menu" aria-label={`${kindBadge(sessionKind(session))} ${session.label}`} data-active={session.id === activeSessionId} data-session-id={session.id} data-session-kind={sessionKind(session)} data-theme={activeNav === "terminal" && session.id === activeSessionId ? themeForHost?.(session.hostId) : undefined} ref={(element) => { if (element && menuSessionId === session.id) menuTriggerRef.current = element }} type="button" onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openSessionMenu(session.id, event.currentTarget) }} onKeyDown={(event) => {
+                <button aria-current={activeNav === "terminal" && session.id === activeSessionId ? "page" : undefined} aria-expanded={menuSessionId === session.id} aria-haspopup="menu" aria-label={`${kindBadge(sessionKind(session))} ${session.label}`} className="session-activate-button" data-active={session.id === activeSessionId} data-session-id={session.id} data-session-kind={sessionKind(session)} data-theme={activeNav === "terminal" && session.id === activeSessionId ? themeForHost?.(session.hostId) : undefined} ref={(element) => { if (element && menuSessionId === session.id) menuTriggerRef.current = element }} type="button" onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openSessionMenu(session.id, event.currentTarget) }} onKeyDown={(event) => {
                   const opensMenu = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)
                   if (!opensMenu) return
                   event.preventDefault()
@@ -171,6 +171,19 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, them
                 }}>
                   <SessionKindIcon kind={sessionKind(session)} />
                   <span className="session-name">{session.label}</span>
+                </button>
+                <button
+                  aria-label={`${t("sidebar.close")} ${session.label}`}
+                  className="session-close-button"
+                  disabled={!isSessionCommandEnabled("session.close", session, commandContext)}
+                  title={t("sidebar.close")}
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    dispatchSessionCommand("session.close", session, commandContext, onSessionCommand, closeSessionMenu)
+                  }}
+                >
+                  <X aria-hidden="true" size={14} strokeWidth={1.8} />
                 </button>
                 {menuSessionId === session.id && createPortal(<div aria-label={t("sidebar.sessionActions").replace("{label}", session.label)} className="session-menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key !== "Escape") return; event.preventDefault(); closeSessionMenu() }} ref={menuRef} role="menu" style={{ left: menuPosition?.left, top: menuPosition?.top, visibility: menuPosition ? "visible" : "hidden" }} tabIndex={-1}>
                   <SessionMenuItem commandId="session.duplicate" disabled={!isSessionCommandEnabled("session.duplicate", session, commandContext)} onClick={() => dispatchSessionCommand("session.duplicate", session, commandContext, onSessionCommand, closeSessionMenu)}><Copy aria-hidden="true" size={14} /><span>{t("sidebar.duplicate")}</span></SessionMenuItem>

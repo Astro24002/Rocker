@@ -71,6 +71,12 @@ menu that no longer scrolls its source row out of view. Duplicate creates an
 independent incrementally named Session such as G11 (1). See the
 [RC4 verification record](docs/releases/v0.6.0-rc.4-verification.md).
 
+`v0.6.0-rc.5` adds an inline Session close control on hover and keyboard focus,
+using the existing guarded Close command without changing connection ownership.
+It also removes the bottom Target/Type/Status strip so Session content fills the
+Content Stage. See the
+[RC5 verification record](docs/releases/v0.6.0-rc.5-verification.md).
+
 ## Requirements
 
 - Node.js 20 or newer. CI uses Node.js 24.
