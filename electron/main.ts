@@ -25,6 +25,7 @@ import { createConnectionResolver } from "./ssh/connection-resolver"
 import { JsonHostKeyStore } from "./ssh/host-key-store"
 import { TerminalSessionManager } from "./ssh/terminal-session-manager"
 import type { OwnedTerminalSessionEvent } from "./ssh/types"
+import { SftpManager } from "./sftp/sftp-manager"
 import {
   WorkspaceWindowManager,
   type WindowLifecycleEvent,
@@ -35,6 +36,7 @@ interface ApplicationRuntime {
   connections: SshConnectionManager
   sessions: TerminalSessionManager
   forwarding: ForwardingManager
+  sftp: SftpManager
   snapshots: WorkspaceSnapshotStore
   windows: WorkspaceWindowManager
   diagnostics: DiagnosticLogger
@@ -43,6 +45,7 @@ interface ApplicationRuntime {
 
 let runtime: ApplicationRuntime | undefined
 let shutdown: Promise<void> | undefined
+let quitPrompt: Promise<void> | undefined
 let pendingFocus = false
 
 app.setName("Rocker")
@@ -125,6 +128,7 @@ async function startApplication(): Promise<void> {
   const forwarding = new ForwardingManager(connections, {
     onEvent: (event) => recordForwardingDiagnostic(diagnostics, event)
   })
+  const sftp = new SftpManager(connections)
   const configuration = new ConfigBundleService({
     listHosts: () => hosts.list(),
     saveHost: (profile) => hosts.save(profile),
@@ -150,11 +154,13 @@ async function startApplication(): Promise<void> {
     preserveLastWindowWorkspace: process.platform !== "darwin",
     workspacePersistenceBlocked: initialWorkspaceResult.status === "blocked",
     onWindowClosed: async (ownerWebContentsId) => {
+      await sftp.releaseWebContents(ownerWebContentsId)
       await forwarding.releaseWebContents(ownerWebContentsId)
       await sessions.releaseWebContents(ownerWebContentsId)
       await connections.releaseWebContents(ownerWebContentsId)
     },
     onRendererReleased: async (owner) => {
+      await sftp.releaseOwner(owner)
       await forwarding.releaseOwner(owner)
       await sessions.releaseOwner(owner)
       await connections.releaseOwner(owner)
@@ -169,6 +175,7 @@ async function startApplication(): Promise<void> {
     connections,
     ports: new PortService(connections),
     forwarding,
+    sftp,
     forwardingProfiles,
     history: new HistoryStore(join(resolvedUserDataPath, "history.json"), onStorageDiagnostic),
     settings,
@@ -214,7 +221,7 @@ async function startApplication(): Promise<void> {
   app.on("activate", () => {
     if (windows.ownerWebContentsIds().length === 0) windows.createNew()
   })
-  runtime = { connections, sessions, forwarding, snapshots, windows, diagnostics, forwardingProfiles }
+  runtime = { connections, sessions, forwarding, sftp, snapshots, windows, diagnostics, forwardingProfiles }
   if (pendingFocus) {
     pendingFocus = false
     windows.focusMostRecentOrCreate()
@@ -299,6 +306,7 @@ async function shutdownApplication(applicationRuntime: ApplicationRuntime): Prom
     // Profile writes are best effort during shutdown; active transports still need cleanup.
   }
   await Promise.all(applicationRuntime.windows.ownerWebContentsIds().map(async (ownerWebContentsId) => {
+    await applicationRuntime.sftp.releaseWebContents(ownerWebContentsId)
     await applicationRuntime.forwarding.releaseWebContents(ownerWebContentsId)
     await applicationRuntime.sessions.releaseWebContents(ownerWebContentsId)
     await applicationRuntime.connections.releaseWebContents(ownerWebContentsId)
@@ -419,8 +427,30 @@ bootstrapPrimaryInstance(app, {
 
 app.on("before-quit", (event) => {
   if (shutdown || !runtime) return
+  const currentRuntime = runtime
+  const activeTransfers = currentRuntime.sftp.activeTransferCount()
+  if (activeTransfers > 0) {
+    event.preventDefault()
+    if (quitPrompt) return
+    quitPrompt = dialog.showMessageBox({
+      type: "question",
+      title: "Active SFTP transfers",
+      message: `${activeTransfers} SFTP transfer${activeTransfers === 1 ? " is" : "s are"} still running.`,
+      detail: "Cancel to keep Rocker open, or quit and cancel the active transfers.",
+      buttons: ["Cancel", "Quit and cancel transfers"],
+      defaultId: 0,
+      cancelId: 0
+    }).then((result) => {
+      if (result.response !== 1) return
+      shutdown = shutdownApplication(currentRuntime)
+      return shutdown.finally(() => app.quit())
+    }).catch(() => undefined).finally(() => {
+      quitPrompt = undefined
+    })
+    return
+  }
   event.preventDefault()
-  shutdown = shutdownApplication(runtime)
+  shutdown = shutdownApplication(currentRuntime)
   void shutdown.finally(() => app.quit())
 })
 

@@ -47,11 +47,13 @@ scoped themes, real SSH/xterm/PTy session reuse, and the v0.6 forwarding
 manager integration. SSH copies remain independent sessions; PF lifecycle is
 owned by the main process and is independent of page visibility.
 
-This is a release candidate. SFTP currently provides an on-demand workspace
-route and persisted browser-state metadata, but the repository does not yet
-contain a main-process SFTP service or bridge contract for real directory and
-transfer operations. Browser Preview is also deferred until HTTP/HTTPS can be
-confirmed explicitly rather than inferred from a port.
+RC5 is the v0.6 final-candidate baseline. SFTP is intentionally outside that
+release boundary. The current unreleased working tree has started the v0.7
+SFTP foundation with a main-process service, typed bridge, real local-fixture
+integration tests, and an independent transfer model. Its browser preview
+fallback remains demo-only and never stands in for a real SSH/SFTP connection.
+See the [v0.6 final admission record](docs/releases/v0.6.0-final-admission.md)
+and [v0.7 SFTP foundation record](docs/releases/v0.7.0-sftp-foundation.md).
 
 The RC1 candidate was published from tag `v0.6.0-rc.1`; GitHub Actions builds
 the six Windows/macOS installer and archive assets and marks the GitHub Release

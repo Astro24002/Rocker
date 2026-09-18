@@ -7,7 +7,7 @@ import {
   type RockerBridge
 } from "./ipc/bridge-contract"
 import type { TerminalSessionEvent } from "./ssh/types"
-import type { ForwardingRuntimeEvent, SessionLaunchRequest } from "./ipc/bridge-contract"
+import type { ForwardingRuntimeEvent, SessionLaunchRequest, SftpRuntimeEvent } from "./ipc/bridge-contract"
 
 const bridge: RockerBridge = {
   app: {
@@ -51,6 +51,21 @@ const bridge: RockerBridge = {
     removeProfile: (profileId) => ipcRenderer.invoke(ipcChannels.portsRemoveProfile, profileId),
     startProfile: (profileId) => ipcRenderer.invoke(ipcChannels.portsStartProfile, profileId),
     openAddress: (forwardingId) => ipcRenderer.invoke(ipcChannels.portsOpenAddress, forwardingId)
+  },
+  sftp: {
+    open: (workspaceId, hostId) => ipcRenderer.invoke(ipcChannels.sftpOpen, workspaceId, hostId),
+    close: (workspaceId) => ipcRenderer.invoke(ipcChannels.sftpClose, workspaceId),
+    list: (workspaceId, path) => ipcRenderer.invoke(ipcChannels.sftpList, workspaceId, path),
+    mkdir: (workspaceId, path) => ipcRenderer.invoke(ipcChannels.sftpMkdir, workspaceId, path),
+    rename: (workspaceId, path, nextPath) => ipcRenderer.invoke(ipcChannels.sftpRename, workspaceId, path, nextPath),
+    remove: (workspaceId, path, kind) => ipcRenderer.invoke(ipcChannels.sftpRemove, workspaceId, path, kind),
+    chooseUpload: (workspaceId, remoteDirectory, localPath) => ipcRenderer.invoke(ipcChannels.sftpChooseUpload, workspaceId, remoteDirectory, localPath),
+    chooseDownload: (workspaceId, remotePath, suggestedName) => ipcRenderer.invoke(ipcChannels.sftpChooseDownload, workspaceId, remotePath, suggestedName),
+    upload: (selectionId, overwrite) => ipcRenderer.invoke(ipcChannels.sftpUpload, selectionId, overwrite),
+    download: (selectionId, overwrite) => ipcRenderer.invoke(ipcChannels.sftpDownload, selectionId, overwrite),
+    listTransfers: (workspaceId) => ipcRenderer.invoke(ipcChannels.sftpListTransfers, workspaceId),
+    cancelTransfer: (taskId) => ipcRenderer.invoke(ipcChannels.sftpCancelTransfer, taskId),
+    retryTransfer: (taskId) => ipcRenderer.invoke(ipcChannels.sftpRetryTransfer, taskId)
   },
   workspace: {
     load: () => ipcRenderer.invoke(ipcChannels.workspaceLoad),
@@ -104,6 +119,11 @@ const bridge: RockerBridge = {
       const handler = (_event: Electron.IpcRendererEvent, payload: ForwardingRuntimeEvent): void => listener(payload)
       ipcRenderer.on(ipcChannels.portsEvent, handler)
       return () => ipcRenderer.removeListener(ipcChannels.portsEvent, handler)
+    },
+    onSftpEvent: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: SftpRuntimeEvent): void => listener(payload)
+      ipcRenderer.on(ipcChannels.sftpEvent, handler)
+      return () => ipcRenderer.removeListener(ipcChannels.sftpEvent, handler)
     }
   }
 }

@@ -11,6 +11,7 @@ import type {
 import type { ImportPreview, ImportResult } from "../../electron/storage/config-bundle"
 import type { StorageHealth } from "../../electron/storage/storage-result"
 import type { TerminalSessionEvent } from "../../electron/ssh/types"
+import type { SftpTransferTask } from "../../electron/sftp/types"
 import { clampSidebarWidth } from "../components/Sidebar"
 import { visibleSessionIds } from "../features/terminal/layout"
 import type { SshWorkspaceSession, TerminalWorkspaceState } from "../features/terminal/session-state"
@@ -1482,6 +1483,43 @@ describe("desktop workspace shell", () => {
     expect(screen.getByRole("heading", { name: "Hosts" })).toBeInTheDocument()
   })
 
+  it("asks how to handle active SFTP transfers before closing the page", async () => {
+    const transfer = {
+      id: "transfer-1",
+      workspaceId: "sftp-session",
+      hostId: host.id,
+      direction: "upload" as const,
+      name: "release.zip",
+      remotePath: "/release.zip",
+      status: "running" as const,
+      bytesTransferred: 10,
+      totalBytes: 20,
+      attempt: 1,
+      createdAt: "2026-09-18T00:00:00.000Z",
+      updatedAt: "2026-09-18T00:00:01.000Z"
+    }
+    bridge.sftp.listTransfers.mockResolvedValue([transfer])
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false)
+    try {
+      bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+      render(<App />)
+
+      await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+      openHostAction("G11, SSH, root", "Open SFTP")
+      await waitFor(() => expect(screen.getByRole("button", { name: "SFTP G11" })).toBeInTheDocument())
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: "SFTP G11" }))
+      fireEvent.click(screen.getByRole("menuitem", { name: "Close" }))
+
+      await waitFor(() => expect(bridge.sftp.cancelTransfer).toHaveBeenCalledWith(transfer.id))
+      await waitFor(() => expect(screen.queryByRole("button", { name: "SFTP G11" })).not.toBeInTheDocument())
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining("1 transfer(s)"))
+      expect(bridge.sftp.close).toHaveBeenCalledWith(expect.any(String))
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
   it("returns to Hosts from the brand without closing mixed sessions", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
     render(<App />)
@@ -1633,6 +1671,21 @@ function createBridge() {
       startProfile: vi.fn(async () => forwardingRow().runtime),
       openAddress: vi.fn(async () => undefined)
     },
+    sftp: {
+      open: vi.fn(async (workspaceId: string, hostId: string) => ({ workspaceId, hostId, state: "ready" as const, path: "/" })),
+      close: vi.fn(async () => undefined),
+      list: vi.fn(async (workspaceId: string, path: string) => ({ workspaceId, path, entries: [] })),
+      mkdir: vi.fn(async () => undefined),
+      rename: vi.fn(async () => undefined),
+      remove: vi.fn(async () => undefined),
+      chooseUpload: vi.fn(async () => undefined),
+      chooseDownload: vi.fn(async () => undefined),
+      upload: vi.fn(async () => ({ kind: "started" as const, task: undefined })),
+      download: vi.fn(async () => ({ kind: "started" as const, task: undefined })),
+      listTransfers: vi.fn(async (): Promise<SftpTransferTask[]> => []),
+      cancelTransfer: vi.fn(async () => undefined),
+      retryTransfer: vi.fn(async () => ({ kind: "started" as const, task: undefined }))
+    },
     workspace: {
       load: vi.fn(async (): Promise<StoredWorkspaceWindow | undefined> => undefined),
       save: vi.fn(async () => undefined)
@@ -1690,7 +1743,8 @@ function createBridge() {
       onForwardingEvent: vi.fn((listener: () => void) => {
         forwardingListener = listener
         return vi.fn()
-      })
+      }),
+      onSftpEvent: vi.fn(() => vi.fn())
     }
   }
 }

@@ -13,6 +13,15 @@ import type { StorageHealth } from "../storage/storage-result"
 import type { ConflictResolution, ImportPreview, ImportResult } from "../storage/config-bundle"
 import type { CredentialProtectionStatus } from "../storage/credentials"
 import type { HostKeyAuditRecord as StoredHostKeyAuditRecord, StoredHostKeyRecord } from "../ssh/host-keys"
+import type {
+  OwnedSftpRuntimeEvent,
+  SftpDirectory,
+  SftpDownloadSelection,
+  SftpTransferStartResult,
+  SftpTransferTask,
+  SftpUploadSelection,
+  SftpWorkspaceInfo
+} from "../sftp/types"
 
 export type HostKeyInventoryEntry = StoredHostKeyRecord
 export type HostKeyAuditRecord = StoredHostKeyAuditRecord
@@ -90,6 +99,8 @@ export interface ForwardingRuntimeEvent {
   reason?: string
 }
 
+export type SftpRuntimeEvent = OwnedSftpRuntimeEvent["event"]
+
 export interface SessionLaunchRequest {
   hostId: string
 }
@@ -159,6 +170,21 @@ export interface RockerBridge {
     startProfile(profileId: string): Promise<ForwardingInfo>
     openAddress(forwardingId: string): Promise<void>
   }
+  sftp: {
+    open(workspaceId: string, hostId: string): Promise<SftpWorkspaceInfo>
+    close(workspaceId: string): Promise<void>
+    list(workspaceId: string, path: string): Promise<SftpDirectory>
+    mkdir(workspaceId: string, path: string): Promise<void>
+    rename(workspaceId: string, path: string, nextPath: string): Promise<void>
+    remove(workspaceId: string, path: string, kind: "file" | "directory"): Promise<void>
+    chooseUpload(workspaceId: string, remoteDirectory: string, localPath?: string): Promise<SftpUploadSelection | undefined>
+    chooseDownload(workspaceId: string, remotePath: string, suggestedName: string): Promise<SftpDownloadSelection | undefined>
+    upload(selectionId: string, overwrite?: boolean): Promise<SftpTransferStartResult>
+    download(selectionId: string, overwrite?: boolean): Promise<SftpTransferStartResult>
+    listTransfers(workspaceId?: string): Promise<SftpTransferTask[]>
+    cancelTransfer(taskId: string): Promise<void>
+    retryTransfer(taskId: string): Promise<SftpTransferStartResult>
+  }
   workspace: {
     load(): Promise<StoredWorkspaceWindow | undefined>
     save(snapshot: WorkspaceSaveRequest): Promise<void>
@@ -200,6 +226,7 @@ export interface RockerBridge {
     onSessionEvent(listener: (event: TerminalSessionEvent) => void): () => void
     onSessionLaunch(listener: (request: SessionLaunchRequest) => void): () => void
     onForwardingEvent(listener: (event: ForwardingRuntimeEvent) => void): () => void
+    onSftpEvent(listener: (event: SftpRuntimeEvent) => void): () => void
   }
 }
 
@@ -235,6 +262,20 @@ export const ipcChannels = {
   portsRemoveProfile: "rocker:ports:remove-profile",
   portsStartProfile: "rocker:ports:start-profile",
   portsEvent: "rocker:ports:event",
+  sftpOpen: "rocker:sftp:open",
+  sftpClose: "rocker:sftp:close",
+  sftpList: "rocker:sftp:list",
+  sftpMkdir: "rocker:sftp:mkdir",
+  sftpRename: "rocker:sftp:rename",
+  sftpRemove: "rocker:sftp:remove",
+  sftpChooseUpload: "rocker:sftp:choose-upload",
+  sftpChooseDownload: "rocker:sftp:choose-download",
+  sftpUpload: "rocker:sftp:upload",
+  sftpDownload: "rocker:sftp:download",
+  sftpListTransfers: "rocker:sftp:list-transfers",
+  sftpCancelTransfer: "rocker:sftp:cancel-transfer",
+  sftpRetryTransfer: "rocker:sftp:retry-transfer",
+  sftpEvent: "rocker:sftp:event",
   workspaceLoad: "rocker:workspace:load",
   workspaceSave: "rocker:workspace:save",
   bootstrapLoad: "rocker:bootstrap:load",

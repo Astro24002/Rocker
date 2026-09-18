@@ -38,6 +38,8 @@ import type {
 import type { SshConnectionManager } from "../ssh/connection-manager"
 import type { HostKeyAuditRecord, StoredHostKeyRecord } from "../ssh/host-keys"
 import type { TerminalSessionManager } from "../ssh/terminal-session-manager"
+import type { SftpManager } from "../sftp/sftp-manager"
+import type { SftpRuntimeEvent } from "../sftp/types"
 import type { WorkspaceWindowManager } from "../windows/workspace-window-manager"
 import {
   type AppBootstrapSnapshot,
@@ -62,6 +64,7 @@ export interface IpcDependencies {
   connections: SshConnectionManager
   ports: PortService
   forwarding: ForwardingManager
+  sftp: SftpManager
   forwardingProfiles?: Pick<ForwardingProfileStore, "list" | "get" | "save" | "remove" | "replace" | "flush">
   history: HistoryStore
   settings: SettingsStore
@@ -251,6 +254,100 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     assertId(hostId, "host")
     if (!dependencies.createDuplicateWindow) throw new Error("Window duplication is unavailable")
     return dependencies.createDuplicateWindow(hostId)
+  })
+
+  ipcMain.handle(ipcChannels.sftpOpen, async (event, workspaceId: unknown, hostId: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(workspaceId, "SFTP workspace")
+    assertId(hostId, "host")
+    await requireHost(dependencies, hostId)
+    assertCurrentOwner(dependencies, owner)
+    return dependencies.sftp.open(workspaceId, hostId, owner)
+  })
+  ipcMain.handle(ipcChannels.sftpClose, async (event, workspaceId: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(workspaceId, "SFTP workspace")
+    await dependencies.sftp.close(workspaceId, owner)
+  })
+  ipcMain.handle(ipcChannels.sftpList, async (event, workspaceId: unknown, path: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(workspaceId, "SFTP workspace")
+    if (typeof path !== "string") throw new Error("Invalid remote path")
+    return dependencies.sftp.list(workspaceId, path, owner)
+  })
+  ipcMain.handle(ipcChannels.sftpMkdir, async (event, workspaceId: unknown, path: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(workspaceId, "SFTP workspace")
+    if (typeof path !== "string") throw new Error("Invalid remote path")
+    await dependencies.sftp.mkdir(workspaceId, path, owner)
+  })
+  ipcMain.handle(ipcChannels.sftpRename, async (event, workspaceId: unknown, path: unknown, nextPath: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(workspaceId, "SFTP workspace")
+    if (typeof path !== "string" || typeof nextPath !== "string") throw new Error("Invalid SFTP rename request")
+    await dependencies.sftp.rename(workspaceId, path, nextPath, owner)
+  })
+  ipcMain.handle(ipcChannels.sftpRemove, async (event, workspaceId: unknown, path: unknown, kind: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(workspaceId, "SFTP workspace")
+    if (typeof path !== "string" || (kind !== "file" && kind !== "directory")) throw new Error("Invalid SFTP removal request")
+    await dependencies.sftp.remove(workspaceId, path, kind, owner)
+  })
+  ipcMain.handle(ipcChannels.sftpChooseUpload, async (event, workspaceId: unknown, remoteDirectory: unknown, localPath: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(workspaceId, "SFTP workspace")
+    if (typeof remoteDirectory !== "string") throw new Error("Invalid remote path")
+    if (localPath !== undefined && typeof localPath !== "string") throw new Error("Invalid local path")
+    if (typeof localPath === "string") {
+      assertCurrentOwner(dependencies, owner)
+      return dependencies.sftp.selectUpload(workspaceId, remoteDirectory, localPath, owner)
+    }
+    const target = BrowserWindow.fromWebContents(event.sender)
+    const result = target
+      ? await dialog.showOpenDialog(target, { title: "Upload file", properties: ["openFile"] })
+      : await dialog.showOpenDialog({ title: "Upload file", properties: ["openFile"] })
+    if (result.canceled || !result.filePaths[0]) return undefined
+    assertCurrentOwner(dependencies, owner)
+    return dependencies.sftp.selectUpload(workspaceId, remoteDirectory, result.filePaths[0], owner)
+  })
+  ipcMain.handle(ipcChannels.sftpChooseDownload, async (event, workspaceId: unknown, remotePath: unknown, suggestedName: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(workspaceId, "SFTP workspace")
+    if (typeof remotePath !== "string" || typeof suggestedName !== "string") throw new Error("Invalid SFTP download request")
+    const target = BrowserWindow.fromWebContents(event.sender)
+    const result = target
+      ? await dialog.showSaveDialog(target, { title: "Download file", defaultPath: suggestedName })
+      : await dialog.showSaveDialog({ title: "Download file", defaultPath: suggestedName })
+    if (result.canceled || !result.filePath) return undefined
+    assertCurrentOwner(dependencies, owner)
+    return dependencies.sftp.selectDownload(workspaceId, remotePath, result.filePath, owner)
+  })
+  ipcMain.handle(ipcChannels.sftpUpload, async (event, selectionId: unknown, overwrite: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(selectionId, "SFTP selection")
+    if (overwrite !== undefined && typeof overwrite !== "boolean") throw new Error("Invalid overwrite setting")
+    return dependencies.sftp.upload(selectionId, overwrite === true, owner)
+  })
+  ipcMain.handle(ipcChannels.sftpDownload, async (event, selectionId: unknown, overwrite: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(selectionId, "SFTP selection")
+    if (overwrite !== undefined && typeof overwrite !== "boolean") throw new Error("Invalid overwrite setting")
+    return dependencies.sftp.download(selectionId, overwrite === true, owner)
+  })
+  ipcMain.handle(ipcChannels.sftpListTransfers, async (event, workspaceId: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    if (workspaceId !== undefined) assertId(workspaceId, "SFTP workspace")
+    return dependencies.sftp.listTransfers(owner, typeof workspaceId === "string" ? workspaceId : undefined)
+  })
+  ipcMain.handle(ipcChannels.sftpCancelTransfer, async (event, taskId: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(taskId, "SFTP transfer")
+    await dependencies.sftp.cancelTransfer(taskId, owner)
+  })
+  ipcMain.handle(ipcChannels.sftpRetryTransfer, async (event, taskId: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(taskId, "SFTP transfer")
+    return dependencies.sftp.retryTransfer(taskId, owner)
   })
 
   ipcMain.handle(ipcChannels.portsScan, (event, connectionId: unknown) => {
@@ -574,9 +671,15 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     const { owner, ...payload } = event
     dependencies.windows.sendToOwner(owner, ipcChannels.portsEvent, payload)
   })
+  const unsubscribeSftp = dependencies.sftp?.onEvent((event) => {
+    const { owner, event: payload } = event
+    const safePayload: SftpRuntimeEvent = payload
+    dependencies.windows.sendToOwner(owner, ipcChannels.sftpEvent, safePayload)
+  }) ?? (() => undefined)
   return () => {
     unsubscribe()
     unsubscribeForwarding?.()
+    unsubscribeSftp()
     pendingConfigurationImports.clear()
     for (const channel of Object.values(ipcChannels)) {
       if (channel !== ipcChannels.sessionEvent && channel !== ipcChannels.sessionLaunch) ipcMain.removeHandler(channel)

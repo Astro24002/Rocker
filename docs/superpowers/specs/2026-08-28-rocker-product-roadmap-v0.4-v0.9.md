@@ -1,6 +1,6 @@
 # Rocker Product Roadmap: v0.4.x to v0.9.0
 
-Date: 2026-08-28 (updated 2026-09-11 for v0.5-A through v0.5-D and the deferred runtime-capability boundary)
+Date: 2026-08-28 (updated 2026-09-18 for v0.6 RC5 admission and the v0.7 SFTP foundation)
 Status: Maintained product evolution baseline aligned with the approved workspace shell and v0.5.x quality sequence
 Scope: Windows and macOS desktop application
 
@@ -54,7 +54,7 @@ Status terms used below:
 | Host Key trust | Working tree / v0.5-B and v0.5-D integration implemented | First-use and changed-key verification, persistence, a user-facing Trust inventory, bounded audit history, expected-fingerprint removal, owner-scoped management IPC, and shared Host Key checks for Connection Test are implemented and locally verified. Re-trust remains the existing native confirmation path; release packaging and native manual checks remain open. |
 | Port Forwarding | Partial | Explicit scan, transient Local Forward lifecycle, leases, recovery, and owner cleanup exist. Persistent profiles and the full management workflow do not. |
 | History | Partial | List, search, clear, and reconnect exist. Completed-session outcome and elapsed-time recording are not yet closed; current open records use a zero duration. |
-| SFTP | Placeholder | The route exists, but no SFTP service, lease kind, IPC contract, file browser, or transfer queue exists. |
+| SFTP | Working tree / v0.7 foundation | Main-process SFTP leases, typed IPC, real fixture-backed directory operations, rename, metadata, drag-and-drop upload, and independent runtime transfer tasks are implemented. Native packaged-app and exit-cleanup checks remain open; durable transfer persistence is intentionally optional. |
 | Snippets | Placeholder | The route and Host editor association fields exist, but there is no Snippet store, expansion, preview, or execution path. |
 | Named Workspaces | Partial | Automatic Session/split/layout recovery exists. User-named save/restore and forwarding intent do not. |
 | Release engineering | Partial | Windows/macOS x64/arm64 packaging and a six-asset release allow-list exist. Signing, notarization, native launch smoke, and final migration/security/performance gates remain v0.9 work. |
@@ -87,9 +87,9 @@ about 1,379 lines and `electron/ipc/register.ts` is about 1,082 lines with 46
 IPC registrations. The current Trust slice keeps only a narrow inventory
 refresh/removal integration in `App.tsx`; before the v0.5 release boundary,
 Hosts and Trust coordination should move behind feature hooks/modules instead
-of growing the shell controller. v0.7 must begin with a separate SFTP service,
-lease contract, and IPC module. `ConnectionManager` should remain the SSH
-transport authority rather than absorb feature-specific file or forwarding
+of growing the shell controller. The v0.7 SFTP foundation now uses a separate
+service, lease contract, and IPC module. `ConnectionManager` remains the SSH
+transport authority rather than absorbing feature-specific file or forwarding
 workflows.
 
 The prior Hosts integration defect in which the application shell discarded the
@@ -132,7 +132,7 @@ the top of the right Workspace.
 | Sessions | Direct SSH terminal | Core product surface; remains the default working state. |
 | Hosts | Host management workspace | Working-tree UI foundation; completion target is v0.5. |
 | Trust | Host Key trust workspace | Working-tree v0.5-B inventory, audit, and expected-fingerprint removal; native re-trust remains the connection confirmation flow. |
-| SFTP | Remote file workspace | Reserved destination; placeholder until v0.7. |
+| SFTP | Remote file workspace | v0.7 foundation is in the working tree; real host and packaged-app acceptance remains open. |
 | Snippets | Command-library workspace | Reserved destination; placeholder until v0.8. |
 | Port Forwarding | Forwarding management workspace | Existing runtime flow; manager workflow planned in v0.6. |
 | History | Connection history workspace | Existing local workflow; outcome/duration closeout remains partial. |

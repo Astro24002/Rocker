@@ -713,6 +713,186 @@ textarea:focus-visible {
   color: var(--text-primary);
 }
 
+.sftp-browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  color: var(--text-muted);
+}
+
+.sftp-browser-toolbar code {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-browser-surface {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.sftp-browser-surface.is-drop-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.sftp-directory-header,
+.sftp-directory-list,
+.sftp-transfer-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-top: 1px solid var(--line);
+}
+
+.sftp-directory-header,
+.sftp-directory-row,
+.sftp-transfer-row {
+  display: grid;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sftp-directory-header,
+.sftp-directory-row {
+  grid-template-columns: minmax(220px, 1fr) minmax(120px, auto) minmax(74px, auto) minmax(62px, auto) minmax(74px, auto) 30px 30px 30px;
+}
+
+.sftp-directory-header {
+  min-height: 32px;
+  padding: 0 8px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.sftp-directory-header span:not(:first-child) {
+  text-align: right;
+}
+
+.sftp-entry-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  color: var(--text-primary);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sftp-entry-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-entry-meta,
+.sftp-transfer-row > span:nth-child(2) {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-entry-spacer {
+  width: 30px;
+}
+
+.sftp-transfer-list {
+  margin-top: 8px;
+}
+
+.sftp-transfer-list h2 {
+  margin: 14px 0 0;
+  padding-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sftp-transfer-row {
+  grid-template-columns: minmax(0, 1fr) auto 30px;
+}
+
+.sftp-transfer-row > span:first-child {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-transfer-overview {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  margin: 0 30px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sftp-transfer-overview-heading,
+.sftp-transfer-overview-row {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.sftp-transfer-overview-heading {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.sftp-transfer-overview-heading span {
+  color: var(--text-muted);
+}
+
+.sftp-transfer-overview-row span,
+.sftp-transfer-overview-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-transfer-overview-row span {
+  color: var(--text-primary);
+}
+
+.sftp-transfer-overview-row small {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 900px) {
+  .sftp-directory-header {
+    display: none;
+  }
+
+  .sftp-directory-row {
+    grid-template-columns: minmax(0, 1fr) 30px 30px 30px;
+  }
+
+  .sftp-directory-row > .sftp-entry-meta {
+    display: none;
+  }
+}
+
 .session-forwarding-facts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

@@ -25,7 +25,7 @@ export {
 export interface ConnectionAcquireRequest {
   hostId: string
   owner: RuntimeOwner
-  kind: "terminal" | "forward"
+  kind: "terminal" | "forward" | "sftp"
   forceNewConnection?: boolean
   signal?: AbortSignal
 }
@@ -72,7 +72,7 @@ export interface ConnectionLease {
   id: string
   connectionId: string
   owner: RuntimeOwner
-  kind: "terminal" | "forward"
+  kind: "terminal" | "forward" | "sftp"
 }
 
 export type ConnectionEvent =

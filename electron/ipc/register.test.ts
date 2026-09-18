@@ -272,6 +272,24 @@ describe("registerIpcHandlers", () => {
     expect(harness.ports.scan).not.toHaveBeenCalled()
   })
 
+  it("keeps SFTP rename and dropped-upload requests owner scoped", async () => {
+    const harness = createHarness()
+    harness.sftp.selectUpload.mockResolvedValue({ selectionId: "selection-1", workspaceId: "workspace-1", name: "drop.txt", size: 4, remotePath: "/drop.txt" })
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.sftpRename, "workspace-1", "/old.txt", "/new.txt")).resolves.toBeUndefined()
+    expect(harness.sftp.rename).toHaveBeenCalledWith("workspace-1", "/old.txt", "/new.txt", owner21)
+
+    await expect(invokeFrom(21, ipcChannels.sftpChooseUpload, "workspace-1", "/", "/tmp/drop.txt"))
+      .resolves.toMatchObject({ selectionId: "selection-1", remotePath: "/drop.txt" })
+    expect(harness.sftp.selectUpload).toHaveBeenCalledWith("workspace-1", "/", "/tmp/drop.txt", owner21)
+    expect(electron.dialog.showOpenDialog).not.toHaveBeenCalled()
+
+    await expect(invokeFrom(21, ipcChannels.sftpRename, "workspace-1", 42, "/new.txt"))
+      .rejects.toThrow("Invalid SFTP rename request")
+    expect(harness.sftp.rename).toHaveBeenCalledTimes(1)
+  })
+
   it("lists saved forwarding profiles globally, including stopped runtimes", async () => {
     const harness = createHarness()
     const profile = testForwardingProfile()
@@ -1019,6 +1037,11 @@ function createHarness() {
     loadWorkspaceWithStatus: vi.fn()
   }
   const forwarding = { start: vi.fn(), stop: vi.fn(), list: vi.fn(() => [] as ForwardingInfo[]), get: vi.fn(), resume: vi.fn(), ownerForForwarding: vi.fn(), releaseOwner: vi.fn(), onEvent: vi.fn(() => vi.fn()), startProfile: vi.fn() }
+  const sftp = {
+    rename: vi.fn(),
+    selectUpload: vi.fn(),
+    onEvent: vi.fn(() => vi.fn())
+  }
   const dependencies = {
     hosts,
     credentials,
@@ -1027,6 +1050,7 @@ function createHarness() {
     connections,
     ports: { scan: vi.fn() },
     forwarding,
+    sftp,
     forwardingProfiles,
     history,
     settings,
@@ -1046,6 +1070,7 @@ function createHarness() {
     hosts,
     forwardingProfiles,
     forwarding,
+    sftp,
     windows,
     owner,
     other,

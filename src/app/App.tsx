@@ -948,8 +948,20 @@ function Workspace() {
     }))
   }
 
-  const closeTerminalSession = (session: WorkspaceSession): void => {
+  const closeTerminalSession = async (session: WorkspaceSession): Promise<void> => {
     const kind = sessionKind(session)
+    if (kind === "sftp") {
+      const transfers = await bridge.sftp.listTransfers(session.id).catch(() => [])
+      const activeTransfers = transfers.filter((transfer) => transfer.status === "queued" || transfer.status === "running")
+      if (activeTransfers.length > 0) {
+        const continueInBackground = window.confirm(
+          t("session.sftp.closeWithTransfersPrompt").replace("{count}", String(activeTransfers.length))
+        )
+        if (!continueInBackground) {
+          await Promise.allSettled(activeTransfers.map((transfer) => bridge.sftp.cancelTransfer(transfer.id)))
+        }
+      }
+    }
     pendingOpens.current.delete(session.id)
     releaseRestoreAdmission(session.id)
     connectionIds.current.delete(session.id)
@@ -958,6 +970,7 @@ function Workspace() {
     terminalSurfaces.current.delete(session.id)
     setRecentSessionState((current) => removeRecentSession(current, session.id))
     if (kind === "ssh") void bridge.sessions.close(session.id).catch(() => undefined)
+    if (kind === "sftp") void bridge.sftp.close(session.id).catch(() => undefined)
     setWorkspace((current) => closeSession(current, session.id))
     const remaining = workspace.sessions.filter((candidate) => candidate.id !== session.id)
     const anotherSshForHost = remaining.some((candidate) => candidate.hostId === session.hostId && sessionKind(candidate) === "ssh")
@@ -1373,7 +1386,7 @@ function Workspace() {
               <PortsView mode="global" bridge={bridge} hosts={hosts} onOpenHost={openHostWorkspace} onOpenSession={openPfSession} />
             )
           ) : activeNav === "sftp" ? (
-            <HostWorkspacePicker kind="sftp" hosts={hosts} onOpen={openSftpSession} />
+            <HostWorkspacePicker kind="sftp" hosts={hosts} bridge={bridge} onOpen={openSftpSession} />
           ) : (
             <SnippetsView sessions={workspace.sessions} onSelect={activateExistingSession} />
           )}

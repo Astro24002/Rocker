@@ -11,6 +11,7 @@ import type { StorageHealth, StorageKind } from "../../electron/storage/storage-
 import type { AppSettings, ForwardingInfo, HostCharset, HostEnvironment, HostProfile, HostThemeColor, StoredWorkspaceWindow } from "./types"
 import type { ForwardingProfileRequest, ForwardingProfileView } from "../../electron/ports/types"
 import type { ForwardingProfile } from "../../electron/storage/types"
+import type { SftpDirectory, SftpTransferStartResult, SftpTransferTask } from "../../electron/sftp/types"
 
 const demoHosts: HostProfile[] = [
   { id: "demo-g11", name: "G11", host: "47.97.162.53", port: 22, username: "root", authMethod: "agent", platform: "ubuntu", group: "Personal", environment: "development", tags: ["core", "linux"], favorite: true, notes: "" },
@@ -30,6 +31,7 @@ type TerminalEvent = Parameters<RockerBridge["events"]["onSessionEvent"]>[0] ext
 const mockListeners = new Set<(event: TerminalEvent) => void>()
 const mockSessions = new Map<string, PreviewSession>()
 const mockForwards = new Map<string, ForwardingInfo>()
+const mockSftpWorkspaces = new Map<string, { hostId: string }>()
 const mockProfiles = new Map<string, ForwardingProfile>([
   ["preview-forward-g11", {
     id: "preview-forward-g11",
@@ -253,6 +255,36 @@ function createBrowserPreviewBridge(): RockerBridge {
       },
       openAddress: async () => undefined
     },
+    // Browser preview only: this in-memory route never represents a real SSH/SFTP connection.
+    sftp: {
+      open: async (workspaceId, hostId) => {
+        mockSftpWorkspaces.set(workspaceId, { hostId })
+        return { workspaceId, hostId, connectionId: `preview-sftp-${hostId}`, state: "ready" as const }
+      },
+      close: async (workspaceId) => { mockSftpWorkspaces.delete(workspaceId) },
+      list: async (workspaceId, path): Promise<SftpDirectory> => {
+        const workspace = mockSftpWorkspaces.get(workspaceId)
+        if (!workspace) throw new Error("SFTP workspace was not opened")
+        const normalized = path.trim() || "/"
+        return {
+          path: normalized.startsWith("/") ? normalized : `/${normalized}`,
+          entries: normalized === "/" ? [
+            { name: "home", path: "/home", type: "directory" },
+            { name: "README.md", path: "/README.md", type: "file", size: 1_024, modifiedAt: new Date(0).toISOString() }
+          ] : []
+        }
+      },
+      mkdir: async () => undefined,
+      rename: async () => undefined,
+      remove: async () => undefined,
+      chooseUpload: async () => { throw new Error("SFTP uploads are unavailable in browser preview") },
+      chooseDownload: async () => { throw new Error("SFTP downloads are unavailable in browser preview") },
+      upload: async (): Promise<SftpTransferStartResult> => { throw new Error("SFTP uploads are unavailable in browser preview") },
+      download: async (): Promise<SftpTransferStartResult> => { throw new Error("SFTP downloads are unavailable in browser preview") },
+      listTransfers: async (): Promise<SftpTransferTask[]> => [],
+      cancelTransfer: async () => undefined,
+      retryTransfer: async (): Promise<SftpTransferStartResult> => { throw new Error("SFTP transfers are unavailable in browser preview") }
+    },
     workspace: {
       load: async () => mockWorkspace,
       save: async (snapshot) => {
@@ -330,7 +362,8 @@ function createBrowserPreviewBridge(): RockerBridge {
         return () => mockListeners.delete(listener)
       },
       onSessionLaunch: () => () => undefined,
-      onForwardingEvent: () => () => undefined
+      onForwardingEvent: () => () => undefined,
+      onSftpEvent: () => () => undefined
     }
   }
 }

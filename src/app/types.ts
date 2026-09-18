@@ -37,3 +37,15 @@ export type {
   TerminalSessionState,
   TerminalStateEvent
 } from "../../electron/ssh/types"
+
+export type {
+  SftpDirectory,
+  SftpDirectoryEntry,
+  SftpEntryType,
+  SftpTransferDirection,
+  SftpTransferStartResult,
+  SftpTransferStatus,
+  SftpTransferTask,
+  SftpWorkspaceInfo,
+  SftpWorkspaceState
+} from "../../electron/sftp/types"

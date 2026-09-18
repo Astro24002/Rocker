@@ -30,6 +30,9 @@ export interface SftpDirectoryEntry {
   type: "file" | "directory" | "symlink" | "other"
   size?: number
   modifiedAt?: string
+  permissions?: number
+  uid?: number
+  gid?: number
 }
 
 export interface SftpBrowserState {
