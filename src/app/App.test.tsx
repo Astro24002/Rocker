@@ -6,12 +6,14 @@ import type {
   BootstrapHostProfile,
   ConfigurationExportResult,
   ConfigurationImportChooseResult,
-  RockerBridge
+  RockerBridge,
+  SessionLaunchRequest,
+  SftpRuntimeEvent
 } from "../../electron/ipc/bridge-contract"
 import type { ImportPreview, ImportResult } from "../../electron/storage/config-bundle"
 import type { StorageHealth } from "../../electron/storage/storage-result"
 import type { TerminalSessionEvent } from "../../electron/ssh/types"
-import type { SftpTransferTask } from "../../electron/sftp/types"
+import type { SftpDirectoryEntry, SftpTransferTask } from "../../electron/sftp/types"
 import { clampSidebarWidth } from "../components/Sidebar"
 import { visibleSessionIds } from "../features/terminal/layout"
 import type { SshWorkspaceSession, TerminalWorkspaceState } from "../features/terminal/session-state"
@@ -99,7 +101,9 @@ vi.mock("../features/terminal/TerminalWorkspace", async () => {
 
 let bridge: ReturnType<typeof createBridge>
 let sessionListener: ((event: TerminalSessionEvent) => void) | undefined
+let sessionLaunchListener: ((request: SessionLaunchRequest) => void) | undefined
 let forwardingListener: (() => void) | undefined
+let sftpListener: ((event: SftpRuntimeEvent) => void) | undefined
 
 beforeEach(() => {
   localStorage.clear()
@@ -113,7 +117,9 @@ beforeEach(() => {
   terminalHarness.registeredSessions.clear()
   terminalHarness.latestWorkspace = undefined
   sessionListener = undefined
+  sessionLaunchListener = undefined
   forwardingListener = undefined
+  sftpListener = undefined
   bridge = createBridge()
   window.rocker = bridge as unknown as RockerBridge
 })
@@ -235,7 +241,6 @@ describe("desktop workspace shell", () => {
   })
 
   it.each([
-    ["SFTP", "SFTP"],
     ["Snippets", "Snippets"]
   ])("reaches the %s workspace entry from Sidebar navigation", async (label, heading) => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([], undefined))
@@ -271,10 +276,150 @@ describe("desktop workspace shell", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Port forwarding" }))
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Host forwarding" })).toBeInTheDocument())
+    expect(screen.getByText("Rocker / Port Forwarding / G11")).toBeInTheDocument()
     expect(document.querySelector(".ports-host-view[data-mode='host']")).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Port Forwarding" }))
     await waitFor(() => expect(document.querySelector(".ports-overview-view[data-mode='global']")).toBeInTheDocument())
+  })
+
+  it("opens the Host SFTP detail from an SSH session action", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "SFTP" }))
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "G11" })).toBeInTheDocument())
+    const sftpButton = screen.getByRole("button", { name: "SFTP G11" })
+    expect(sftpButton).toHaveAttribute("aria-current", "page")
+    const sftpSessionId = sftpButton.getAttribute("data-session-id")
+    expect(sftpSessionId).toBeTruthy()
+    await waitFor(() => expect(bridge.sftp.open).toHaveBeenCalledWith(sftpSessionId, host.id))
+    expect(screen.getByRole("heading", { name: "Local" })).toBeInTheDocument()
+    expect(document.querySelectorAll(".sftp-file-pane")).toHaveLength(2)
+  })
+
+  it("duplicates SFTP and PF sessions into new windows with their type-specific context", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    bridge.ports.listForHost.mockResolvedValue([forwardingRow()])
+    bridge.sftp.list.mockImplementation(async (workspaceId: string, path: string) => ({
+      workspaceId,
+      path,
+      entries: path === "/" ? [{ name: "etc", path: "/etc", type: "directory" as const }] : []
+    }))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    await waitFor(() => expect(workspace().sessions[0].state).toBe("connected"))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate in a new window" }))
+    expect(bridge.sessions.duplicateInNewWindow).toHaveBeenLastCalledWith({
+      hostId: host.id,
+      kind: "ssh",
+      label: "G11"
+    })
+
+    openHostAction("G11, SSH, root", "Open SFTP")
+    await waitFor(() => expect(screen.getByRole("button", { name: "SFTP G11" })).toBeInTheDocument())
+    const etcRow = await screen.findByRole("row", { name: /etc/ })
+    fireEvent.doubleClick(etcRow)
+    await waitFor(() => expect(bridge.sftp.list).toHaveBeenLastCalledWith(expect.any(String), "/etc"))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SFTP G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate in a new window" }))
+    expect(bridge.sessions.duplicateInNewWindow).toHaveBeenLastCalledWith({
+      hostId: host.id,
+      kind: "sftp",
+      label: "G11",
+      path: "/etc"
+    })
+
+    await openForwardingSession("G11, SSH, root")
+    fireEvent.contextMenu(screen.getByRole("button", { name: "PF G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate in a new window" }))
+    expect(bridge.sessions.duplicateInNewWindow).toHaveBeenLastCalledWith({
+      hostId: host.id,
+      kind: "pf",
+      label: "G11",
+      profileId: "profile-1"
+    })
+  })
+
+  it("opens type-specific workspaces from new-window launch requests", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
+    bridge.hosts.list.mockResolvedValue([host])
+    bridge.ports.listForHost.mockResolvedValue([forwardingRow()])
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "G11, SSH, root" })).toBeInTheDocument())
+    await waitFor(() => expect(sessionLaunchListener).toBeTypeOf("function"))
+    act(() => sessionLaunchListener!({ hostId: host.id, kind: "sftp", label: "G11 files", path: "/etc" }))
+    await waitFor(() => expect(screen.getByRole("heading", { name: "G11 files" })).toBeInTheDocument())
+    expect(screen.getByRole("button", { name: "etc" })).toHaveAttribute("aria-current", "location")
+    expect(bridge.sftp.list).toHaveBeenLastCalledWith(expect.any(String), "/etc")
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SFTP G11 files" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Close" }))
+    await waitFor(() => expect(screen.queryByRole("button", { name: "SFTP G11 files" })).not.toBeInTheDocument())
+
+    act(() => sessionLaunchListener!({ hostId: host.id, kind: "pf", label: "G11 forward", profileId: "profile-1" }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "PF G11 forward" })).toHaveAttribute("aria-current", "page"))
+    expect(screen.getByRole("heading", { name: "Forwarding Info" })).toBeInTheDocument()
+  })
+
+  it("opens Host forwarding details directly from a Host card", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
+    bridge.ports.listForHost.mockResolvedValue([])
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "G11, SSH, root" })).toBeInTheDocument())
+    openHostAction("G11, SSH, root", "Open Forwarding")
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Host forwarding" })).toBeInTheDocument())
+    expect(screen.getByText("Rocker / Port Forwarding / G11")).toBeInTheDocument()
+    expect(document.querySelector(".ports-host-view[data-mode='host']")).toBeInTheDocument()
+    expect(document.querySelector(".ports-overview-view[data-mode='global']")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "PF G11" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "PF G11" })).toHaveAttribute("aria-current", "page")
+    expect(screen.getByRole("button", { name: "Port Forwarding" })).not.toHaveAttribute("aria-current")
+    expect(bridge.sessions.open).not.toHaveBeenCalled()
+    expect(bridge.ports.createProfile).not.toHaveBeenCalled()
+    expect(bridge.ports.startProfile).not.toHaveBeenCalled()
+
+    openHostAction("G11, SSH, root", "Open Forwarding")
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Host forwarding" })).toBeInTheDocument())
+    expect(screen.getAllByRole("button", { name: "PF G11" })).toHaveLength(1)
+  })
+
+  it("restores a Host-level PF session without treating it as SSH", async () => {
+    const sessionId = "44444444-4444-4444-8444-444444444444"
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], {
+      workspaceId: "11111111-1111-4111-8111-111111111111",
+      maximized: false,
+      activeSessionId: sessionId,
+      sessions: [{ sessionId, hostId: host.id, label: host.name, kind: "pf" }]
+    }))
+    bridge.ports.listForHost.mockResolvedValue([])
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Host forwarding" })).toBeInTheDocument())
+    expect(screen.getByRole("button", { name: "PF G11" })).toHaveAttribute("aria-current", "page")
+    expect(document.querySelector(".ports-overview-view[data-mode='global']")).not.toBeInTheDocument()
+    expect(bridge.sessions.open).not.toHaveBeenCalled()
+  })
+
+  it("opens Host forwarding details from the global forwarding row", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
+    bridge.ports.listOverview.mockResolvedValue([forwardingRow()])
+    bridge.ports.listForHost.mockResolvedValue([])
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Port Forwarding" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Open Host workspace" }))
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Host forwarding" })).toBeInTheDocument())
+    expect(document.querySelector(".ports-overview-view[data-mode='global']")).not.toBeInTheDocument()
   })
 
   it("returns to the global overview when the last Host session closes", async () => {
@@ -298,7 +443,6 @@ describe("desktop workspace shell", () => {
     ["history", "History"],
     ["ports", "Port Forwarding"],
     ["settings", "Settings"],
-    ["sftp", "SFTP"],
     ["snippets", "Snippets"]
   ])("restores palette focus to the visible %s destination", async (queryValue, heading) => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
@@ -329,16 +473,16 @@ describe("desktop workspace shell", () => {
 
     await waitFor(() => expect(screen.getByRole("button", { name: "G11, SSH, root" })).toBeInTheDocument())
     fireEvent.contextMenu(screen.getByRole("button", { name: "G11, SSH, root" }), { clientX: 120, clientY: 80 })
-    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate host" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate Host" }))
     await waitFor(() => expect(bridge.hosts.duplicate).toHaveBeenCalledWith(host.id))
     await waitFor(() => expect(screen.getByText("G11 copy")).toBeInTheDocument())
     expect(screen.getByRole("button", { name: "G11 copy, SSH, root" })).toHaveAttribute("aria-pressed", "true")
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "G11 copy, SSH, root" }), { clientX: 120, clientY: 80 })
-    fireEvent.click(screen.getByRole("menuitem", { name: "Favorite host" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Favorite Host" }))
     await waitFor(() => expect(bridge.hosts.setFavorite).toHaveBeenCalledWith(duplicate.id, true))
     fireEvent.contextMenu(screen.getByRole("button", { name: "G11 copy, SSH, root" }), { clientX: 120, clientY: 80 })
-    fireEvent.click(screen.getByRole("menuitem", { name: "Delete host" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete Host" }))
     await waitFor(() => expect(bridge.hosts.remove).toHaveBeenCalledWith(duplicate.id))
     expect(confirmation).toHaveBeenCalled()
     confirmation.mockRestore()
@@ -408,14 +552,14 @@ describe("desktop workspace shell", () => {
     bridge.hosts.save.mockRejectedValue(new Error("storage details"))
     render(<App />)
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Add host" })).toBeInTheDocument())
-    fireEvent.click(screen.getByRole("button", { name: "Add host" }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Host" })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole("button", { name: "Add Host" }))
     fireEvent.change(screen.getByLabelText("Label"), { target: { value: "New host" } })
     fireEvent.change(screen.getByLabelText("Address"), { target: { value: "new.example" } })
     fireEvent.change(screen.getByLabelText("Username"), { target: { value: "root" } })
-    fireEvent.click(screen.getByRole("button", { name: "Save host" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Couldn't save this host"))
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Couldn't save this Host"))
     expect(screen.queryByText("storage details")).not.toBeInTheDocument()
   })
 
@@ -821,7 +965,7 @@ describe("desktop workspace shell", () => {
     }))
     render(<App />)
 
-    const addButtons = await screen.findAllByRole("button", { name: "Add host" })
+    const addButtons = await screen.findAllByRole("button", { name: "Add Host" })
     expect(addButtons.length).toBeGreaterThan(0)
     addButtons.forEach((button) => expect(button).toBeDisabled())
     expect(screen.getByRole("button", { name: "Import SSH config" })).toBeDisabled()
@@ -859,11 +1003,11 @@ describe("desktop workspace shell", () => {
     expect(document.querySelector(".app-shell")).toHaveAttribute("data-ui-style", "modern-professional")
   })
 
-  it("renders peer navigation entries from the reference layout", () => {
+  it("renders the primary navigation entries", () => {
     render(<App />)
 
     expect(screen.getByRole("button", { name: "Hosts" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "SFTP" })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "SFTP" })).not.toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Port Forwarding" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Snippets" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Connections" })).toBeInTheDocument()
@@ -981,6 +1125,63 @@ describe("desktop workspace shell", () => {
 
     expect(terminalHarness.controller.acceptOutput).toHaveBeenCalledWith(packet)
     expect(workspace().sessions[0]).not.toHaveProperty("output")
+  })
+
+  it("marks background SSH output as unread activity until that session is viewed", async () => {
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshotWithTwoSessions(host.id)))
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions).toHaveLength(2))
+    await waitFor(() => expect(sessionListener).toBeTypeOf("function"))
+    const backgroundSessionId = "33333333-3333-4333-8333-333333333333"
+    act(() => sessionListener!({
+      kind: "output",
+      packet: { sessionId: backgroundSessionId, channelGeneration: 1, sequence: 1, bytes: Uint8Array.of(65) }
+    }))
+
+    const backgroundButton = screen.getByRole("button", { name: "SSH G11 copy" })
+    await waitFor(() => expect(backgroundButton.querySelector(".session-activity-dot")).toBeInTheDocument())
+    expect(screen.getByRole("button", { name: "SSH G11" }).querySelector(".session-activity-dot")).toBeNull()
+
+    fireEvent.click(backgroundButton)
+    await waitFor(() => expect(backgroundButton.querySelector(".session-activity-dot")).toBeNull())
+  })
+
+  it("tracks active SFTP transfers while the SFTP workspace is in the background", async () => {
+    const sftpSessionId = "33333333-3333-4333-8333-333333333333"
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], {
+      ...workspaceSnapshot(host.id),
+      sessions: [
+        ...workspaceSnapshot(host.id).sessions,
+        { sessionId: sftpSessionId, hostId: host.id, label: "G11 files", kind: "sftp", path: "/" }
+      ]
+    }))
+    render(<App />)
+
+    await waitFor(() => expect(sftpListener).toBeTypeOf("function"))
+    const task: SftpTransferTask = {
+      id: "transfer-1",
+      workspaceId: sftpSessionId,
+      hostId: host.id,
+      direction: "upload",
+      name: "archive.tar",
+      remotePath: "/archive.tar",
+      status: "running",
+      bytesTransferred: 128,
+      totalBytes: 1024,
+      attempt: 1,
+      createdAt: "2026-09-18T00:00:00.000Z",
+      updatedAt: "2026-09-18T00:00:01.000Z"
+    }
+    bridge.sftp.listTransfers.mockResolvedValue([task])
+    act(() => sftpListener!({ kind: "transfer", task }))
+
+    const sftpButton = screen.getByRole("button", { name: "SFTP G11 files" })
+    await waitFor(() => expect(sftpButton.querySelector(".session-activity-dot")).toBeInTheDocument())
+
+    bridge.sftp.listTransfers.mockResolvedValue([{ ...task, status: "completed" }])
+    act(() => sftpListener!({ kind: "transfer", task: { ...task, status: "completed" } }))
+    await waitFor(() => expect(sftpButton.querySelector(".session-activity-dot")).toBeNull())
   })
 
   it("keeps a missing restored host closable without opening a network session", async () => {
@@ -1372,11 +1573,12 @@ describe("desktop workspace shell", () => {
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(1))
     const sshSessionId = workspace().sessions[0].id
-    expect(bridge.sessions.open).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(bridge.sessions.open).toHaveBeenCalledTimes(1))
 
     openHostAction("G11, SSH, root", "Open SFTP")
     await waitFor(() => expect(screen.getByRole("button", { name: "SFTP G11" })).toHaveAttribute("data-active", "true"))
-    expect(screen.getByRole("heading", { name: "File Browser" })).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "G11" })).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Local" })).toBeInTheDocument()
     expect(screen.getByTestId("terminal-workspace-mock").closest(".terminal-workspace-host")).toHaveAttribute("hidden")
     expect(screen.getByTestId("workspace-stage").querySelector(".session-info-bar")).not.toBeInTheDocument()
 
@@ -1387,7 +1589,7 @@ describe("desktop workspace shell", () => {
 
     openHostAction("G12, SSH, root", "Open SSH")
     await waitFor(() => expect(screen.getByRole("button", { name: "SSH G12" })).toBeInTheDocument())
-    expect(bridge.sessions.open).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(bridge.sessions.open).toHaveBeenCalledTimes(2))
     expect(bridge.sessions.close).not.toHaveBeenCalled()
     expect(bridge.ports.stop).not.toHaveBeenCalled()
 
@@ -1412,16 +1614,18 @@ describe("desktop workspace shell", () => {
   it("keeps SFTP path and PF content mounted across session switches", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
     bridge.ports.listForHost.mockResolvedValue([forwardingRow()])
+    bridge.sftp.list.mockImplementation(async (workspaceId: string, path: string) => ({
+      workspaceId,
+      path,
+      entries: path === "/" ? [{ name: "etc", path: "/etc", type: "directory" as const }] : []
+    }))
     render(<App />)
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(1))
     openHostAction("G11, SSH, root", "Open SFTP")
-    await waitFor(() => expect(screen.getByRole("heading", { name: "File Browser" })).toBeInTheDocument())
-
-    const path = screen.getByRole("textbox", { name: "Path" })
-    fireEvent.change(path, { target: { value: "/etc" } })
-    fireEvent.click(screen.getByRole("button", { name: "Go" }))
-    expect(path).toHaveValue("/etc")
+    await waitFor(() => expect(screen.getByRole("heading", { name: "G11" })).toBeInTheDocument())
+    fireEvent.doubleClick(await screen.findByRole("row", { name: /etc/ }))
+    await waitFor(() => expect(bridge.sftp.list).toHaveBeenLastCalledWith(expect.any(String), "/etc"))
 
     await openForwardingSession("G11, SSH, root")
     await waitFor(() => expect(screen.getByRole("heading", { name: "Forwarding Info" })).toBeInTheDocument())
@@ -1434,9 +1638,11 @@ describe("desktop workspace shell", () => {
     expect(pfHost).not.toHaveAttribute("hidden")
 
     fireEvent.click(screen.getByRole("button", { name: "SFTP G11" }))
-    expect(sftpHost).not.toHaveAttribute("hidden")
+    expect(document.querySelector(`.session-content-host[data-session-id="${sftpId}"]`)).not.toBeInTheDocument()
     expect(pfHost).toHaveAttribute("hidden")
-    expect(screen.getByRole("textbox", { name: "Path" })).toHaveValue("/etc")
+    expect(screen.getByRole("heading", { name: "G11" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "etc" })).toHaveAttribute("aria-current", "location")
+    expect(bridge.sftp.list).toHaveBeenLastCalledWith(expect.any(String), "/etc")
     expect(screen.getByTestId("workspace-stage").querySelector(".session-info-bar")).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "SSH G11" }))
@@ -1526,7 +1732,7 @@ describe("desktop workspace shell", () => {
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(1))
     openHostAction("G11, SSH, root", "Open SFTP")
-    await waitFor(() => expect(screen.getByRole("heading", { name: "File Browser" })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole("heading", { name: "G11" })).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole("button", { name: "Rocker" }))
     await waitFor(() => expect(screen.getByRole("heading", { name: "Hosts" })).toBeInTheDocument())
@@ -1547,7 +1753,7 @@ function openHostAction(hostLabel: string, action: string): void {
 }
 
 async function openForwardingSession(hostLabel: string): Promise<void> {
-  openHostAction(hostLabel, "Open forwarding")
+  openHostAction(hostLabel, "Open Forwarding")
   fireEvent.click(await screen.findByRole("button", { name: "Open session" }))
 }
 
@@ -1672,9 +1878,10 @@ function createBridge() {
       openAddress: vi.fn(async () => undefined)
     },
     sftp: {
+      listLocal: vi.fn(async () => ({ path: "/home/test", entries: [] as SftpDirectoryEntry[] })),
       open: vi.fn(async (workspaceId: string, hostId: string) => ({ workspaceId, hostId, state: "ready" as const, path: "/" })),
       close: vi.fn(async () => undefined),
-      list: vi.fn(async (workspaceId: string, path: string) => ({ workspaceId, path, entries: [] })),
+      list: vi.fn(async (workspaceId: string, path: string) => ({ workspaceId, path, entries: [] as SftpDirectoryEntry[] })),
       mkdir: vi.fn(async () => undefined),
       rename: vi.fn(async () => undefined),
       remove: vi.fn(async () => undefined),
@@ -1739,12 +1946,18 @@ function createBridge() {
         sessionListener = listener
         return vi.fn()
       }),
-      onSessionLaunch: vi.fn(() => vi.fn()),
+      onSessionLaunch: vi.fn((listener: (request: SessionLaunchRequest) => void) => {
+        sessionLaunchListener = listener
+        return vi.fn()
+      }),
       onForwardingEvent: vi.fn((listener: () => void) => {
         forwardingListener = listener
         return vi.fn()
       }),
-      onSftpEvent: vi.fn(() => vi.fn())
+      onSftpEvent: vi.fn((listener: (event: SftpRuntimeEvent) => void) => {
+        sftpListener = listener
+        return vi.fn()
+      })
     }
   }
 }

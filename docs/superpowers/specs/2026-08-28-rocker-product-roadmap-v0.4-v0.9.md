@@ -132,14 +132,15 @@ the top of the right Workspace.
 | Sessions | Direct SSH terminal | Core product surface; remains the default working state. |
 | Hosts | Host management workspace | Working-tree UI foundation; completion target is v0.5. |
 | Trust | Host Key trust workspace | Working-tree v0.5-B inventory, audit, and expected-fingerprint removal; native re-trust remains the connection confirmation flow. |
-| SFTP | Remote file workspace | v0.7 foundation is in the working tree; real host and packaged-app acceptance remains open. |
+| SFTP Session detail | Remote file workspace opened from a Host or Session | v0.7 foundation is in the working tree; real host and packaged-app acceptance remains open. |
 | Snippets | Command-library workspace | Reserved destination; placeholder until v0.8. |
 | Port Forwarding | Forwarding management workspace | Existing runtime flow; manager workflow planned in v0.6. |
 | History | Connection history workspace | Existing local workflow; outcome/duration closeout remains partial. |
 | Settings | Device-local preferences and data protection | Existing local workflow. |
 
-The Sidebar order is Hosts, Trust, SFTP, Snippets, Port Forwarding, History,
-and Settings. Sessions remain a separate section below product navigation. A
+The Sidebar order is Hosts, Trust, Snippets, Port Forwarding, History, and
+Settings. SFTP opens from a Host action or an existing SFTP Session instead of
+occupying a standalone feature destination. Sessions remain a separate section below product navigation. A
 feature must use its route in the right Workspace; it must not add a permanent
 toolbar, monitoring panel, or side pane that reduces the SSH terminal's normal
 working area.
@@ -496,12 +497,15 @@ connection model.
 
 ### UI Contract
 
-SFTP occupies its reserved full right-workspace destination. It is not a
-permanent terminal side panel and does not open a separate application window.
-The first release is a remote-only file workspace: a compact path/action bar,
-a central remote file table, and a persistent transfer queue at the bottom.
-Upload uses a native file chooser or drag-and-drop; download uses the native
-save-location flow. A dual-pane local browser is not part of the foundation.
+SFTP opens as a Session detail in the full right workspace. It has no standalone
+Sidebar feature or global overview, is not a permanent terminal side panel, and
+does not open a separate application window. The foundation presents a two-pane
+workspace: Local on the left and a Hosts chooser on the right. Selecting a host
+opens the real remote file table in the right pane. The Local pane reads
+directory metadata via Electron main-process IPC; upload uses a native file
+chooser, a selected local file, or drag-and-drop. Download uses the native
+save-location flow. The fixed two-pane layout has no visible transfer queue;
+transfer tasks remain independent in the main process.
 
 ### User Scenarios
 

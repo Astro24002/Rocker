@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
-import { chmod, open, readFile, rename, rm, writeFile } from "node:fs/promises"
-import { basename, dirname, join } from "node:path"
+import { chmod, lstat, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
+import { homedir } from "node:os"
+import { basename, dirname, join, resolve } from "node:path"
 import { BrowserWindow, dialog, ipcMain, shell } from "electron"
 import type { OpenDialogOptions } from "electron"
 import type { DiagnosticLogger } from "../diagnostics/diagnostic-logger"
@@ -39,7 +40,7 @@ import type { SshConnectionManager } from "../ssh/connection-manager"
 import type { HostKeyAuditRecord, StoredHostKeyRecord } from "../ssh/host-keys"
 import type { TerminalSessionManager } from "../ssh/terminal-session-manager"
 import type { SftpManager } from "../sftp/sftp-manager"
-import type { SftpRuntimeEvent } from "../sftp/types"
+import type { SftpDirectory, SftpRuntimeEvent } from "../sftp/types"
 import type { WorkspaceWindowManager } from "../windows/workspace-window-manager"
 import {
   type AppBootstrapSnapshot,
@@ -51,6 +52,7 @@ import {
   type HostKeyInventorySnapshot,
   type HostKeyRemovalRequest,
   type HostSaveRequest,
+  type SessionLaunchRequest,
   type SessionOpenRequest,
   type WorkspaceSaveRequest
 } from "./bridge-contract"
@@ -76,7 +78,7 @@ export interface IpcDependencies {
   diagnosticsBuildChannel?: DiagnosticRuntimeMetadata["buildChannel"]
   diagnosticsRuntimeMode?: DiagnosticRuntimeMetadata["runtimeMode"]
   windows: WorkspaceWindowManager
-  createDuplicateWindow?(hostId: string): Promise<void>
+  createDuplicateWindow?(request: SessionLaunchRequest): Promise<void>
 }
 
 interface BootstrapHealthStore {
@@ -249,13 +251,17 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     dependencies.sessions.beginRestore(currentOwnerForWebContents(dependencies, event.sender.id), activeSessionId)
   })
   ipcMain.handle(ipcChannels.sessionCompleteRestore, (event) => dependencies.sessions.completeRestore(currentOwnerForWebContents(dependencies, event.sender.id)))
-  ipcMain.handle(ipcChannels.sessionDuplicateWindow, (event, hostId: unknown) => {
+  ipcMain.handle(ipcChannels.sessionDuplicateWindow, (event, request: unknown) => {
     currentOwnerForWebContents(dependencies, event.sender.id)
-    assertId(hostId, "host")
     if (!dependencies.createDuplicateWindow) throw new Error("Window duplication is unavailable")
-    return dependencies.createDuplicateWindow(hostId)
+    return dependencies.createDuplicateWindow(normalizeSessionLaunchRequest(request))
   })
 
+  ipcMain.handle(ipcChannels.sftpListLocal, async (event, path: unknown) => {
+    currentOwnerForWebContents(dependencies, event.sender.id)
+    if (path !== undefined && typeof path !== "string") throw new Error("Invalid local path")
+    return listLocalDirectory(path)
+  })
   ipcMain.handle(ipcChannels.sftpOpen, async (event, workspaceId: unknown, hostId: unknown) => {
     const owner = currentOwnerForWebContents(dependencies, event.sender.id)
     assertId(workspaceId, "SFTP workspace")
@@ -687,6 +693,31 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   }
 }
 
+async function listLocalDirectory(requestedPath: string | undefined): Promise<SftpDirectory> {
+  const directoryPath = resolve(requestedPath?.trim() || homedir())
+  const directory = await lstat(directoryPath)
+  if (!directory.isDirectory()) throw new Error("Local path is not a directory")
+  const entries = await readdir(directoryPath, { withFileTypes: true })
+  const rows = await Promise.all(entries.map(async (entry) => {
+    const path = join(directoryPath, entry.name)
+    const metadata = await lstat(path)
+    return {
+      name: entry.name,
+      path,
+      type: entry.isDirectory() ? "directory" as const : entry.isFile() ? "file" as const : entry.isSymbolicLink() ? "symlink" as const : "other" as const,
+      size: entry.isDirectory() ? undefined : metadata.size,
+      modifiedAt: metadata.mtime.toISOString()
+    }
+  }))
+  rows.sort((left, right) => {
+    const leftDirectory = left.type === "directory"
+    const rightDirectory = right.type === "directory"
+    if (leftDirectory !== rightDirectory) return leftDirectory ? -1 : 1
+    return left.name.localeCompare(right.name, undefined, { sensitivity: "base", numeric: true })
+  })
+  return { path: directoryPath, entries: rows }
+}
+
 function normalizeSessionOpenRequest(value: unknown): SessionOpenRequest {
   if (!isRecord(value) || !isValidSessionId(value.sessionId) || !isBoundedString(value.hostId, 128)) {
     throw new Error("Invalid session request")
@@ -741,14 +772,14 @@ function normalizeWorkspaceSession(value: unknown): StoredWorkspaceSession {
     if (value.path !== undefined && !isBoundedString(value.path, 4_096)) throw new Error("Invalid workspace snapshot")
     return { sessionId: value.sessionId, hostId: value.hostId, label: value.label, kind, path: typeof value.path === "string" ? value.path : "/" }
   }
-  if (!isBoundedString(value.profileId, 128)) throw new Error("Invalid workspace snapshot")
+  if (value.profileId !== undefined && !isBoundedString(value.profileId, 128)) throw new Error("Invalid workspace snapshot")
   if (value.applicationProtocol !== undefined && value.applicationProtocol !== "http" && value.applicationProtocol !== "https") throw new Error("Invalid workspace snapshot")
   return {
     sessionId: value.sessionId,
     hostId: value.hostId,
     label: value.label,
     kind,
-    profileId: value.profileId,
+    ...(typeof value.profileId === "string" ? { profileId: value.profileId } : {}),
     ...(value.applicationProtocol ? { applicationProtocol: value.applicationProtocol } : {})
   }
 }
@@ -1269,6 +1300,32 @@ function isNonBlankBoundedString(value: unknown, maximumLength: number): value i
 
 function assertId(value: unknown, kind: string): asserts value is string {
   if (!isBoundedString(value, 128)) throw new Error(`Invalid ${kind} identifier`)
+}
+
+function normalizeSessionLaunchRequest(value: unknown): SessionLaunchRequest {
+  if (typeof value === "string") {
+    assertId(value, "host")
+    return { hostId: value }
+  }
+  if (!isPlainRecord(value)) throw new Error("Invalid session launch request")
+  assertId(value.hostId, "host")
+  if (value.kind !== undefined && value.kind !== "ssh" && value.kind !== "sftp" && value.kind !== "pf") {
+    throw new Error("Invalid session kind")
+  }
+  if (value.label !== undefined && !isNonBlankBoundedString(value.label, 256)) throw new Error("Invalid session label")
+  if (value.path !== undefined && !isNonBlankBoundedString(value.path, 4_096)) throw new Error("Invalid SFTP path")
+  if (value.profileId !== undefined) assertId(value.profileId, "forwarding profile")
+  if (value.applicationProtocol !== undefined && value.applicationProtocol !== "http" && value.applicationProtocol !== "https") {
+    throw new Error("Invalid application protocol")
+  }
+  return {
+    hostId: value.hostId,
+    ...(value.kind ? { kind: value.kind } : {}),
+    ...(value.label ? { label: value.label } : {}),
+    ...(value.path ? { path: value.path } : {}),
+    ...(value.profileId ? { profileId: value.profileId } : {}),
+    ...(value.applicationProtocol ? { applicationProtocol: value.applicationProtocol } : {})
+  }
 }
 
 function requireForwardingProfileStore(dependencies: IpcDependencies): NonNullable<IpcDependencies["forwardingProfiles"]> {

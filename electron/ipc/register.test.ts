@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -71,6 +71,29 @@ describe("registerIpcHandlers", () => {
     registerIpcHandlers(harness.dependencies)
 
     expect([...electron.handlers.keys()]).not.toContain("rocker:monitor:sample")
+  })
+
+  it("validates and forwards type-specific new-window session requests", async () => {
+    const harness = createHarness()
+    registerIpcHandlers(harness.dependencies)
+    const request = {
+      hostId: "host-1",
+      kind: "sftp",
+      label: "G11 files",
+      path: "/etc"
+    }
+
+    await expect(invokeFrom(21, ipcChannels.sessionDuplicateWindow, request)).resolves.toBeUndefined()
+    expect(harness.dependencies.createDuplicateWindow).toHaveBeenCalledWith(request)
+
+    await expect(invokeFrom(21, ipcChannels.sessionDuplicateWindow, "host-legacy")).resolves.toBeUndefined()
+    expect(harness.dependencies.createDuplicateWindow).toHaveBeenLastCalledWith({ hostId: "host-legacy" })
+
+    await expect(invokeFrom(21, ipcChannels.sessionDuplicateWindow, {
+      hostId: "host-1",
+      kind: "sftp",
+      path: ""
+    })).rejects.toThrow("Invalid SFTP path")
   })
 
   it("returns the current native maximize state for the owning window", async () => {
@@ -288,6 +311,28 @@ describe("registerIpcHandlers", () => {
     await expect(invokeFrom(21, ipcChannels.sftpRename, "workspace-1", 42, "/new.txt"))
       .rejects.toThrow("Invalid SFTP rename request")
     expect(harness.sftp.rename).toHaveBeenCalledTimes(1)
+  })
+
+  it("lists real local directory metadata through the owner-scoped SFTP bridge", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-local-browser-"))
+    try {
+      await mkdir(join(directory, "folder"))
+      await writeFile(join(directory, "notes.txt"), "hello", "utf8")
+      const harness = createHarness()
+      registerIpcHandlers(harness.dependencies)
+
+      await expect(invokeFrom(21, ipcChannels.sftpListLocal, directory)).resolves.toMatchObject({
+        path: directory,
+        entries: [
+          { name: "folder", type: "directory" },
+          { name: "notes.txt", type: "file", size: 5 }
+        ]
+      })
+      await expect(invokeFrom(21, ipcChannels.sftpListLocal, 42)).rejects.toThrow("Invalid local path")
+      expect(harness.windows.currentOwnerForWebContents).toHaveBeenCalledWith(21)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   it("lists saved forwarding profiles globally, including stopped runtimes", async () => {

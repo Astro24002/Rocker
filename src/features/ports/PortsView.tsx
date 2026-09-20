@@ -14,6 +14,7 @@ interface PortsViewProps {
   bridge: RockerBridge
   mode?: "global" | "host"
   hostId?: string
+  hostName?: string
   connectionId?: string
   session?: WorkspaceSession
   username?: string
@@ -284,7 +285,7 @@ interface HostForwardingFormState {
   autoStart: boolean
 }
 
-function HostPortsView({ bridge, hostId, connectionId, session, username, bindAddress = "127.0.0.1", onOpenSession }: PortsViewProps) {
+function HostPortsView({ bridge, hostId, hostName, connectionId, session, username, bindAddress = "127.0.0.1", onOpenSession }: PortsViewProps) {
   const { t } = useI18n()
   const canCreateProfile = Boolean(hostId && session)
   const [rows, setRows] = useState<ForwardingProfileView[]>([])
@@ -464,7 +465,7 @@ function HostPortsView({ bridge, hostId, connectionId, session, username, bindAd
     <section className="ports-view ports-host-view" data-mode="host">
       <header className="view-header">
         <div>
-          <span className="view-eyebrow">Rocker / {session?.label ?? t("ports.hostWorkspace")}</span>
+          <span className="view-eyebrow">Rocker / {t("nav.portForwarding")} / {hostName ?? session?.label ?? t("ports.hostWorkspace")}</span>
           <h1>{t("ports.hostTitle")}</h1>
           <p>{t("ports.hostSubtitle")}</p>
         </div>

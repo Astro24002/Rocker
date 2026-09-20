@@ -36,7 +36,7 @@ const bridge: RockerBridge = {
     cancelReconnect: (sessionId) => ipcRenderer.invoke(ipcChannels.sessionCancelReconnect, sessionId),
     beginRestore: (activeSessionId) => ipcRenderer.invoke(ipcChannels.sessionBeginRestore, activeSessionId),
     completeRestore: () => ipcRenderer.invoke(ipcChannels.sessionCompleteRestore),
-    duplicateInNewWindow: (hostId) => ipcRenderer.invoke(ipcChannels.sessionDuplicateWindow, hostId)
+    duplicateInNewWindow: (request) => ipcRenderer.invoke(ipcChannels.sessionDuplicateWindow, request)
   },
   ports: {
     scan: (connectionId) => ipcRenderer.invoke(ipcChannels.portsScan, connectionId),
@@ -53,6 +53,7 @@ const bridge: RockerBridge = {
     openAddress: (forwardingId) => ipcRenderer.invoke(ipcChannels.portsOpenAddress, forwardingId)
   },
   sftp: {
+    listLocal: (path) => ipcRenderer.invoke(ipcChannels.sftpListLocal, path),
     open: (workspaceId, hostId) => ipcRenderer.invoke(ipcChannels.sftpOpen, workspaceId, hostId),
     close: (workspaceId) => ipcRenderer.invoke(ipcChannels.sftpClose, workspaceId),
     list: (workspaceId, path) => ipcRenderer.invoke(ipcChannels.sftpList, workspaceId, path),

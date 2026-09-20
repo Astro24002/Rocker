@@ -84,7 +84,8 @@ describe("WorkspaceSnapshotStore", () => {
       sessions: [
         { sessionId, hostId: "host-a", label: "G11", cols: 120, rows: 40 },
         { sessionId: secondSessionId, hostId: "host-a", label: "G11 files", kind: "sftp", path: "/srv" },
-        { sessionId: "44444444-4444-4444-8444-444444444444", hostId: "host-a", label: "Web", kind: "pf", profileId: "profile-a", applicationProtocol: "https" }
+        { sessionId: "44444444-4444-4444-8444-444444444444", hostId: "host-a", label: "Web", kind: "pf", profileId: "profile-a", applicationProtocol: "https" },
+        { sessionId: "55555555-5555-4555-8555-555555555555", hostId: "host-a", label: "G11", kind: "pf" }
       ]
     })
     await store.flush()
@@ -92,7 +93,8 @@ describe("WorkspaceSnapshotStore", () => {
     expect((await store.load()).windows[0].sessions).toEqual([
       { sessionId, hostId: "host-a", label: "G11", cols: 120, rows: 40 },
       { sessionId: secondSessionId, hostId: "host-a", label: "G11 files", kind: "sftp", path: "/srv" },
-      { sessionId: "44444444-4444-4444-8444-444444444444", hostId: "host-a", label: "Web", kind: "pf", profileId: "profile-a", applicationProtocol: "https" }
+      { sessionId: "44444444-4444-4444-8444-444444444444", hostId: "host-a", label: "Web", kind: "pf", profileId: "profile-a", applicationProtocol: "https" },
+      { sessionId: "55555555-5555-4555-8555-555555555555", hostId: "host-a", label: "G11", kind: "pf" }
     ])
   })
 

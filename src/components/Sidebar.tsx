@@ -1,4 +1,4 @@
-import { Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, Server, Settings, ShieldCheck, TerminalSquare, X, type LucideIcon } from "lucide-react"
+import { Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, Server, Settings, ShieldCheck, X } from "lucide-react"
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactElement } from "react"
 import { createPortal } from "react-dom"
 import { useI18n } from "../i18n"
@@ -6,10 +6,10 @@ import { isCommandEnabled, type CommandContext, type CommandId } from "../featur
 import { NavItem } from "./NavItem"
 import { isCompactSidebar, normalizeSidebarWidth } from "../shared/sidebar-width"
 import rockerMark from "../../build/icon.svg"
-import { sessionKind, type SessionKind, type WorkspaceSession } from "../features/terminal/session-state"
+import { isPortForwardingSession, isSftpSession, isSshSession, sessionKind, type SessionKind, type WorkspaceSession } from "../features/terminal/session-state"
 
-export type NavKey = "hosts" | "sftp" | "snippets" | "ports" | "connections" | "settings"
-export type WorkspaceNavKey = NavKey | "terminal" | "history" | "trust"
+export type NavKey = "hosts" | "snippets" | "port-forwarding" | "connections" | "settings"
+export type WorkspaceNavKey = NavKey | "sftp" | "terminal" | "history" | "trust" | "host-port-forwarding"
 export type SessionCommandId = Extract<CommandId, `session.${string}`>
 export type ContextMenuOwner = "sidebar" | "terminal"
 
@@ -31,13 +31,10 @@ interface SidebarProps {
 
 const navItems: Array<{ key: NavKey; icon: typeof Server }> = [
   { key: "hosts", icon: Server },
-  { key: "sftp", icon: FolderClosed },
   { key: "snippets", icon: FileCode2 },
-  { key: "ports", icon: Network },
+  { key: "port-forwarding", icon: Network },
   { key: "connections", icon: ShieldCheck }
 ]
-
-const sessionIcons: Record<SessionKind, LucideIcon> = { ssh: TerminalSquare, sftp: FolderClosed, pf: Network }
 
 export const clampSidebarWidth = normalizeSidebarWidth
 
@@ -141,7 +138,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, them
           <NavItem
             key={key}
             icon={icon}
-            label={t(`nav.${key === "ports" ? "portForwarding" : key}`)}
+            label={t(`nav.${key === "port-forwarding" ? "portForwarding" : key}`)}
             active={activeNav === key || (key === "connections" && (activeNav === "history" || activeNav === "trust"))}
             onClick={() => onNavigate(key)}
           />
@@ -159,7 +156,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, them
           <div className="sidebar-session-list" ref={sessionListRef}>
             {sessions.map((session) => (
               <div key={session.id} className="sidebar-session-row">
-                <button aria-current={activeNav === "terminal" && session.id === activeSessionId ? "page" : undefined} aria-expanded={menuSessionId === session.id} aria-haspopup="menu" aria-label={`${kindBadge(sessionKind(session))} ${session.label}`} className="session-activate-button" data-active={session.id === activeSessionId} data-session-id={session.id} data-session-kind={sessionKind(session)} data-theme={activeNav === "terminal" && session.id === activeSessionId ? themeForHost?.(session.hostId) : undefined} ref={(element) => { if (element && menuSessionId === session.id) menuTriggerRef.current = element }} type="button" onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openSessionMenu(session.id, event.currentTarget) }} onKeyDown={(event) => {
+                <button aria-current={isSessionDestinationActive(session, activeNav) && session.id === activeSessionId ? "page" : undefined} aria-description={sessionActivityDescription(session, t)} aria-expanded={menuSessionId === session.id} aria-haspopup="menu" aria-label={`${kindBadge(sessionKind(session))} ${session.label}`} className="session-activate-button" data-active={session.id === activeSessionId} data-session-id={session.id} data-session-kind={sessionKind(session)} data-theme={isSessionDestinationActive(session, activeNav) && session.id === activeSessionId ? themeForHost?.(session.hostId) : undefined} ref={(element) => { if (element && menuSessionId === session.id) menuTriggerRef.current = element }} type="button" onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); openSessionMenu(session.id, event.currentTarget) }} onKeyDown={(event) => {
                   const opensMenu = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)
                   if (!opensMenu) return
                   event.preventDefault()
@@ -167,9 +164,11 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, them
                   openSessionMenu(session.id, event.currentTarget)
                 }} onClick={() => {
                   onSessionActivate?.(session.id)
-                  onNavigate("terminal")
+                  if (!onSessionActivate || !isPortForwardingSession(session) || session.profileId) {
+                    onNavigate(sessionKind(session) === "sftp" ? "sftp" : "terminal")
+                  }
                 }}>
-                  <SessionKindIcon kind={sessionKind(session)} />
+                  <SessionKindIcon session={session} />
                   <span className="session-name">{session.label}</span>
                 </button>
                 <button
@@ -186,10 +185,11 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, them
                   <X aria-hidden="true" size={14} strokeWidth={1.8} />
                 </button>
                 {menuSessionId === session.id && createPortal(<div aria-label={t("sidebar.sessionActions").replace("{label}", session.label)} className="session-menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key !== "Escape") return; event.preventDefault(); closeSessionMenu() }} ref={menuRef} role="menu" style={{ left: menuPosition?.left, top: menuPosition?.top, visibility: menuPosition ? "visible" : "hidden" }} tabIndex={-1}>
-                  <SessionMenuItem commandId="session.duplicate" disabled={!isSessionCommandEnabled("session.duplicate", session, commandContext)} onClick={() => dispatchSessionCommand("session.duplicate", session, commandContext, onSessionCommand, closeSessionMenu)}><Copy aria-hidden="true" size={14} /><span>{t("sidebar.duplicate")}</span></SessionMenuItem>
+                  {sessionKind(session) === "ssh" ? <SessionMenuItem commandId="session.duplicate" disabled={!isSessionCommandEnabled("session.duplicate", session, commandContext)} onClick={() => dispatchSessionCommand("session.duplicate", session, commandContext, onSessionCommand, closeSessionMenu)}><Copy aria-hidden="true" size={14} /><span>{t("sidebar.duplicate")}</span></SessionMenuItem> : null}
                   <SessionMenuItem commandId="session.duplicate-window" disabled={!isSessionCommandEnabled("session.duplicate-window", session, commandContext)} onClick={() => dispatchSessionCommand("session.duplicate-window", session, commandContext, onSessionCommand, closeSessionMenu)}><ExternalLink aria-hidden="true" size={14} /><span>{t("sidebar.duplicateWindow")}</span></SessionMenuItem>
                   <SessionMenuItem commandId="session.rename" disabled={!isSessionCommandEnabled("session.rename", session, commandContext)} onClick={() => dispatchSessionCommand("session.rename", session, commandContext, onSessionCommand, closeSessionMenu)}><Pencil aria-hidden="true" size={14} /><span>{t("sidebar.rename")}</span></SessionMenuItem>
-                  <SessionMenuItem commandId="session.port-forwarding" disabled={!isSessionCommandEnabled("session.port-forwarding", session, commandContext)} onClick={() => dispatchSessionCommand("session.port-forwarding", session, commandContext, onSessionCommand, closeSessionMenu)}><Network aria-hidden="true" size={14} /><span>{t("commands.portForwarding")}</span></SessionMenuItem>
+                  {sessionKind(session) === "ssh" ? <SessionMenuItem commandId="session.sftp" disabled={!isSessionCommandEnabled("session.sftp", session, commandContext)} onClick={() => dispatchSessionCommand("session.sftp", session, commandContext, onSessionCommand, closeSessionMenu)}><FolderClosed aria-hidden="true" size={14} /><span>{t("commands.sftp")}</span></SessionMenuItem> : null}
+                  {sessionKind(session) === "ssh" ? <SessionMenuItem commandId="session.port-forwarding" disabled={!isSessionCommandEnabled("session.port-forwarding", session, commandContext)} onClick={() => dispatchSessionCommand("session.port-forwarding", session, commandContext, onSessionCommand, closeSessionMenu)}><Network aria-hidden="true" size={14} /><span>{t("commands.portForwarding")}</span></SessionMenuItem> : null}
                   <SessionMenuItem className="session-menu-danger" commandId="session.close" disabled={!isSessionCommandEnabled("session.close", session, commandContext)} onClick={() => dispatchSessionCommand("session.close", session, commandContext, onSessionCommand, closeSessionMenu)}><X aria-hidden="true" size={14} /><span>{t("sidebar.close")}</span></SessionMenuItem>
                 </div>, sidebarRef.current?.parentElement ?? document.body)}
               </div>
@@ -222,9 +222,31 @@ function kindBadge(kind: SessionKind): string {
   return "SSH"
 }
 
-function SessionKindIcon({ kind }: { kind: SessionKind }): ReactElement {
-  const Icon = sessionIcons[kind]
-  return <span className="session-type-icon" title={kindBadge(kind)}><Icon aria-hidden="true" size={18} strokeWidth={1.8} /></span>
+function isSessionDestinationActive(session: WorkspaceSession, activeNav: WorkspaceNavKey): boolean {
+  if (sessionKind(session) === "sftp") return activeNav === "sftp"
+  if (sessionKind(session) === "pf") return activeNav === "terminal" || activeNav === "host-port-forwarding"
+  return activeNav === "terminal"
+}
+
+function SessionKindIcon({ session }: { session: WorkspaceSession }): ReactElement {
+  const kind = sessionKind(session)
+  const label = kindBadge(kind)
+  const active = hasSessionActivity(session)
+  return <span aria-hidden="true" className="session-type-icon" data-activity={active ? "true" : undefined} data-label-length={label.length} title={label}>
+    {label}
+    {active ? <span className="session-activity-dot" /> : null}
+  </span>
+}
+
+function hasSessionActivity(session: WorkspaceSession): boolean {
+  if (isSshSession(session)) return session.hasUnreadActivity === true
+  if (isSftpSession(session)) return (session.activeTransferCount ?? 0) > 0
+  return session.forwardingStatus === "forwarding"
+}
+
+function sessionActivityDescription(session: WorkspaceSession, t: ReturnType<typeof useI18n>["t"]): string | undefined {
+  if (!hasSessionActivity(session)) return undefined
+  return isSshSession(session) ? t("sidebar.newActivity") : t("sidebar.running")
 }
 
 function isSessionCommandEnabled(commandId: SessionCommandId, session: WorkspaceSession, commandContext: CommandContext | undefined): boolean {
@@ -260,6 +282,7 @@ function createSessionCommandContext(commandContext: CommandContext | undefined,
         duplicateWindow: () => undefined,
         splitHorizontal: () => undefined,
         close: () => undefined,
+        sftp: () => undefined,
         portForwarding: () => undefined
       },
       navigation: { navigate: () => undefined }

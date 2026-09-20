@@ -21,7 +21,7 @@ describe("HostEditor", () => {
   it("starts with SSH-only fields, optional capabilities off, and UTF-8 defaults", () => {
     renderEditor()
 
-    expect(screen.getByRole("heading", { name: "Add host" })).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Add Host" })).toBeInTheDocument()
     expect(screen.getByLabelText("Label")).toHaveValue("")
     expect(screen.getByLabelText("Address")).toHaveValue("")
     expect(screen.getByLabelText("Charset")).toHaveValue("utf-8")
@@ -38,7 +38,7 @@ describe("HostEditor", () => {
     renderEditor(undefined, onSave)
     fillRequiredIdentity()
 
-    fireEvent.click(screen.getByRole("button", { name: "Save host" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
 
     const saved = onSave.mock.calls[0]?.[0] as HostSaveProfile
     expect(saved).toMatchObject({ publicKeyEnabled: false, snippetsEnabled: false, charset: "utf-8", themeColor: "rocker" })
@@ -71,7 +71,7 @@ describe("HostEditor", () => {
 
     fillRequiredIdentity()
     fireEvent.change(key, { target: { value: "/keys/id_ed25519" } })
-    fireEvent.click(screen.getByRole("button", { name: "Save host" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       authMethod: "privateKey",
@@ -94,7 +94,7 @@ describe("HostEditor", () => {
     fireEvent.change(collection, { target: { value: "Deployment" } })
     fireEvent.change(screen.getByLabelText("Charset"), { target: { value: "gb18030" } })
     fireEvent.change(screen.getByLabelText("Theme color"), { target: { value: "amber" } })
-    fireEvent.click(screen.getByRole("button", { name: "Save host" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       snippetsEnabled: true,
@@ -113,7 +113,7 @@ describe("HostEditor", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Snippets" }))
     fireEvent.change(screen.getByLabelText("Snippet collection"), { target: { value: "Release" } })
     fillRequiredIdentity()
-    fireEvent.click(screen.getByRole("button", { name: "Save host" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       authMethod: "privateKey",
@@ -134,7 +134,7 @@ describe("HostEditor", () => {
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "stale-password" } })
     fireEvent.change(screen.getByLabelText("Authentication"), { target: { value: "agent" } })
     fireEvent.change(screen.getByLabelText("Authentication"), { target: { value: "password" } })
-    fireEvent.click(screen.getByRole("button", { name: "Save host" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
 
     expect(onSave.mock.calls[0]?.[1]).toEqual({})
   })
@@ -144,9 +144,9 @@ describe("HostEditor", () => {
     renderEditor(undefined, onSave)
     fillRequiredIdentity()
 
-    fireEvent.click(screen.getByRole("button", { name: "Save host" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Couldn't save this host"))
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Couldn't save this Host"))
     expect(screen.getByLabelText("Label")).toHaveValue("Build host")
     expect(screen.queryByText("internal storage detail")).not.toBeInTheDocument()
   })

@@ -257,6 +257,14 @@ function createBrowserPreviewBridge(): RockerBridge {
     },
     // Browser preview only: this in-memory route never represents a real SSH/SFTP connection.
     sftp: {
+      listLocal: async (path): Promise<SftpDirectory> => ({
+        path: path?.trim() || "/Users/rock",
+        entries: [
+          { name: "Documents", path: "/Users/rock/Documents", type: "directory", modifiedAt: new Date(0).toISOString() },
+          { name: "Downloads", path: "/Users/rock/Downloads", type: "directory", modifiedAt: new Date(0).toISOString() },
+          { name: "notes.txt", path: "/Users/rock/notes.txt", type: "file", size: 768, modifiedAt: new Date(0).toISOString() }
+        ]
+      }),
       open: async (workspaceId, hostId) => {
         mockSftpWorkspaces.set(workspaceId, { hostId })
         return { workspaceId, hostId, connectionId: `preview-sftp-${hostId}`, state: "ready" as const }

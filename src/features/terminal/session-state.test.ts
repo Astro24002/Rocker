@@ -114,11 +114,33 @@ describe("terminal workspace state", () => {
     expect(state.activeSessionId).toBe("pf")
   })
 
+  it("supports a Host-level PF workspace before a forwarding rule exists", () => {
+    const state = openSession(createTerminalWorkspaceState(), { id: "pf-host", hostId: "host-a", label: "G11", kind: "pf" })
+
+    expect(state.sessions[0]).toMatchObject({ id: "pf-host", kind: "pf", hostId: "host-a", forwardingStatus: "stopped", state: "disconnected" })
+    expect(state.sessions[0]).not.toHaveProperty("profileId")
+  })
+
   it("patches only the requested session fields", () => {
     let state = openSession(createTerminalWorkspaceState(), { id: "sftp", hostId: "host-a", label: "A", kind: "sftp", path: "/" })
     state = patchSession(state, "sftp", { kind: "sftp", browser: { path: "/etc" }, state: "connected" })
 
     expect(state.sessions[0]).toMatchObject({ id: "sftp", kind: "sftp", browser: { path: "/etc", entries: [], loading: false }, state: "connected" })
+  })
+
+  it("tracks transient SSH activity and active SFTP transfers without affecting neighboring sessions", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "ssh", hostId: "host-a", label: "A" })
+    state = openSession(state, { id: "sftp", hostId: "host-a", label: "A files", kind: "sftp" })
+    state = patchSession(state, "ssh", { kind: "ssh", hasUnreadActivity: true })
+    state = patchSession(state, "sftp", { kind: "sftp", activeTransferCount: 2 })
+
+    expect(state.sessions[0]).toMatchObject({ id: "ssh", hasUnreadActivity: true })
+    expect(state.sessions[1]).toMatchObject({ id: "sftp", activeTransferCount: 2 })
+
+    state = patchSession(state, "ssh", { kind: "ssh", hasUnreadActivity: false })
+    state = patchSession(state, "sftp", { kind: "sftp", activeTransferCount: 0 })
+    expect(state.sessions[0]).not.toHaveProperty("hasUnreadActivity")
+    expect(state.sessions[1]).not.toHaveProperty("activeTransferCount")
   })
 
   it("keeps neighboring mixed sessions after the active session closes", () => {

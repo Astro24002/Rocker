@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import { I18nProvider } from "../i18n"
+import type { WorkspaceSession } from "../features/terminal/session-state"
 import { Sidebar } from "./Sidebar"
 
 describe("Sidebar session actions", () => {
@@ -19,10 +20,13 @@ describe("Sidebar session actions", () => {
     expect(screen.getByRole("button", { name: "Settings" })).not.toHaveAttribute("aria-current")
     expect(screen.queryByText("Current host")).not.toBeInTheDocument()
     expect(screen.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Rocker", "Hosts", "SFTP", "Snippets", "Port Forwarding", "Connections", "Settings"
+      "Rocker", "Hosts", "Snippets", "Port Forwarding", "Connections", "Settings"
     ])
     expect(onNavigate).not.toHaveBeenCalled()
     expect(container.querySelector(".sidebar-resizer")).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "Port Forwarding" }))
+    expect(onNavigate).toHaveBeenCalledWith("port-forwarding")
   })
 
   it.each(["connections", "history", "trust"] as const)("marks Connections as the current workspace for %s", (activeNav) => {
@@ -66,6 +70,21 @@ describe("Sidebar session actions", () => {
     expect(screen.getByRole("menuitem", { name: "Duplicate" })).toBeInTheDocument()
     expect(screen.getByRole("menuitem", { name: "Duplicate in a new window" })).toBeInTheDocument()
     expect(screen.getByRole("menuitem", { name: "Close" })).toBeInTheDocument()
+  })
+
+  it("keeps a Host-level PF session on its Host forwarding detail route", () => {
+    const onNavigate = vi.fn()
+    const onSessionActivate = vi.fn()
+    const pfSession = { id: "pf-1", hostId: "host-1", label: "G11", state: "disconnected" as const, kind: "pf" as const, forwardingStatus: "stopped" as const }
+    render(<I18nProvider><Sidebar width={220} activeNav="host-port-forwarding" sessions={[pfSession]} activeSessionId={pfSession.id} onNavigate={onNavigate} onSessionActivate={onSessionActivate} /></I18nProvider>)
+
+    const sessionButton = screen.getByRole("button", { name: "PF G11" })
+    expect(sessionButton).toHaveAttribute("aria-current", "page")
+    expect(screen.getByRole("button", { name: "Port Forwarding" })).not.toHaveAttribute("aria-current")
+    fireEvent.click(sessionButton)
+
+    expect(onSessionActivate).toHaveBeenCalledWith(pfSession.id)
+    expect(onNavigate).not.toHaveBeenCalled()
   })
 
   it("dispatches the shared Close command from the row close button without activating the session", () => {
@@ -162,6 +181,7 @@ describe("Sidebar session actions", () => {
       "Duplicate",
       "Duplicate in a new window",
       "Rename",
+      "SFTP",
       "Port forwarding",
       "Close"
     ])
@@ -197,6 +217,17 @@ describe("Sidebar session actions", () => {
     expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
   })
 
+  it("dispatches SFTP from an SSH session", () => {
+    const onSessionCommand = vi.fn()
+    render(<I18nProvider><Sidebar width={220} activeNav="terminal" sessions={[session]} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "SFTP" }))
+
+    expect(onSessionCommand).toHaveBeenCalledExactlyOnceWith("session.sftp", session)
+    expect(screen.queryByRole("menu", { name: "Session actions for G11" })).not.toBeInTheDocument()
+  })
+
   it("only enables new-window duplication for a connected SSH session", () => {
     const { rerender } = render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[session]} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
 
@@ -209,14 +240,14 @@ describe("Sidebar session actions", () => {
   })
 
   it.each([
-    ["idle", { rename: true, duplicate: false, duplicateWindow: false, forwarding: true, close: true }],
-    ["restoring", { rename: true, duplicate: false, duplicateWindow: false, forwarding: true, close: true }],
-    ["connecting", { rename: true, duplicate: false, duplicateWindow: false, forwarding: true, close: true }],
-    ["connected", { rename: true, duplicate: true, duplicateWindow: true, forwarding: true, close: true }],
-    ["reconnecting", { rename: true, duplicate: false, duplicateWindow: false, forwarding: true, close: true }],
-    ["disconnected", { rename: true, duplicate: true, duplicateWindow: false, forwarding: true, close: true }],
-    ["error", { rename: true, duplicate: true, duplicateWindow: false, forwarding: true, close: true }],
-    ["closing", { rename: false, duplicate: false, duplicateWindow: false, forwarding: false, close: false }]
+    ["idle", { rename: true, duplicate: false, duplicateWindow: false, sftp: true, forwarding: true, close: true }],
+    ["restoring", { rename: true, duplicate: false, duplicateWindow: false, sftp: true, forwarding: true, close: true }],
+    ["connecting", { rename: true, duplicate: false, duplicateWindow: false, sftp: true, forwarding: true, close: true }],
+    ["connected", { rename: true, duplicate: true, duplicateWindow: true, sftp: true, forwarding: true, close: true }],
+    ["reconnecting", { rename: true, duplicate: false, duplicateWindow: false, sftp: true, forwarding: true, close: true }],
+    ["disconnected", { rename: true, duplicate: true, duplicateWindow: false, sftp: true, forwarding: true, close: true }],
+    ["error", { rename: true, duplicate: true, duplicateWindow: false, sftp: true, forwarding: true, close: true }],
+    ["closing", { rename: false, duplicate: false, duplicateWindow: false, sftp: false, forwarding: false, close: false }]
   ] as const)("derives every session action guard from the registry for %s sessions", (state, expected) => {
     render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[{ ...session, state }]} onNavigate={vi.fn()} onSessionCommand={vi.fn()} /></I18nProvider>)
 
@@ -225,6 +256,7 @@ describe("Sidebar session actions", () => {
       duplicate: "Duplicate",
       duplicateWindow: "Duplicate in a new window",
       rename: "Rename",
+      sftp: "SFTP",
       forwarding: "Port forwarding",
       close: "Close"
     } as const
@@ -257,10 +289,51 @@ describe("Sidebar session actions", () => {
     for (const [type, label] of [["SSH", "G11"], ["SFTP", "G11 files"], ["PF", "G11 forward"]]) {
       const icon = screen.getByRole("button", { name: `${type} ${label}` }).querySelector(".session-type-icon")
       expect(icon).toHaveAttribute("title", type)
-      expect(icon?.querySelector("svg")).toHaveAttribute("width", "18")
+      expect(icon).toHaveAttribute("data-label-length", String(type.length))
+      expect(icon).toHaveTextContent(type)
+      expect(icon?.querySelector("svg")).toBeNull()
     }
     expect(screen.queryByText("10.0.0.11")).not.toBeInTheDocument()
     expect(screen.queryByText("connected")).not.toBeInTheDocument()
+  })
+
+  it("shows activity dots for unread SSH output and real running PF or SFTP work", () => {
+    const sessions: WorkspaceSession[] = [
+      { ...session, id: "ssh-unread", label: "SSH unread", hasUnreadActivity: true },
+      { ...session, id: "ssh-connected", label: "SSH connected" },
+      { id: "sftp-running", hostId: "host-1", label: "SFTP running", state: "connected", kind: "sftp", activeTransferCount: 1, browser: { path: "/", entries: [], loading: false } },
+      { id: "pf-running", hostId: "host-1", label: "PF running", state: "connected", kind: "pf", profileId: "profile-1", forwardingStatus: "forwarding" },
+      { id: "pf-stopped", hostId: "host-1", label: "PF stopped", state: "disconnected", kind: "pf", profileId: "profile-2", forwardingStatus: "stopped" }
+    ]
+    render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={sessions} onNavigate={vi.fn()} /></I18nProvider>)
+
+    expect(screen.getByRole("button", { name: "SSH SSH unread" })).toHaveAttribute("aria-description", "New activity")
+    expect(screen.getByRole("button", { name: "SSH SSH unread" }).querySelector(".session-activity-dot")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "SSH SSH connected" })).not.toHaveAttribute("aria-description")
+    expect(screen.getByRole("button", { name: "SSH SSH connected" }).querySelector(".session-activity-dot")).toBeNull()
+    expect(screen.getByRole("button", { name: "SFTP SFTP running" })).toHaveAttribute("aria-description", "Running")
+    expect(screen.getByRole("button", { name: "SFTP SFTP running" }).querySelector(".session-activity-dot")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "PF PF running" }).querySelector(".session-activity-dot")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "PF PF stopped" }).querySelector(".session-activity-dot")).toBeNull()
+  })
+
+  it.each([
+    ["sftp", "SFTP G11", { id: "sftp-1", hostId: "host-1", label: "G11", state: "connected" as const, kind: "sftp" as const, browser: { path: "/", entries: [], loading: false } }],
+    ["pf", "PF G11", { id: "pf-1", hostId: "host-1", label: "G11", state: "disconnected" as const, kind: "pf" as const, profileId: "profile-1", forwardingStatus: "stopped" as const }]
+  ] satisfies Array<[string, string, WorkspaceSession]>)("shows only cross-window duplication, rename, and close for %s sessions", (_kind, accessibleName, typedSession) => {
+    const onSessionCommand = vi.fn()
+    render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[typedSession]} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: accessibleName }))
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Duplicate in a new window",
+      "Rename",
+      "Close"
+    ])
+    const duplicateWindow = screen.getByRole("menuitem", { name: "Duplicate in a new window" })
+    expect(duplicateWindow).toBeEnabled()
+    fireEvent.click(duplicateWindow)
+    expect(onSessionCommand).toHaveBeenCalledExactlyOnceWith("session.duplicate-window", typedSession)
   })
 
   it("does not dispatch rename or close for a closing session", () => {

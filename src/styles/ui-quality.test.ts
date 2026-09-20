@@ -26,6 +26,15 @@ describe("UI quality stylesheet contract", () => {
     expect(componentStyles).toMatch(/\.sidebar-session-list\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1;[\s\S]*?overflow-y:\s*auto;/)
   })
 
+  it("locks the SFTP workspace to the reference split-pane table geometry", () => {
+    expect(layoutStyles).toMatch(/\.sftp-workspace-page\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);[^}]*gap:\s*1px;[^}]*overflow:\s*hidden;/)
+    expect(layoutStyles).toMatch(/\.sftp-file-pane\s*\{[^}]*grid-template-rows:\s*42px 34px 31px minmax\(0, 1fr\);[^}]*overflow:\s*hidden;/)
+    expect(componentStyles).toMatch(/\.sftp-file-table-header,[\s\S]*?\.sftp-file-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 43fr\) minmax\(0, 24fr\) minmax\(0, 16fr\) minmax\(0, 17fr\);/)
+    expect(componentStyles).toMatch(/\.sftp-file-row\s*\{[^}]*height:\s*36px;/)
+    expect(componentStyles).toMatch(/\.sftp-file-table-body\s*\{[^}]*overflow-y:\s*auto;/)
+    expect(componentStyles).toMatch(/\.sftp-pane-titlebar\s*\{[^}]*padding:\s*0 12px;[^}]*background:\s*var\(--sftp-header\);/)
+  })
+
   it("positions the session context menu above the scrolling list", () => {
     expect(componentStyles).toMatch(/\.session-menu\s*\{[^}]*position:\s*fixed;/)
   })
@@ -54,19 +63,28 @@ describe("UI quality stylesheet contract", () => {
   })
 
   it("aligns navigation and session icons, labels, and text sizes", () => {
+    const brand = componentStyles.match(/\.sidebar-brand\s*\{([^}]*)\}/)?.[1]
     const nav = componentStyles.match(/\.nav-item\s*\{([^}]*)\}/)?.[1]
     const session = componentStyles.match(/^\.session-activate-button\s*\{([^}]*)\}/m)?.[1]
-    expect(nav).toMatch(/grid-template-columns:\s*22px minmax\(0, 1fr\);/)
+    expect(brand).toMatch(/gap:\s*15px;/)
+    expect(brand).toMatch(/padding:\s*0 24px;/)
+    expect(brand).toMatch(/font-size:\s*15px;/)
+    expect(componentStyles).toMatch(/\.sidebar-brand img\s*\{[^}]*width:\s*24px;[^}]*height:\s*24px;/)
+    expect(nav).toMatch(/grid-template-columns:\s*24px minmax\(0, 1fr\);/)
     expect(nav).toMatch(/column-gap:\s*15px;/)
     expect(nav).toMatch(/padding:\s*0 12px;/)
-    expect(nav).toMatch(/font-size:\s*15px;/)
-    expect(session).toMatch(/grid-template-columns:\s*22px minmax\(0, 1fr\);/)
+    expect(nav).toMatch(/font-size:\s*12px;/)
+    expect(nav).toMatch(/font-weight:\s*600;/)
+    expect(session).toMatch(/grid-template-columns:\s*24px minmax\(0, 1fr\);/)
     expect(session).toMatch(/column-gap:\s*15px;/)
     expect(session).toMatch(/padding:\s*0 40px 0 12px;/)
-    expect(componentStyles).toMatch(/\.session-name\s*\{[^}]*font-size:\s*15px;/)
-    expect(componentStyles).toMatch(/\.session-type-icon\s*\{[^}]*width:\s*22px;[^}]*height:\s*22px;/)
+    expect(componentStyles).toMatch(/\.session-name\s*\{[^}]*font-size:\s*12px;[^}]*font-weight:\s*600;/)
+    expect(componentStyles).toMatch(/\.session-type-icon\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px;[^}]*place-self:\s*center;/)
+    expect(componentStyles).toMatch(/\.session-type-icon\[data-label-length="2"\]\s*\{[^}]*font-size:\s*8\.5px;/)
+    expect(componentStyles).toMatch(/\.session-type-icon\[data-label-length="4"\]\s*\{[^}]*font-size:\s*6\.5px;/)
     expect(componentStyles).toMatch(/\.primary-nav\s*\{[^}]*gap:\s*5px;/)
-    expect(componentStyles).toMatch(/\.nav-item > svg\s*\{[^}]*justify-self:\s*center;/)
+    expect(componentStyles).toMatch(/\.nav-item > svg\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px;[^}]*justify-self:\s*center;/)
+    expect(componentStyles).toMatch(/\.session-activity-dot\s*\{[^}]*position:\s*absolute;[^}]*width:\s*6px;[^}]*height:\s*6px;[^}]*background:\s*var\(--success\);[^}]*pointer-events:\s*none;/)
   })
 
   it("keeps the session close control stable and reveals it without shifting the row", () => {
@@ -83,7 +101,7 @@ describe("UI quality stylesheet contract", () => {
   it("uses continuous corners on rounded app surfaces with circular indicator exceptions", () => {
     expect(baseStyles).toMatch(/@supports\s*\(corner-shape:\s*squircle\)/)
     expect(baseStyles).toMatch(/\.app-shell \*\s*\{\s*corner-shape:\s*squircle;/)
-    expect(baseStyles).toMatch(/\.app-shell \.session-state-dot,[\s\S]*?\.app-shell \.theme-swatch,[\s\S]*?\.app-shell \.editor-switch > span::after\s*\{\s*corner-shape:\s*round;/)
+    expect(baseStyles).toMatch(/\.app-shell \.session-state-dot,[\s\S]*?\.app-shell \.session-activity-dot,[\s\S]*?\.app-shell \.theme-swatch,[\s\S]*?\.app-shell \.editor-switch > span::after\s*\{\s*corner-shape:\s*round;/)
   })
 
   it("defines reduced-motion behavior for transitions and refresh indicators", () => {

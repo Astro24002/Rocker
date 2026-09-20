@@ -40,20 +40,19 @@ describe("command registry", () => {
       "session.duplicate-window",
       "session.split-horizontal",
       "session.close",
+      "session.sftp",
       "session.port-forwarding",
       "navigation.hosts",
       "navigation.trust",
       "navigation.history",
       "navigation.ports",
       "navigation.settings",
-      "navigation.sftp",
       "navigation.snippets",
       "palette.open"
     ] satisfies CommandId[])
 
     expect(new Set(commandRegistry.map((command) => command.category))).toEqual(new Set(["terminal", "session", "navigation", "palette"]))
     expect(getCommand("terminal.search")?.label).toBe("Search terminal")
-    expect(getCommand("navigation.sftp")?.label).toBe("SFTP")
   })
 
   it.each([
@@ -67,6 +66,7 @@ describe("command registry", () => {
       "session.duplicate": false,
       "session.duplicate-window": false,
       "session.split-horizontal": false,
+      "session.sftp": false,
       "session.close": false
     }],
     ["connected session", "connected", true, {
@@ -79,6 +79,7 @@ describe("command registry", () => {
       "session.duplicate": true,
       "session.duplicate-window": true,
       "session.split-horizontal": true,
+      "session.sftp": true,
       "session.close": true
     }],
     ["restoring session", "restoring", false, {
@@ -91,6 +92,7 @@ describe("command registry", () => {
       "session.duplicate": false,
       "session.duplicate-window": false,
       "session.split-horizontal": false,
+      "session.sftp": true,
       "session.close": true
     }],
     ["connecting session", "connecting", false, {
@@ -103,6 +105,7 @@ describe("command registry", () => {
       "session.duplicate": false,
       "session.duplicate-window": false,
       "session.split-horizontal": false,
+      "session.sftp": true,
       "session.close": true
     }],
     ["reconnecting session", "reconnecting", false, {
@@ -115,6 +118,7 @@ describe("command registry", () => {
       "session.duplicate": false,
       "session.duplicate-window": false,
       "session.split-horizontal": false,
+      "session.sftp": true,
       "session.close": true
     }],
     ["disconnected session", "disconnected", true, {
@@ -127,6 +131,7 @@ describe("command registry", () => {
       "session.duplicate": true,
       "session.duplicate-window": false,
       "session.split-horizontal": false,
+      "session.sftp": true,
       "session.close": true
     }],
     ["error session", "error", false, {
@@ -139,6 +144,7 @@ describe("command registry", () => {
       "session.duplicate": true,
       "session.duplicate-window": false,
       "session.split-horizontal": false,
+      "session.sftp": true,
       "session.close": true
     }]
   ] satisfies Array<[string, TerminalSessionState | undefined, boolean, Record<string, boolean>]>)("derives exact enabled states for %s", (_name, state, hasSelection, expected) => {
@@ -147,7 +153,6 @@ describe("command registry", () => {
     for (const [id, enabled] of Object.entries(expected as Record<string, boolean>)) {
       expect(getCommand(id as CommandId)?.isEnabled(context), id).toBe(enabled)
     }
-    expect(getCommand("navigation.sftp")?.isEnabled(context)).toBe(true)
     expect(getCommand("navigation.local-terminal" as CommandId)).toBeUndefined()
     expect(getCommand("palette.open")?.isEnabled(context)).toBe(true)
   })
@@ -160,6 +165,7 @@ describe("command registry", () => {
         "session.duplicate": false,
         "session.duplicate-window": false,
         "session.split-horizontal": false,
+        "session.sftp": false,
         "session.close": false
       }],
       ["connected", {
@@ -168,6 +174,7 @@ describe("command registry", () => {
         "session.duplicate": true,
         "session.duplicate-window": true,
         "session.split-horizontal": true,
+        "session.sftp": true,
         "session.close": true
       }],
       ["restoring", {
@@ -176,6 +183,7 @@ describe("command registry", () => {
         "session.duplicate": false,
         "session.duplicate-window": false,
         "session.split-horizontal": false,
+        "session.sftp": true,
         "session.close": true
       }],
       ["connecting", {
@@ -184,6 +192,7 @@ describe("command registry", () => {
         "session.duplicate": false,
         "session.duplicate-window": false,
         "session.split-horizontal": false,
+        "session.sftp": true,
         "session.close": true
       }],
       ["reconnecting", {
@@ -192,6 +201,7 @@ describe("command registry", () => {
         "session.duplicate": false,
         "session.duplicate-window": false,
         "session.split-horizontal": false,
+        "session.sftp": true,
         "session.close": true
       }],
       ["disconnected", {
@@ -200,6 +210,7 @@ describe("command registry", () => {
         "session.duplicate": true,
         "session.duplicate-window": false,
         "session.split-horizontal": false,
+        "session.sftp": true,
         "session.close": true
       }],
       ["error", {
@@ -208,6 +219,7 @@ describe("command registry", () => {
         "session.duplicate": true,
         "session.duplicate-window": false,
         "session.split-horizontal": false,
+        "session.sftp": true,
         "session.close": true
       }]
     ]
@@ -237,11 +249,13 @@ describe("command registry", () => {
 
     await expect(executeCommand("terminal.copy", context)).resolves.toEqual({ status: "executed" })
     await expect(executeCommand("session.rename", context)).resolves.toEqual({ status: "executed" })
-    await expect(executeCommand("navigation.sftp", context)).resolves.toEqual({ status: "executed" })
+    await expect(executeCommand("session.sftp", context)).resolves.toEqual({ status: "executed" })
+    await expect(executeCommand("navigation.snippets", context)).resolves.toEqual({ status: "executed" })
 
     expect(context.actions.terminal.copy).toHaveBeenCalledTimes(1)
     expect(context.actions.session.rename).toHaveBeenCalledWith(session)
-    expect(context.actions.navigation.navigate).toHaveBeenNthCalledWith(1, "sftp")
+    expect(context.actions.session.sftp).toHaveBeenCalledWith(session)
+    expect(context.actions.navigation.navigate).toHaveBeenNthCalledWith(1, "snippets")
   })
 
   it("returns a safe failure result without exposing an action error", async () => {
@@ -260,17 +274,21 @@ describe("command registry", () => {
     expect(groups).toEqual([{ category: "session", commands: [getCommand("session.reconnect")] }])
   })
 
-  it("disables terminal and SSH-only session commands for SFTP and PF sessions", () => {
+  it("keeps only type-neutral session commands available for SFTP and PF sessions", () => {
     for (const kind of ["sftp", "pf"] as const) {
       const context = createContext("connected", true, kind)
       expect(getCommand("terminal.search")?.isEnabled(context)).toBe(false)
       expect(getCommand("terminal.copy")?.isEnabled(context)).toBe(false)
       expect(getCommand("session.reconnect")?.isEnabled(context)).toBe(false)
       expect(getCommand("session.duplicate")?.isEnabled(context)).toBe(false)
-      expect(getCommand("session.duplicate-window")?.isEnabled(context)).toBe(false)
+      expect(getCommand("session.duplicate-window")?.isEnabled(context)).toBe(true)
       expect(getCommand("session.split-horizontal")?.isEnabled(context)).toBe(false)
+      expect(getCommand("session.sftp")?.isEnabled(context)).toBe(false)
       expect(getCommand("session.rename")?.isEnabled(context)).toBe(true)
       expect(getCommand("session.close")?.isEnabled(context)).toBe(true)
+
+      const closingContext = createContext("closing", true, kind)
+      expect(getCommand("session.duplicate-window")?.isEnabled(closingContext)).toBe(false)
     }
   })
 })
@@ -316,6 +334,7 @@ function createContext(state: TerminalSessionState | undefined, hasSelection: bo
         duplicate: vi.fn(),
         duplicateWindow: vi.fn(),
         splitHorizontal: vi.fn(),
+        sftp: vi.fn(),
         close: vi.fn()
       },
       navigation: { navigate: vi.fn() },

@@ -22,6 +22,8 @@ export interface SshWorkspaceSession extends WorkspaceSessionBase {
   reason?: TerminalFailureReason
   attempt?: number
   nextRetryAt?: string
+  /** Runtime-only activity raised by terminal output received while this session is not visible. */
+  hasUnreadActivity?: boolean
 }
 
 export interface SftpDirectoryEntry {
@@ -45,12 +47,14 @@ export interface SftpBrowserState {
 export interface SftpWorkspaceSession extends WorkspaceSessionBase {
   kind: "sftp"
   browser: SftpBrowserState
+  /** Runtime-only count sourced from active SFTP transfer tasks. */
+  activeTransferCount?: number
 }
 
 export interface PortForwardingWorkspaceSession extends WorkspaceSessionBase {
   kind: "pf"
-  /** Stable profile identity. Runtime ids may change after stop/start. */
-  profileId: string
+  /** Stable profile identity. Host-detail PF sessions may not have a rule yet. */
+  profileId?: string
   forwardingId?: string
   forwardingStatus: PortStatus
   applicationProtocol?: ApplicationProtocol
@@ -81,7 +85,7 @@ export type OpenSessionInput = OpenSessionBase & (
     }
   | {
       kind: "pf"
-      profileId: string
+      profileId?: string
       forwardingId?: string
       forwardingStatus?: PortStatus
       applicationProtocol?: ApplicationProtocol
@@ -90,9 +94,14 @@ export type OpenSessionInput = OpenSessionBase & (
 
 export type WorkspaceSessionPatch =
   | {
+      kind: "ssh"
+      hasUnreadActivity: boolean
+    }
+  | {
       kind: "sftp"
       state?: TerminalSessionState
       browser?: Partial<SftpBrowserState>
+      activeTransferCount?: number
     }
   | {
       kind: "pf"
@@ -161,7 +170,7 @@ function createSession(input: OpenSessionInput): WorkspaceSession {
       label: input.label,
       kind: "pf",
       state: forwardingToSessionState(forwardingStatus),
-      profileId: input.profileId,
+      ...(input.profileId ? { profileId: input.profileId } : {}),
       forwardingStatus,
       ...(input.forwardingId ? { forwardingId: input.forwardingId } : {}),
       ...(input.applicationProtocol ? { applicationProtocol: input.applicationProtocol } : {})
@@ -204,23 +213,44 @@ export function patchSession(
   patch: WorkspaceSessionPatch
 ): TerminalWorkspaceState {
   if (!state.sessions.some((session) => session.id === sessionId)) return state
-  return {
-    ...state,
-    sessions: state.sessions.map((session) => {
-      if (session.id !== sessionId) return session
-      if (patch.kind === "sftp" && isSftpSession(session)) {
-        return {
-          ...session,
-          ...(patch.state ? { state: patch.state } : {}),
-          browser: patch.browser ? { ...session.browser, ...patch.browser } : session.browser
-        }
+  let changed = false
+  const sessions: WorkspaceSession[] = state.sessions.map((session): WorkspaceSession => {
+    if (session.id !== sessionId) return session
+    if (patch.kind === "ssh" && isSshSession(session)) {
+      if (patch.hasUnreadActivity === true) {
+        if (session.hasUnreadActivity === true) return session
+        changed = true
+        return { ...session, hasUnreadActivity: true }
       }
-      if (patch.kind === "pf" && isPortForwardingSession(session)) {
-        return { ...session, ...patch, kind: "pf" }
+      if (session.hasUnreadActivity !== true) return session
+      const clearedSession = { ...session }
+      delete clearedSession.hasUnreadActivity
+      changed = true
+      return clearedSession
+    }
+    if (patch.kind === "sftp" && isSftpSession(session)) {
+      const requestedActiveTransferCount = patch.activeTransferCount === undefined
+        ? session.activeTransferCount
+        : Math.max(0, patch.activeTransferCount)
+      const activeTransferCount = requestedActiveTransferCount === 0 ? undefined : requestedActiveTransferCount
+      if (patch.state === undefined && patch.browser === undefined && activeTransferCount === session.activeTransferCount) return session
+      changed = true
+      const updatedSession: SftpWorkspaceSession = {
+        ...session,
+        ...(patch.state ? { state: patch.state } : {}),
+        browser: patch.browser ? { ...session.browser, ...patch.browser } : session.browser
       }
-      return session
-    })
-  }
+      if (activeTransferCount === undefined) delete updatedSession.activeTransferCount
+      else updatedSession.activeTransferCount = activeTransferCount
+      return updatedSession
+    }
+    if (patch.kind === "pf" && isPortForwardingSession(session)) {
+      changed = true
+      return { ...session, ...patch, kind: "pf" }
+    }
+    return session
+  })
+  return changed ? { ...state, sessions } : state
 }
 
 export function applyTerminalState(state: TerminalWorkspaceState, event: TerminalStateEvent): TerminalWorkspaceState {

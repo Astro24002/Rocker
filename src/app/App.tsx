@@ -11,7 +11,7 @@ import { PortsView } from "../features/ports/PortsView"
 import { SettingsView } from "../features/settings/SettingsView"
 import { TrustView } from "../features/trust/TrustView"
 import { ConnectionsView } from "../features/connections/ConnectionsView"
-import { HostWorkspacePicker, SnippetsView } from "../features/workspace/WorkspaceLandingViews"
+import { SftpWorkspaceView, SnippetsView } from "../features/workspace/WorkspaceLandingViews"
 import { CommandPalette, type CommandPaletteFocusRequest } from "../features/commands/CommandPalette"
 import { executeCommand, isCommandEnabled, type CommandActions, type CommandContext, type CommandId, type TerminalCommandSurface } from "../features/commands/command-registry"
 import { matchGlobalShortcut, shouldIgnoreGlobalShortcutTarget } from "../features/commands/command-shortcuts"
@@ -398,6 +398,14 @@ function Workspace() {
   const handleSessionEvent = useCallback((event: TerminalSessionEvent): void => {
     if (event.kind === "output") {
       controllers.current.get(event.packet.sessionId)?.acceptOutput(event.packet)
+      const isVisible = activeNavigationRef.current === "terminal" && activeSessionIdRef.current === event.packet.sessionId
+      if (!isVisible) {
+        setWorkspace((current) => {
+          const session = current.sessions.find((candidate) => candidate.id === event.packet.sessionId)
+          if (!isSshSession(session) || event.packet.channelGeneration < session.channelGeneration) return current
+          return patchSession(current, event.packet.sessionId, { kind: "ssh", hasUnreadActivity: true })
+        })
+      }
       return
     }
 
@@ -422,35 +430,36 @@ function Workspace() {
     setActiveNav("terminal")
   }, [capabilities.sshAvailable])
 
-  const openSftpSession = useCallback((host: HostProfile): void => {
+  const openSftpSession = useCallback((host: HostProfile, initial: { label?: string; path?: string } = {}): void => {
     const existing = workspaceRef.current.sessions.find((session) => sessionKind(session) === "sftp" && session.hostId === host.id)
     if (isSftpSession(existing)) {
       setWorkspace((current) => activateSession(current, existing.id))
       setRecentSessionState((current) => recordSessionFocus(current, existing.id))
-      setActiveNav("terminal")
+      setActiveNav("sftp")
       return
     }
     const sessionId = crypto.randomUUID()
     setWorkspace((current) => openSession(current, {
       id: sessionId,
       hostId: host.id,
-      label: host.name,
+      label: initial.label ?? host.name,
       kind: "sftp",
-      path: "/"
+      path: initial.path ?? "/"
     }))
-    setActiveNav("terminal")
+    setActiveNav("sftp")
   }, [])
 
-  const openPfSession = useCallback((profile: ForwardingProfile, runtime?: ForwardingInfo): void => {
+  const openPfSession = useCallback((profile: ForwardingProfile, runtime?: ForwardingInfo, initial: { label?: string; applicationProtocol?: "http" | "https" } = {}): void => {
     const existing = workspaceRef.current.sessions.find((session) => isPortForwardingSession(session) && session.hostId === profile.hostId)
     if (isPortForwardingSession(existing)) {
       setWorkspace((current) => patchSession(activateSession(current, existing.id), existing.id, {
         kind: "pf",
         profileId: profile.id,
-        label: profile.name,
+        label: initial.label ?? profile.name,
         forwardingId: runtime?.id,
         forwardingStatus: runtime?.status ?? existing.forwardingStatus,
-        state: runtime ? forwardingToSessionState(runtime.status) : existing.state
+        state: runtime ? forwardingToSessionState(runtime.status) : existing.state,
+        applicationProtocol: initial.applicationProtocol ?? existing.applicationProtocol
       }))
       setRecentSessionState((current) => recordSessionFocus(current, existing.id))
       setActiveNav("terminal")
@@ -460,23 +469,31 @@ function Workspace() {
     setWorkspace((current) => openSession(current, {
       id: sessionId,
       hostId: profile.hostId,
-      label: profile.name,
+      label: initial.label ?? profile.name,
       kind: "pf",
       profileId: profile.id,
       forwardingId: runtime?.id,
-      forwardingStatus: runtime?.status ?? "stopped"
+      forwardingStatus: runtime?.status ?? "stopped",
+      applicationProtocol: initial.applicationProtocol
     }))
     setActiveNav("terminal")
   }, [])
 
   const openHostForwardingFromHost = useCallback((host: HostProfile): void => {
-    const session = workspaceRef.current.sessions.find((candidate) => candidate.hostId === host.id && isSshSession(candidate))
+    const session = workspaceRef.current.sessions.find((candidate) => candidate.hostId === host.id && isPortForwardingSession(candidate))
     if (session) {
       setWorkspace((current) => activateSession(current, session.id))
       setRecentSessionState((current) => recordSessionFocus(current, session.id))
+    } else {
+      const sessionId = crypto.randomUUID()
+      setWorkspace((current) => {
+        const existing = current.sessions.find((candidate) => candidate.hostId === host.id && isPortForwardingSession(candidate))
+        if (existing) return activateSession(current, existing.id)
+        return openSession(current, { id: sessionId, hostId: host.id, label: host.name, kind: "pf" })
+      })
     }
     setHostForwardingHostId(host.id)
-    setActiveNav("ports")
+    setActiveNav("host-port-forwarding")
   }, [])
 
   const patchWorkspaceSession = useCallback((sessionId: string, patch: WorkspaceSessionPatch): void => {
@@ -487,6 +504,12 @@ function Workspace() {
     const unsubscribeSession = bridge.events.onSessionEvent(handleSessionEvent)
     return unsubscribeSession
   }, [bridge, handleSessionEvent])
+
+  useEffect(() => {
+    const sessionId = workspace.activeSessionId
+    if (activeNav !== "terminal" || !sessionId) return
+    setWorkspace((current) => patchSession(current, sessionId, { kind: "ssh", hasUnreadActivity: false }))
+  }, [activeNav, workspace.activeSessionId])
 
   useEffect(() => {
     if (bootstrapState.phase === "loading" || bootstrapState.phase === "error") return
@@ -508,15 +531,57 @@ function Workspace() {
   }, [bootstrapState.phase, bridge])
 
   useEffect(() => {
-    const unsubscribeLaunch = bridge.events.onSessionLaunch(({ hostId }) => {
+    if (bootstrapState.phase === "loading" || bootstrapState.phase === "error") return
+    let cancelled = false
+    const synchronize = async (workspaceId: string): Promise<void> => {
+      try {
+        const transfers = await bridge.sftp.listTransfers(workspaceId)
+        if (cancelled) return
+        const activeTransferCount = transfers.filter((task) => task.status === "queued" || task.status === "running").length
+        setWorkspace((current) => patchSession(current, workspaceId, { kind: "sftp", activeTransferCount }))
+      } catch {
+        // Transfer rows retain their last known state when the runtime is temporarily unavailable.
+      }
+    }
+    for (const session of workspaceRef.current.sessions) {
+      if (isSftpSession(session)) void synchronize(session.id)
+    }
+    const unsubscribe = bridge.events.onSftpEvent((event) => {
+      if (event.kind === "transfer") void synchronize(event.task.workspaceId)
+    })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [bootstrapState.phase, bridge])
+
+  useEffect(() => {
+    const unsubscribeLaunch = bridge.events.onSessionLaunch((request) => {
       if (!capabilities.sshAvailable) return
-      void bridge.hosts.list().then((availableHosts) => {
-        const host = availableHosts.find((candidate) => candidate.id === hostId)
-        if (host) queueSessionOpen(host, host.name, { forceNewConnection: true })
-      }).catch(() => undefined)
+      void (async () => {
+        const availableHosts = await bridge.hosts.list()
+        const host = availableHosts.find((candidate) => candidate.id === request.hostId)
+        if (!host) return
+        if (request.kind === "sftp") {
+          openSftpSession(host, { label: request.label, path: request.path })
+          return
+        }
+        if (request.kind === "pf") {
+          if (request.profileId) {
+            const row = (await bridge.ports.listForHost(host.id)).find((candidate) => candidate.profile.id === request.profileId)
+            if (row) {
+              openPfSession(row.profile, row.runtime, { label: request.label, applicationProtocol: request.applicationProtocol })
+              return
+            }
+          }
+          openHostForwardingFromHost(host)
+          return
+        }
+        queueSessionOpen(host, request.label ?? host.name, { forceNewConnection: true })
+      })().catch(() => undefined)
     })
     return unsubscribeLaunch
-  }, [bridge, capabilities.sshAvailable, queueSessionOpen])
+  }, [bridge, capabilities.sshAvailable, openHostForwardingFromHost, openPfSession, openSftpSession, queueSessionOpen])
 
   useEffect(() => {
     let cancelled = false
@@ -581,7 +646,17 @@ function Workspace() {
             return
           }
           setWorkspace(restored.workspace)
-          if (restored.workspace.sessions.length > 0) setActiveNav("terminal")
+          if (restored.workspace.sessions.length > 0) {
+            const restoredActive = restored.workspace.sessions.find((session) => session.id === restored.workspace.activeSessionId)
+            if (isSftpSession(restoredActive)) {
+              setActiveNav("sftp")
+            } else if (isPortForwardingSession(restoredActive) && !restoredActive.profileId) {
+              setHostForwardingHostId(restoredActive.hostId)
+              setActiveNav("host-port-forwarding")
+            } else {
+              setActiveNav("terminal")
+            }
+          }
         }
       } catch {
         if (!cancelled) {
@@ -678,7 +753,10 @@ function Workspace() {
             }
           }
           setWorkspace(restored.workspace)
-          if (restored.workspace.sessions.length > 0) setActiveNav("terminal")
+          if (restored.workspace.sessions.length > 0) {
+            const restoredActive = restored.workspace.sessions.find((session) => session.id === restored.workspace.activeSessionId)
+            setActiveNav(isSftpSession(restoredActive) ? "sftp" : "terminal")
+          }
         }
       }
       const restoreSource = restoredWorkspace ?? workspace
@@ -870,10 +948,18 @@ function Workspace() {
 
   const activateExistingSession = useCallback((sessionOrId: WorkspaceSession | string): void => {
     const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId.id
-    if (!workspaceRef.current.sessions.some((session) => session.id === sessionId)) return
+    const session = workspaceRef.current.sessions.find((candidate) => candidate.id === sessionId)
+    if (!session) return
     setWorkspace((current) => activateSession(current, sessionId))
     setRecentSessionState((current) => recordSessionFocus(current, sessionId))
-    setActiveNav("terminal")
+    if (isSftpSession(session)) {
+      setActiveNav("sftp")
+    } else if (isPortForwardingSession(session) && !session.profileId) {
+      setHostForwardingHostId(session.hostId)
+      setActiveNav("host-port-forwarding")
+    } else {
+      setActiveNav("terminal")
+    }
   }, [])
 
   const navigateWorkspace = useCallback((destination: WorkspaceNavKey): void => {
@@ -892,18 +978,18 @@ function Workspace() {
     setWorkspace((current) => activateSession(current, session.id))
     setRecentSessionState((current) => recordSessionFocus(current, session.id))
     setHostForwardingHostId(session.hostId)
-    setActiveNav("ports")
+    setActiveNav("host-port-forwarding")
   }, [])
 
   const openHostWorkspace = useCallback((hostId: string): void => {
-    const session = workspaceRef.current.sessions.find((candidate) => candidate.hostId === hostId)
-    if (!session) {
-      setHostForwardingHostId(undefined)
-      setActiveNav("hosts")
+    const host = hosts.find((candidate) => candidate.id === hostId)
+    if (host) {
+      openHostForwardingFromHost(host)
       return
     }
-    openHostForwarding(session)
-  }, [openHostForwarding])
+    setHostForwardingHostId(hostId)
+    setActiveNav("host-port-forwarding")
+  }, [hosts, openHostForwardingFromHost])
 
   const openSearchForSession = useCallback((sessionOrId: WorkspaceSession | string): void => {
     const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId.id
@@ -971,17 +1057,26 @@ function Workspace() {
     setRecentSessionState((current) => removeRecentSession(current, session.id))
     if (kind === "ssh") void bridge.sessions.close(session.id).catch(() => undefined)
     if (kind === "sftp") void bridge.sftp.close(session.id).catch(() => undefined)
+    const currentWorkspace = workspaceRef.current
+    const nextWorkspace = closeSession(currentWorkspace, session.id)
     setWorkspace((current) => closeSession(current, session.id))
-    const remaining = workspace.sessions.filter((candidate) => candidate.id !== session.id)
-    const anotherSshForHost = remaining.some((candidate) => candidate.hostId === session.hostId && sessionKind(candidate) === "ssh")
-    const leavingHostForwarding = hostForwardingHostId === session.hostId && !anotherSshForHost
+    const remaining = nextWorkspace.sessions
+    const anotherPfForHost = remaining.some((candidate) => candidate.hostId === session.hostId && isPortForwardingSession(candidate))
+    const anotherSshForHost = remaining.some((candidate) => candidate.hostId === session.hostId && isSshSession(candidate))
+    const leavingHostForwarding = hostForwardingHostId === session.hostId && !anotherPfForHost && (
+      kind === "pf" || (kind === "ssh" && !anotherSshForHost)
+    )
     if (leavingHostForwarding) {
       setHostForwardingHostId(undefined)
-      setActiveNav("ports")
+      setActiveNav("port-forwarding")
     }
-    if (remaining.length === 0 && activeNavigationRef.current === "terminal") {
+    if (currentWorkspace.activeSessionId === session.id && activeNavigationRef.current === "sftp") {
+      const nextActive = nextWorkspace.sessions.find((candidate) => candidate.id === nextWorkspace.activeSessionId)
+      setActiveNav(nextActive ? (isSftpSession(nextActive) ? "sftp" : "terminal") : "hosts")
+    }
+    if (remaining.length === 0 && (activeNavigationRef.current === "terminal" || activeNavigationRef.current === "sftp")) {
       setHostForwardingHostId(undefined)
-      setActiveNav(leavingHostForwarding ? "ports" : "hosts")
+      setActiveNav(leavingHostForwarding ? "port-forwarding" : "hosts")
     }
   }
 
@@ -1079,9 +1174,21 @@ function Workspace() {
       reconnect: (session) => capabilities.sshAvailable && sessionKind(session) === "ssh" ? bridge.sessions.reconnect(session.id) : undefined,
       rename: renameTerminalSession,
       duplicate: (session) => duplicateSession(session),
-      duplicateWindow: (session) => capabilities.sshAvailable && sessionKind(session) === "ssh" ? bridge.sessions.duplicateInNewWindow(session.hostId) : undefined,
+      duplicateWindow: (session) => capabilities.sshAvailable ? bridge.sessions.duplicateInNewWindow({
+        hostId: session.hostId,
+        kind: sessionKind(session),
+        label: session.label,
+        ...(isSftpSession(session) ? { path: session.browser.path } : {}),
+        ...(isPortForwardingSession(session) && session.profileId ? { profileId: session.profileId } : {}),
+        ...(isPortForwardingSession(session) && session.applicationProtocol ? { applicationProtocol: session.applicationProtocol } : {})
+      }) : undefined,
       splitHorizontal: (session) => duplicateSession(session, false, true),
       close: closeTerminalSession,
+      sftp: (session) => {
+        if (!isSshSession(session)) return
+        const host = hosts.find((candidate) => candidate.id === session.hostId)
+        if (host) openSftpSession(host)
+      },
       portForwarding: openHostForwarding
     },
     navigation: {
@@ -1101,7 +1208,7 @@ function Workspace() {
     terminal: activeTerminalSurface,
     selection: { hasSelection: activeTerminalSurface?.hasSelection() ?? false },
     clipboard: { canPaste: activeSession?.state === "connected" },
-    activeNavigation: activeNav,
+    activeNavigation: activeNav === "host-port-forwarding" ? "port-forwarding" : activeNav,
     settingsAvailable: true,
     settingsPersistenceAvailable: settingsMutationsAvailable,
     recentSessions: recentSessionCommands,
@@ -1248,7 +1355,10 @@ function Workspace() {
     if (!capabilities.hostMutationsAvailable) throw new Error("Host mutations are unavailable")
     await bridge.hosts.remove(host.id)
     setHosts((current) => current.filter((candidate) => candidate.id !== host.id))
-    if (hostForwardingHostId === host.id) setHostForwardingHostId(undefined)
+    if (hostForwardingHostId === host.id) {
+      setHostForwardingHostId(undefined)
+      setActiveNav("port-forwarding")
+    }
   }
 
   const removeHostKey = async (entry: HostKeyInventoryEntry): Promise<void> => {
@@ -1335,7 +1445,7 @@ function Workspace() {
               />
             </div>
           )}
-          {workspace.sessions.filter((session) => sessionKind(session) !== "ssh").map((session) => (
+          {workspace.sessions.filter((session) => sessionKind(session) !== "ssh" && !(activeNav === "sftp" && isSftpSession(session))).map((session) => (
             <div
               className="session-content-host"
               data-session-id={session.id}
@@ -1374,19 +1484,24 @@ function Workspace() {
               }} />}
               trust={<TrustView entries={hostKeyInventory.entries} history={hostKeyInventory.history} hosts={hosts} disabled={!hostKeysAvailable} loading={hostKeyLoading} error={hostKeyLoadError} onRemove={removeHostKey} />}
             />
-          ) : activeNav === "ports" ? (
-            hostForwardingHostId ? (
-              (() => {
-                const hostSession = workspace.sessions.find((candidate) => candidate.hostId === hostForwardingHostId && isSshSession(candidate))
-                const hostConnectionId = hostSession && canUseConnection(hostSession.state) ? connectionIds.current.get(hostSession.id) : undefined
-                const host = hosts.find((candidate) => candidate.id === hostForwardingHostId)
-                return <PortsView mode="host" bridge={bridge} hostId={hostForwardingHostId} connectionId={hostConnectionId} session={hostSession} username={host?.username} bindAddress={settings.bindAddress} onOpenSession={openPfSession} />
-              })()
-            ) : (
-              <PortsView mode="global" bridge={bridge} hosts={hosts} onOpenHost={openHostWorkspace} onOpenSession={openPfSession} />
-            )
+          ) : activeNav === "host-port-forwarding" && hostForwardingHostId ? (
+            (() => {
+              const hostSession = workspace.sessions.find((candidate) => candidate.hostId === hostForwardingHostId && isSshSession(candidate))
+              const forwardingSession = workspace.sessions.find((candidate) => candidate.hostId === hostForwardingHostId && isPortForwardingSession(candidate))
+              const hostConnectionId = hostSession && canUseConnection(hostSession.state) ? connectionIds.current.get(hostSession.id) : undefined
+              const host = hosts.find((candidate) => candidate.id === hostForwardingHostId)
+              return <PortsView mode="host" bridge={bridge} hostId={hostForwardingHostId} hostName={host?.name} connectionId={hostConnectionId} session={forwardingSession} username={host?.username} bindAddress={settings.bindAddress} onOpenSession={openPfSession} />
+            })()
+          ) : activeNav === "port-forwarding" ? (
+            <PortsView mode="global" bridge={bridge} hosts={hosts} onOpenHost={openHostWorkspace} onOpenSession={openPfSession} />
           ) : activeNav === "sftp" ? (
-            <HostWorkspacePicker kind="sftp" hosts={hosts} bridge={bridge} onOpen={openSftpSession} />
+            <SftpWorkspaceView
+              hosts={hosts}
+              selectedSession={isSftpSession(activeSession) ? activeSession : undefined}
+              bridge={bridge}
+              onOpen={openSftpSession}
+              onPatch={patchWorkspaceSession}
+            />
           ) : (
             <SnippetsView sessions={workspace.sessions} onSelect={activateExistingSession} />
           )}
@@ -1416,13 +1531,13 @@ function restoreWorkspace(snapshot: StoredWorkspaceWindow, hosts: HostProfile[],
       workspace = openSession(workspace, { id: stored.sessionId, hostId: stored.hostId, label: stored.label, kind, path: stored.path ?? "/" })
       continue
     }
-    if (kind === "pf" && stored.profileId) {
+    if (kind === "pf") {
       workspace = openSession(workspace, {
         id: stored.sessionId,
         hostId: stored.hostId,
         label: stored.label,
         kind,
-        profileId: stored.profileId,
+        ...(stored.profileId ? { profileId: stored.profileId } : {}),
         applicationProtocol: stored.applicationProtocol
       })
       continue
@@ -1485,7 +1600,7 @@ function serializeWorkspace(workspace: TerminalWorkspaceState): {
         hostId: session.hostId,
         label: session.label,
         kind: "pf" as const,
-        profileId: session.profileId,
+        ...(session.profileId ? { profileId: session.profileId } : {}),
         ...(session.applicationProtocol ? { applicationProtocol: session.applicationProtocol } : {})
       })
     }

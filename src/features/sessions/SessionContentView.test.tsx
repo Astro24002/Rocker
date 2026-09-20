@@ -26,6 +26,7 @@ describe("SessionContentView SFTP", () => {
     }))
     const bridge = {
       sftp: {
+        listLocal: vi.fn(async () => ({ path: "/home/test", entries: [] })),
         open,
         close: vi.fn(async () => undefined),
         list,
@@ -96,6 +97,7 @@ describe("SessionContentView SFTP", () => {
     }))
     const bridge = {
       sftp: {
+        listLocal: vi.fn(async () => ({ path: "/home/test", entries: [] })),
         open,
         close: vi.fn(async () => undefined),
         list,

@@ -204,11 +204,11 @@ async function startApplication(): Promise<void> {
     diagnosticsRuntimeMode: app.isPackaged ? "packaged" : "development",
     windows
   }
-  dependencies.createDuplicateWindow = async (hostId) => {
+  dependencies.createDuplicateWindow = async (request) => {
     const target = windows.createNew()
     target.webContents.once("did-finish-load", () => {
       const owner = windows.currentOwnerForWebContents(target.webContents.id)
-      if (owner) windows.sendToOwner(owner, ipcChannels.sessionLaunch, { hostId })
+      if (owner) windows.sendToOwner(owner, ipcChannels.sessionLaunch, request)
     })
   }
   registerIpcHandlers(dependencies)

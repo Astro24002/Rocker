@@ -194,13 +194,13 @@ function normalizeSession(value: unknown): StoredWorkspaceSession | undefined {
   if (kind === "sftp") {
     return { sessionId: value.sessionId, hostId: value.hostId, label: value.label, kind, path: isBoundedString(value.path, 4_096) ? value.path : "/" }
   }
-  if (!isBoundedString(value.profileId, 128)) return undefined
+  if (value.profileId !== undefined && !isBoundedString(value.profileId, 128)) return undefined
   return {
     sessionId: value.sessionId,
     hostId: value.hostId,
     label: value.label,
     kind,
-    profileId: value.profileId,
+    ...(typeof value.profileId === "string" ? { profileId: value.profileId } : {}),
     ...(value.applicationProtocol === "http" || value.applicationProtocol === "https" ? { applicationProtocol: value.applicationProtocol } : {})
   }
 }

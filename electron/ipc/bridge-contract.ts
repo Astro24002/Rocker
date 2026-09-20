@@ -103,6 +103,11 @@ export type SftpRuntimeEvent = OwnedSftpRuntimeEvent["event"]
 
 export interface SessionLaunchRequest {
   hostId: string
+  kind?: "ssh" | "sftp" | "pf"
+  label?: string
+  path?: string
+  profileId?: string
+  applicationProtocol?: "http" | "https"
 }
 
 export type BootstrapResourceName =
@@ -154,7 +159,7 @@ export interface RockerBridge {
     close(sessionId: string): Promise<void>
     beginRestore(activeSessionId: string): Promise<void>
     completeRestore(): Promise<void>
-    duplicateInNewWindow(hostId: string): Promise<void>
+    duplicateInNewWindow(request: SessionLaunchRequest): Promise<void>
   }
   ports: {
     scan(connectionId: string): Promise<DiscoveredPort[]>
@@ -171,6 +176,7 @@ export interface RockerBridge {
     openAddress(forwardingId: string): Promise<void>
   }
   sftp: {
+    listLocal(path?: string): Promise<SftpDirectory>
     open(workspaceId: string, hostId: string): Promise<SftpWorkspaceInfo>
     close(workspaceId: string): Promise<void>
     list(workspaceId: string, path: string): Promise<SftpDirectory>
@@ -263,6 +269,7 @@ export const ipcChannels = {
   portsStartProfile: "rocker:ports:start-profile",
   portsEvent: "rocker:ports:event",
   sftpOpen: "rocker:sftp:open",
+  sftpListLocal: "rocker:sftp:list-local",
   sftpClose: "rocker:sftp:close",
   sftpList: "rocker:sftp:list",
   sftpMkdir: "rocker:sftp:mkdir",

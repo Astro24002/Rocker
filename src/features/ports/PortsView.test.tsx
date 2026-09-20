@@ -53,6 +53,7 @@ describe("PortsView", () => {
     const onOpenSession = vi.fn()
 
     render(<I18nProvider><PortsView bridge={bridge} mode="host" hostId="host-a" session={sessionFixture()} onOpenSession={onOpenSession} /></I18nProvider>)
+    expect(screen.getByText("Rocker / Port Forwarding / G11")).toBeInTheDocument()
     fireEvent.click(await screen.findByRole("button", { name: "New forwarding" }))
     fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: "Web console" } })
     fireEvent.change(screen.getByLabelText("Remote address"), { target: { value: "127.0.0.1" } })

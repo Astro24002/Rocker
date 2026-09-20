@@ -18,18 +18,18 @@ export type CommandId =
   | "session.duplicate-window"
   | "session.split-horizontal"
   | "session.close"
+  | "session.sftp"
   | "session.port-forwarding"
   | "navigation.hosts"
   | "navigation.trust"
   | "navigation.history"
   | "navigation.ports"
   | "navigation.settings"
-  | "navigation.sftp"
   | "navigation.snippets"
   | "palette.open"
 
 export type CommandCategory = "terminal" | "session" | "navigation" | "palette"
-export type NavigationCommand = "hosts" | "trust" | "history" | "connections" | "ports" | "settings" | "sftp" | "snippets" | "terminal"
+export type NavigationCommand = "hosts" | "trust" | "history" | "connections" | "port-forwarding" | "settings" | "sftp" | "snippets" | "terminal"
 
 export interface TerminalCommandSurface {
   hasSelection(): boolean
@@ -75,6 +75,7 @@ export interface CommandActions {
     duplicateWindow(session: WorkspaceSession): void | Promise<void>
     splitHorizontal(session: WorkspaceSession): void | Promise<void>
     close(session: WorkspaceSession): void | Promise<void>
+    sftp?(session: WorkspaceSession): void | Promise<void>
     portForwarding?(session: WorkspaceSession): void | Promise<void>
   }
   navigation: {
@@ -260,6 +261,15 @@ export const commandRegistry: readonly CommandDefinition[] = [
     execute: executeForSession((context, session) => context.actions.session.close(session))
   },
   {
+    id: "session.sftp",
+    label: "SFTP",
+    labelKey: "commands.sftp",
+    category: "session",
+    keywords: ["files", "transfer", "host"],
+    isEnabled: (context) => hasSession(context) && isSshSession(context),
+    execute: executeForSession((context, session) => context.actions.session.sftp?.(session))
+  },
+  {
     id: "session.port-forwarding",
     label: "Port forwarding",
     labelKey: "commands.portForwarding",
@@ -300,7 +310,7 @@ export const commandRegistry: readonly CommandDefinition[] = [
     category: "navigation",
     keywords: ["ports", "forwarding"],
     isEnabled: alwaysEnabled,
-    execute: ({ actions }) => actions.navigation.navigate("ports")
+    execute: ({ actions }) => actions.navigation.navigate("port-forwarding")
   },
   {
     id: "navigation.settings",
@@ -309,15 +319,6 @@ export const commandRegistry: readonly CommandDefinition[] = [
     category: "navigation",
     isEnabled: alwaysEnabled,
     execute: ({ actions }) => actions.navigation.navigate("settings")
-  },
-  {
-    id: "navigation.sftp",
-    label: "SFTP",
-    labelKey: "nav.sftp",
-    category: "navigation",
-    keywords: ["files", "transfer"],
-    isEnabled: alwaysEnabled,
-    execute: ({ actions }) => actions.navigation.navigate("sftp")
   },
   {
     id: "navigation.snippets",
@@ -444,7 +445,8 @@ function canDuplicateSession(context: CommandContext): boolean {
 }
 
 function canDuplicateWindow(context: CommandContext): boolean {
-  return isSshSession(context) && sessionState(context) === "connected"
+  if (!hasSession(context)) return false
+  return !isSshSession(context) || sessionState(context) === "connected"
 }
 
 function canSplitSession(context: CommandContext): boolean {

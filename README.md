@@ -35,9 +35,11 @@ coverage remains deferred for the v0 line, and the 30-minute long soak remains
 a v1 release gate. See the [verification record](docs/releases/v0.4.0-implementation-verification.md)
 and [smoke checklist](docs/releases/v0.4.0-smoke-checklist.md).
 
-SFTP and Snippets are visible navigation placeholders. Cloud sync, mobile
-clients, ProxyJump, remote forwarding, and Dynamic SOCKS5 are not part of the
-first release.
+SFTP is in the v0.7 candidate line with a real main-process service,
+typed bridge, local and remote directory browsing, and a split Local/Host workspace.
+Snippets remain a visible navigation placeholder. Cloud sync, mobile clients,
+ProxyJump, remote forwarding, and Dynamic SOCKS5 are not part of the first
+release.
 
 ## v0.6.0 release candidates
 
@@ -48,12 +50,11 @@ manager integration. SSH copies remain independent sessions; PF lifecycle is
 owned by the main process and is independent of page visibility.
 
 RC5 is the v0.6 final-candidate baseline. SFTP is intentionally outside that
-release boundary. The current unreleased working tree has started the v0.7
-SFTP foundation with a main-process service, typed bridge, real local-fixture
-integration tests, and an independent transfer model. Its browser preview
+release boundary. The v0.7 candidate builds on the SFTP foundation with a
+main-process service, typed bridge, local and remote directory browsing,
+fixture integration tests, and an independent transfer model. Its browser preview
 fallback remains demo-only and never stands in for a real SSH/SFTP connection.
-See the [v0.6 final admission record](docs/releases/v0.6.0-final-admission.md)
-and [v0.7 SFTP foundation record](docs/releases/v0.7.0-sftp-foundation.md).
+See the [v0.7 RC1 verification record](docs/releases/v0.7.0-rc.1-verification.md).
 
 The RC1 candidate was published from tag `v0.6.0-rc.1`; GitHub Actions builds
 the six Windows/macOS installer and archive assets and marks the GitHub Release
