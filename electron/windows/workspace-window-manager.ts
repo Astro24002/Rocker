@@ -41,6 +41,11 @@ export interface WorkspaceWindowManagerOptions {
     loadWithStatus?: (options?: { consumeHealth?: boolean; reload?: boolean }) => Promise<LoadResult<StoredWorkspaceDocument>>
   }
   createWindow(options?: WorkspaceWindowOptions): WorkspaceWindow
+  windowPlacement?: {
+    maximize(window: WorkspaceWindow): void
+    isMaximized(window: WorkspaceWindow): boolean
+    boundsToSave(window: WorkspaceWindow): { x: number; y: number; width: number; height: number }
+  }
   onWindowClosed?(ownerWebContentsId: number): Promise<void> | void
   onRendererReleased?(owner: RuntimeOwner): Promise<void> | void
   onLifecycle?(event: WindowLifecycleEvent): void
@@ -74,7 +79,10 @@ export class WorkspaceWindowManager {
     const rendererRecord = this.rendererGenerations.get(ownerWebContentsId)
     if (rendererRecord) rendererRecord.owner = undefined
     else this.rendererGenerations.set(ownerWebContentsId, { generation: 0 })
-    if (snapshot?.maximized) window.maximize()
+    if (snapshot?.maximized) {
+      if (this.options.windowPlacement) this.options.windowPlacement.maximize(window)
+      else window.maximize()
+    }
     window.webContents.on("did-finish-load", () => {
       const record = this.rendererGenerations.get(ownerWebContentsId)
       if (!record || this.windows.get(ownerWebContentsId) !== window) return
@@ -198,8 +206,8 @@ export class WorkspaceWindowManager {
     this.options.snapshots.saveWindow({
       ...snapshot,
       workspaceId,
-      bounds: window.getBounds(),
-      maximized: window.isMaximized()
+      bounds: this.options.windowPlacement?.boundsToSave(window) ?? window.getBounds(),
+      maximized: this.options.windowPlacement?.isMaximized(window) ?? window.isMaximized()
     })
   }
 
@@ -274,8 +282,8 @@ export class WorkspaceWindowManager {
     const window = this.windowForWebContents(ownerWebContentsId)
     if (!workspaceId || !window || window.isDestroyed()) return
     this.options.snapshots.updateWindowBounds(workspaceId, {
-      bounds: window.getBounds(),
-      maximized: window.isMaximized()
+      bounds: this.options.windowPlacement?.boundsToSave(window) ?? window.getBounds(),
+      maximized: this.options.windowPlacement?.isMaximized(window) ?? window.isMaximized()
     })
   }
 

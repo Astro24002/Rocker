@@ -12,14 +12,19 @@ export function WindowChrome() {
 
   useEffect(() => {
     let active = true
-    void Promise.resolve()
-      .then(() => bridge.app.isMaximized?.() ?? false)
-      .then((next) => {
-        if (active) setMaximized(Boolean(next))
-      })
-      .catch(() => undefined)
+    const updateMaximized = (): void => {
+      void Promise.resolve()
+        .then(() => bridge.app.isMaximized?.() ?? false)
+        .then((next) => {
+          if (active) setMaximized(Boolean(next))
+        })
+        .catch(() => undefined)
+    }
+    updateMaximized()
+    window.addEventListener("resize", updateMaximized)
     return () => {
       active = false
+      window.removeEventListener("resize", updateMaximized)
     }
   }, [bridge])
 

@@ -77,6 +77,7 @@ export interface IpcDependencies {
   diagnosticsBuildChannel?: DiagnosticRuntimeMetadata["buildChannel"]
   diagnosticsRuntimeMode?: DiagnosticRuntimeMetadata["runtimeMode"]
   windows: WorkspaceWindowManager
+  windowMaximizer?: Pick<import("../windows/work-area-maximizer").WorkAreaMaximizer, "toggle" | "isMaximized">
   createDuplicateWindow?(request: SessionLaunchRequest): Promise<void>
 }
 
@@ -663,10 +664,17 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   ipcMain.handle(ipcChannels.windowMinimize, (event) => BrowserWindow.fromWebContents(event.sender)?.minimize())
   ipcMain.handle(ipcChannels.windowToggleMaximize, (event) => {
     const target = BrowserWindow.fromWebContents(event.sender)
+    if (target && dependencies.windowMaximizer) {
+      dependencies.windowMaximizer.toggle(target)
+      return
+    }
     if (target?.isMaximized()) target.unmaximize()
     else target?.maximize()
   })
-  ipcMain.handle(ipcChannels.windowIsMaximized, (event) => BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false)
+  ipcMain.handle(ipcChannels.windowIsMaximized, (event) => {
+    const target = BrowserWindow.fromWebContents(event.sender)
+    return target ? dependencies.windowMaximizer?.isMaximized(target) ?? target.isMaximized() : false
+  })
   ipcMain.handle(ipcChannels.windowClose, (event) => BrowserWindow.fromWebContents(event.sender)?.close())
 
   const unsubscribe = dependencies.sessions.onEvent(({ owner, event }) => {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, powerMonitor } from "electron"
+import { app, BrowserWindow, dialog, powerMonitor, screen } from "electron"
 import { join } from "node:path"
 import { DiagnosticLogger } from "./diagnostics/diagnostic-logger"
 import { bootstrapPrimaryInstance } from "./application/single-instance"
@@ -31,6 +31,7 @@ import {
   type WindowLifecycleEvent,
   type WorkspaceWindowOptions
 } from "./windows/workspace-window-manager"
+import { WorkAreaMaximizer } from "./windows/work-area-maximizer"
 
 interface ApplicationRuntime {
   connections: SshConnectionManager
@@ -47,6 +48,9 @@ let runtime: ApplicationRuntime | undefined
 let shutdown: Promise<void> | undefined
 let quitPrompt: Promise<void> | undefined
 let pendingFocus = false
+const windowMaximizer = process.platform === "win32"
+  ? new WorkAreaMaximizer((bounds) => screen.getDisplayMatching(bounds).workArea)
+  : undefined
 
 app.setName("Rocker")
 
@@ -68,6 +72,7 @@ function createNativeWindow(options: WorkspaceWindowOptions = {}): BrowserWindow
       preload: join(__dirname, "../preload/index.cjs")
     }
   })
+  windowMaximizer?.track(window)
   if (process.env.ELECTRON_RENDERER_URL) {
     void window.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -151,6 +156,11 @@ async function startApplication(): Promise<void> {
   windows = new WorkspaceWindowManager({
     snapshots,
     createWindow: createNativeWindow,
+    windowPlacement: windowMaximizer && {
+      maximize: (window) => windowMaximizer.maximize(window as BrowserWindow),
+      isMaximized: (window) => windowMaximizer.isMaximized(window as BrowserWindow),
+      boundsToSave: (window) => windowMaximizer.boundsToSave(window as BrowserWindow)
+    },
     preserveLastWindowWorkspace: process.platform !== "darwin",
     workspacePersistenceBlocked: initialWorkspaceResult.status === "blocked",
     onWindowClosed: async (ownerWebContentsId) => {
@@ -202,7 +212,13 @@ async function startApplication(): Promise<void> {
     diagnosticsAppVersion: app.getVersion(),
     diagnosticsBuildChannel: app.isPackaged ? "release" : "development",
     diagnosticsRuntimeMode: app.isPackaged ? "packaged" : "development",
-    windows
+    windows,
+    windowMaximizer
+  }
+  if (windowMaximizer) {
+    screen.on("display-metrics-changed", (_event, _display, metrics) => {
+      if (metrics.includes("workArea") || metrics.includes("bounds")) windowMaximizer.refreshWorkAreas()
+    })
   }
   dependencies.createDuplicateWindow = async (request) => {
     const target = windows.createNew()

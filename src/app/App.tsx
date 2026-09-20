@@ -976,11 +976,9 @@ function Workspace() {
 
   const openHostForwarding = useCallback((session: WorkspaceSession): void => {
     if (!workspaceRef.current.sessions.some((candidate) => candidate.id === session.id)) return
-    setWorkspace((current) => activateSession(current, session.id))
-    setRecentSessionState((current) => recordSessionFocus(current, session.id))
-    setHostForwardingHostId(session.hostId)
-    setActiveNav("host-port-forwarding")
-  }, [])
+    const host = hosts.find((candidate) => candidate.id === session.hostId)
+    if (host) openHostForwardingFromHost(host)
+  }, [hosts, openHostForwardingFromHost])
 
   const openHostWorkspace = useCallback((hostId: string): void => {
     const host = hosts.find((candidate) => candidate.id === hostId)

@@ -128,10 +128,10 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, them
 
   return (
     <aside className="sidebar" data-compact={isCompactSidebar(width)} ref={sidebarRef} style={{ width: normalizeSidebarWidth(width) }}>
-      <button aria-label="Rocker" className="sidebar-brand" type="button" onClick={() => onNavigate("hosts")}>
+      <div className="sidebar-brand">
         <img alt="" aria-hidden="true" src={rockerMark} />
         <span>Rocker</span>
-      </button>
+      </div>
 
       <nav className="primary-nav" aria-label={t("sidebar.primaryNavigation")}>
         {navItems.map(({ key, icon }) => (
@@ -171,7 +171,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, them
                   <SessionKindIcon session={session} />
                   <span className="session-name">{session.label}</span>
                 </button>
-                <button
+                {!isCompactSidebar(width) && <button
                   aria-label={`${t("sidebar.close")} ${session.label}`}
                   className="session-close-button"
                   disabled={!isSessionCommandEnabled("session.close", session, commandContext)}
@@ -183,7 +183,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, them
                   }}
                 >
                   <X aria-hidden="true" size={14} strokeWidth={1.8} />
-                </button>
+                </button>}
                 {menuSessionId === session.id && createPortal(<div aria-label={t("sidebar.sessionActions").replace("{label}", session.label)} className="session-menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key !== "Escape") return; event.preventDefault(); closeSessionMenu() }} ref={menuRef} role="menu" style={{ left: menuPosition?.left, top: menuPosition?.top, visibility: menuPosition ? "visible" : "hidden" }} tabIndex={-1}>
                   {sessionKind(session) === "ssh" ? <SessionMenuItem commandId="session.duplicate" disabled={!isSessionCommandEnabled("session.duplicate", session, commandContext)} onClick={() => dispatchSessionCommand("session.duplicate", session, commandContext, onSessionCommand, closeSessionMenu)}><Copy aria-hidden="true" size={14} /><span>{t("sidebar.duplicate")}</span></SessionMenuItem> : null}
                   <SessionMenuItem commandId="session.duplicate-window" disabled={!isSessionCommandEnabled("session.duplicate-window", session, commandContext)} onClick={() => dispatchSessionCommand("session.duplicate-window", session, commandContext, onSessionCommand, closeSessionMenu)}><ExternalLink aria-hidden="true" size={14} /><span>{t("sidebar.duplicateWindow")}</span></SessionMenuItem>

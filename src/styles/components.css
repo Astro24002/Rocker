@@ -136,25 +136,20 @@ textarea:focus-visible {
   min-height: 60px;
   max-height: 60px;
   align-items: center;
-  gap: 15px;
-  padding: 0 24px;
+  gap: 14px;
+  padding: 0 23px;
   border: 0;
   border-bottom: 1px solid var(--line-subtle);
   color: var(--text-primary);
   background: transparent;
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 720;
-  cursor: pointer;
   text-align: left;
 }
 
-.sidebar-brand:hover {
-  background: var(--sidebar-hover);
-}
-
 .sidebar-brand img {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   flex: 0 0 auto;
   border-radius: 6px;
 }
@@ -199,15 +194,15 @@ textarea:focus-visible {
   border-radius: 6px;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   text-align: left;
 }
 
 .nav-item > svg {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   justify-self: center;
 }
 
@@ -391,25 +386,25 @@ textarea:focus-visible {
 .session-type-icon {
   position: relative;
   display: inline-grid;
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   place-self: center;
   place-items: center;
   border: 1px solid currentColor;
   border-radius: 5px;
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 7.5px;
+  font-size: 9px;
   font-weight: 750;
   line-height: 1;
   white-space: nowrap;
 }
 
 .session-type-icon[data-label-length="2"] {
-  font-size: 8.5px;
+  font-size: 10px;
 }
 
 .session-type-icon[data-label-length="4"] {
-  font-size: 6.5px;
+  font-size: 7.5px;
 }
 
 .sidebar-session-row > button[aria-current="page"] .session-type-icon {
@@ -419,7 +414,7 @@ textarea:focus-visible {
 .session-name {
   min-width: 0;
   overflow: hidden;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -498,15 +493,6 @@ textarea:focus-visible {
 .sidebar-session-row:hover .session-close-button:disabled {
   opacity: 0.45;
   pointer-events: none;
-}
-
-.sidebar[data-compact="true"] .session-close-button {
-  right: 16px;
-}
-
-.sidebar[data-compact="true"] .sidebar-session-row:hover .session-type-icon,
-.sidebar[data-compact="true"] .sidebar-session-row:has(.session-close-button:focus-visible) .session-type-icon {
-  opacity: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1552,7 +1538,7 @@ textarea:focus-visible {
 
 .host-card-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 9px;
   padding: 4px 0 12px;
 }
@@ -1567,8 +1553,8 @@ textarea:focus-visible {
   display: flex;
   width: 100%;
   min-width: 0;
-  min-height: 86px;
-  align-items: center;
+  min-height: 90px;
+  align-items: flex-start;
   gap: 11px;
   padding: 13px 13px;
   border: 1px solid var(--line);
@@ -1660,9 +1646,12 @@ textarea:focus-visible {
 }
 
 .host-card-copy small {
+  overflow: hidden;
   margin-top: 5px;
   color: var(--text-muted);
   font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .host-card-copy small b {
@@ -1670,17 +1659,35 @@ textarea:focus-visible {
   font-weight: 700;
 }
 
-@media (max-width: 1100px) {
+@container (max-width: 1170px) {
+  .host-card-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
+
+@container (max-width: 1000px) {
+  .host-card-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+
+@container (max-width: 830px) {
+  .host-card-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+@container (max-width: 660px) {
   .host-card-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-@media (max-width: 760px) {
+@container (max-width: 490px) {
   .host-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container (max-width: 320px) {
+  .host-card-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
   .host-result-count { display: none; }
 }
 
 @media (max-width: 480px) {
-  .host-card-grid { grid-template-columns: 1fr; }
   .host-card-content { padding-right: 14px; padding-left: 14px; }
 }
 
@@ -2280,6 +2287,18 @@ textarea:focus-visible {
   border-top: 1px solid var(--line);
 }
 
+.ports-view {
+  font-size: 15px;
+}
+
+.ports-view .view-header h1 {
+  font-size: 22px;
+}
+
+.ports-view .view-eyebrow {
+  font-size: 13px;
+}
+
 .ports-heading,
 .port-row {
   display: grid;
@@ -2291,7 +2310,7 @@ textarea:focus-visible {
 .ports-heading {
   min-height: 34px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -2306,7 +2325,7 @@ textarea:focus-visible {
   overflow: hidden;
   color: var(--teal);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 11px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2315,7 +2334,7 @@ textarea:focus-visible {
   display: block;
   margin-top: 3px;
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .port-input {
@@ -2357,7 +2376,7 @@ textarea:focus-visible {
   border-radius: 4px;
   color: var(--warning);
   background: var(--status-warning-surface);
-  font-size: 10px;
+  font-size: 12px;
   text-transform: capitalize;
 }
 
@@ -2377,10 +2396,10 @@ textarea:focus-visible {
   gap: 8px;
 }
 
-.compact-command {
+.ports-view .compact-command {
   min-height: 28px;
   padding: 0 9px;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .ports-overview-table .ports-heading,
@@ -2416,7 +2435,7 @@ textarea:focus-visible {
 .ports-profile-row strong {
   overflow: hidden;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2426,7 +2445,7 @@ textarea:focus-visible {
 .ports-profile-row small {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2445,7 +2464,7 @@ textarea:focus-visible {
 
 .port-connection-summary {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .route-arrow {
@@ -2464,7 +2483,7 @@ textarea:focus-visible {
   border-radius: 5px;
   color: var(--text-secondary);
   background: var(--workspace-raised);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .ports-host-context-copy {
@@ -2479,7 +2498,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 5px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .ports-session-strip strong {
@@ -2518,7 +2537,7 @@ textarea:focus-visible {
 .ports-section-label {
   padding: 14px 0 8px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: .04em;
   text-transform: uppercase;
@@ -2531,7 +2550,7 @@ textarea:focus-visible {
   gap: 14px;
   border-top: 1px solid var(--line-subtle);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .port-discovery-row code {
@@ -2575,7 +2594,7 @@ textarea:focus-visible {
 .forwarding-editor-header h2 {
   margin: 5px 0 0;
   color: var(--text-primary);
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .forwarding-form {
@@ -2592,7 +2611,7 @@ textarea:focus-visible {
   display: grid;
   gap: 6px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
 }
 
@@ -2608,7 +2627,7 @@ textarea:focus-visible {
   color: var(--text-primary);
   background: var(--field);
   font: inherit;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .forwarding-form textarea {
@@ -2651,7 +2670,7 @@ textarea:focus-visible {
   border-radius: 4px;
   color: var(--warning);
   background: var(--status-warning-surface);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -2854,7 +2873,7 @@ textarea:focus-visible {
 .port-empty strong {
   margin-bottom: 7px;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .inline-error {

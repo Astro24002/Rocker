@@ -109,6 +109,22 @@ describe("registerIpcHandlers", () => {
     expect(electron.BrowserWindow.fromWebContents).toHaveBeenCalledWith({ id: 21 })
   })
 
+  it("uses work-area maximization on supported windows", async () => {
+    const harness = createHarness()
+    const nativeWindow = { isMaximized: vi.fn(() => false), maximize: vi.fn(), unmaximize: vi.fn() }
+    const toggle = vi.fn()
+    const isMaximized = vi.fn(() => true)
+    harness.dependencies.windowMaximizer = { toggle, isMaximized }
+    electron.BrowserWindow.fromWebContents.mockReturnValue(nativeWindow)
+    registerIpcHandlers(harness.dependencies)
+
+    await invokeFrom(21, ipcChannels.windowToggleMaximize)
+    await expect(invokeFrom(21, ipcChannels.windowIsMaximized)).resolves.toBe(true)
+    expect(toggle).toHaveBeenCalledWith(nativeWindow)
+    expect(isMaximized).toHaveBeenCalledWith(nativeWindow)
+    expect(nativeWindow.maximize).not.toHaveBeenCalled()
+  })
+
   it("lists the Host Key inventory and audit history for the current renderer owner", async () => {
     const harness = createHarness()
     harness.hostKeys.entries.mockResolvedValue([{ host: "server.example", port: 22, fingerprint: "fingerprint-a" }])

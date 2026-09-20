@@ -50,6 +50,10 @@ describe("WindowChrome", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument())
     expect(container.querySelector(".window-chrome")).toHaveAttribute("data-maximized", "true")
     expect(screen.getByRole("button", { name: "Restore" }).querySelector(".lucide-copy")).toBeInTheDocument()
+
+    maximized = false
+    fireEvent(window, new Event("resize"))
+    await waitFor(() => expect(screen.getByRole("button", { name: "Maximize" })).toBeInTheDocument())
   })
 
   it("keeps macOS controls in a left traffic-light-compatible zone", async () => {

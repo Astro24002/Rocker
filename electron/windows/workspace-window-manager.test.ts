@@ -75,6 +75,28 @@ describe("WorkspaceWindowManager", () => {
     expect(manager.workspaceForWebContents(restored[0].webContents.id)).toBe(firstWorkspace)
   })
 
+  it("restores work-area maximization without overwriting normal window bounds", async () => {
+    const normalBounds = { x: 30, y: 40, width: 1360, height: 820 }
+    const store = createStore({ version: 1, windows: [createWorkspace(firstWorkspace, normalBounds, true)] })
+    const windows = createWindowFactory()
+    const placement = {
+      maximize: vi.fn(),
+      isMaximized: vi.fn(() => true),
+      boundsToSave: vi.fn(() => normalBounds)
+    }
+    const manager = new WorkspaceWindowManager({ snapshots: store, createWindow: windows.create, windowPlacement: placement })
+    const [window] = await manager.restoreWindows() as FakeWindow[]
+    window.webContents.emit("did-finish-load")
+    const owner = manager.currentOwnerForWebContents(window.webContents.id)!
+
+    expect(placement.maximize).toHaveBeenCalledWith(window)
+    expect(window.maximize).not.toHaveBeenCalled()
+    manager.saveWorkspace(owner, { sessions: [] })
+    expect(store.saveWindow).toHaveBeenCalledWith(expect.objectContaining({ bounds: normalBounds, maximized: true }))
+    window.emit("resize")
+    expect(store.updateWindowBounds).toHaveBeenCalledWith(firstWorkspace, { bounds: normalBounds, maximized: true })
+  })
+
   it("derives persisted window metadata from the owned native window", () => {
     const store = createStore()
     const windows = createWindowFactory()

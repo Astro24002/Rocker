@@ -269,18 +269,40 @@ describe("desktop workspace shell", () => {
 
   it("routes the session context forwarding action to the Host-local destination", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
+    bridge.ports.listForHost.mockResolvedValue([])
     render(<App />)
 
     await waitFor(() => expect(workspace().sessions).toHaveLength(1))
+    const sshSessionId = workspace().sessions[0].id
     fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
     fireEvent.click(screen.getByRole("menuitem", { name: "Port forwarding" }))
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Host forwarding" })).toBeInTheDocument())
     expect(screen.getByText("Rocker / Port Forwarding / G11")).toBeInTheDocument()
     expect(document.querySelector(".ports-host-view[data-mode='host']")).toBeInTheDocument()
+    const pfButton = screen.getByRole("button", { name: "PF G11" })
+    expect(pfButton).toHaveAttribute("aria-current", "page")
+    expect(screen.getByRole("button", { name: "SSH G11" })).not.toHaveAttribute("aria-current")
+    expect(workspace().sessions).toHaveLength(2)
+    const pfSessionId = workspace().activeSessionId
+    expect(pfSessionId).not.toBe(sshSessionId)
+    expect(workspace().sessions.find((session) => session.id === pfSessionId)).toMatchObject({ kind: "pf", hostId: host.id, label: host.name })
+    expect(workspace().sessions.find((session) => session.id === sshSessionId)).toMatchObject({ hostId: host.id, label: host.name })
+    expect(bridge.ports.createProfile).not.toHaveBeenCalled()
+    expect(bridge.ports.startProfile).not.toHaveBeenCalled()
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Port forwarding" }))
+    expect(workspace().sessions).toHaveLength(2)
+    expect(workspace().activeSessionId).toBe(pfSessionId)
 
     fireEvent.click(screen.getByRole("button", { name: "Port Forwarding" }))
     await waitFor(() => expect(document.querySelector(".ports-overview-view[data-mode='global']")).toBeInTheDocument())
+
+    openHostAction("G11, SSH, root", "Open Forwarding")
+    await waitFor(() => expect(pfButton).toHaveAttribute("aria-current", "page"))
+    expect(workspace().sessions).toHaveLength(2)
+    expect(workspace().activeSessionId).toBe(pfSessionId)
   })
 
   it("opens the Host SFTP detail from an SSH session action", async () => {
@@ -477,11 +499,12 @@ describe("desktop workspace shell", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Port forwarding" }))
     await waitFor(() => expect(document.querySelector(".ports-host-view[data-mode='host']")).toBeInTheDocument())
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "SSH G11" }))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "PF G11" }))
     fireEvent.click(screen.getByRole("menuitem", { name: "Close" }))
 
     await waitFor(() => expect(document.querySelector(".ports-overview-view[data-mode='global']")).toBeInTheDocument())
     expect(document.querySelector(".ports-host-view[data-mode='host']")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "SSH G11" })).toBeInTheDocument()
   })
 
   it.each([
@@ -692,10 +715,14 @@ describe("desktop workspace shell", () => {
     await waitFor(() => expect(workspace().sessions).toHaveLength(2))
     const firstSession = workspace().sessions[0]
     const secondSession = workspace().sessions[1]
-    const firstSurface = terminalHarness.surfaces.get(firstSession.id)!
-    const secondSurface = terminalHarness.surfaces.get(secondSession.id)!
     fireEvent.click(screen.getByRole("button", { name: `SSH ${firstSession.label}` }))
     fireEvent.click(screen.getByRole("button", { name: `SSH ${secondSession.label}` }))
+    await waitFor(() => {
+      expect(terminalHarness.surfaces.has(firstSession.id)).toBe(true)
+      expect(terminalHarness.surfaces.has(secondSession.id)).toBe(true)
+    })
+    const firstSurface = terminalHarness.surfaces.get(firstSession.id)!
+    const secondSurface = terminalHarness.surfaces.get(secondSession.id)!
     firstSurface.focus.mockClear()
     secondSurface.focus.mockClear()
 
@@ -1778,7 +1805,7 @@ describe("desktop workspace shell", () => {
     }
   })
 
-  it("returns to Hosts from the brand without closing mixed sessions", async () => {
+  it("keeps the current workspace and mixed sessions when the brand is clicked", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], workspaceSnapshot(host.id)))
     render(<App />)
 
@@ -1786,7 +1813,10 @@ describe("desktop workspace shell", () => {
     openHostAction("G11, SSH, root", "Open SFTP")
     await waitFor(() => expect(screen.getByRole("heading", { name: "G11" })).toBeInTheDocument())
 
-    fireEvent.click(screen.getByRole("button", { name: "Rocker" }))
+    fireEvent.click(document.querySelector(".sidebar-brand")!)
+    expect(screen.getByRole("button", { name: "SFTP G11" })).toHaveAttribute("aria-current", "page")
+    expect(screen.queryByRole("heading", { name: "Hosts" })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Hosts" }))
     await waitFor(() => expect(screen.getByRole("heading", { name: "Hosts" })).toBeInTheDocument())
     expect(screen.getByRole("button", { name: "SSH G11" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "SFTP G11" })).toBeInTheDocument()

@@ -19,12 +19,15 @@ describe("Sidebar session actions", () => {
     expect(screen.getByRole("button", { name: "Hosts" })).toHaveAttribute("aria-current", "page")
     expect(screen.getByRole("button", { name: "Settings" })).not.toHaveAttribute("aria-current")
     expect(screen.queryByText("Current host")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Rocker" })).not.toBeInTheDocument()
     expect(screen.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Rocker", "Hosts", "Snippets", "Port Forwarding", "Connections", "Settings"
+      "Hosts", "Snippets", "Port Forwarding", "Connections", "Settings"
     ])
     expect(onNavigate).not.toHaveBeenCalled()
     expect(container.querySelector(".sidebar-resizer")).toBeNull()
 
+    fireEvent.click(container.querySelector(".sidebar-brand")!)
+    expect(onNavigate).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole("button", { name: "Port Forwarding" }))
     expect(onNavigate).toHaveBeenCalledWith("port-forwarding")
   })
@@ -111,6 +114,18 @@ describe("Sidebar session actions", () => {
     expect(onSessionCommand).toHaveBeenCalledExactlyOnceWith("session.close", session)
     expect(onSessionActivate).not.toHaveBeenCalled()
     expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it("keeps compact session icons visible without a close button, but retains menu Close", () => {
+    const onSessionCommand = vi.fn()
+    const { container } = render(<I18nProvider><Sidebar width={58} activeNav="terminal" sessions={[session]} activeSessionId={session.id} onNavigate={vi.fn()} onSessionCommand={onSessionCommand} /></I18nProvider>)
+
+    const row = screen.getByRole("button", { name: "SSH G11" })
+    expect(container.querySelector(".session-type-icon")).toHaveTextContent("SSH")
+    expect(screen.queryByRole("button", { name: "Close G11" })).not.toBeInTheDocument()
+    fireEvent.contextMenu(row)
+    fireEvent.click(screen.getByRole("menuitem", { name: "Close" }))
+    expect(onSessionCommand).toHaveBeenCalledExactlyOnceWith("session.close", session)
   })
 
   it("disables the row close button while the session is closing", () => {

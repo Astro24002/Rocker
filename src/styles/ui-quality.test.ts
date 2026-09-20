@@ -26,6 +26,26 @@ describe("UI quality stylesheet contract", () => {
     expect(componentStyles).toMatch(/\.sidebar-session-list\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex:\s*1;[\s\S]*?overflow-y:\s*auto;/)
   })
 
+  it("fits up to seven Host cards across the available workspace width", () => {
+    expect(layoutStyles).toMatch(/\.host-card-content\s*\{[^}]*container-type:\s*inline-size;/)
+    expect(componentStyles).toMatch(/\.host-card-grid\s*\{[^}]*grid-template-columns:\s*repeat\(7, minmax\(0, 1fr\)\);/)
+    for (const [width, columns] of [[1170, 6], [1000, 5], [830, 4], [660, 3], [490, 2]]) {
+      expect(componentStyles).toContain(`@container (max-width: ${width}px) {\n  .host-card-grid { grid-template-columns: repeat(${columns}, minmax(0, 1fr)); }`)
+    }
+    expect(componentStyles).toContain("@container (max-width: 320px) {\n  .host-card-grid { grid-template-columns: 1fr; }")
+    expect(componentStyles).toMatch(/\.host-card-copy small\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/)
+  })
+
+  it("enlarges Port Forwarding text while allowing narrow rule tables to scroll", () => {
+    expect(componentStyles).toMatch(/\.ports-view\s*\{\s*font-size:\s*15px;/)
+    expect(componentStyles).toMatch(/\.ports-view \.view-header h1\s*\{\s*font-size:\s*22px;/)
+    expect(componentStyles).toMatch(/\.ports-heading\s*\{[^}]*font-size:\s*12px;/)
+    expect(componentStyles).toMatch(/\.port-row code\s*\{[^}]*font-size:\s*13px;/)
+    expect(componentStyles).toMatch(/\.forwarding-form label\s*\{[^}]*font-size:\s*12px;/)
+    expect(layoutStyles).toMatch(/\.ports-overview-table,\s*\.ports-host-table\s*\{\s*overflow-x:\s*auto;/)
+    expect(layoutStyles).toMatch(/\.ports-overview-row,[\s\S]*?\.ports-profile-row\s*\{\s*min-width:\s*880px;/)
+  })
+
   it("locks the SFTP workspace to the reference split-pane table geometry", () => {
     expect(layoutStyles).toMatch(/\.sftp-workspace-page\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);[^}]*gap:\s*1px;[^}]*overflow:\s*hidden;/)
     expect(layoutStyles).toMatch(/\.sftp-file-pane\s*\{[^}]*grid-template-rows:\s*50px 42px 39px minmax\(0, 1fr\);[^}]*overflow:\s*hidden;/)
@@ -66,24 +86,26 @@ describe("UI quality stylesheet contract", () => {
     const brand = componentStyles.match(/\.sidebar-brand\s*\{([^}]*)\}/)?.[1]
     const nav = componentStyles.match(/\.nav-item\s*\{([^}]*)\}/)?.[1]
     const session = componentStyles.match(/^\.session-activate-button\s*\{([^}]*)\}/m)?.[1]
-    expect(brand).toMatch(/gap:\s*15px;/)
-    expect(brand).toMatch(/padding:\s*0 24px;/)
-    expect(brand).toMatch(/font-size:\s*15px;/)
-    expect(componentStyles).toMatch(/\.sidebar-brand img\s*\{[^}]*width:\s*24px;[^}]*height:\s*24px;/)
+    expect(brand).toMatch(/gap:\s*14px;/)
+    expect(brand).toMatch(/padding:\s*0 23px;/)
+    expect(brand).toMatch(/font-size:\s*17px;/)
+    expect(componentStyles).toMatch(/\.sidebar-brand img\s*\{[^}]*width:\s*26px;[^}]*height:\s*26px;/)
+    expect(23 + 26 / 2).toBe(12 + 12 + 24 / 2)
+    expect(23 + 26 + 14).toBe(12 + 12 + 24 + 15)
     expect(nav).toMatch(/grid-template-columns:\s*24px minmax\(0, 1fr\);/)
     expect(nav).toMatch(/column-gap:\s*15px;/)
     expect(nav).toMatch(/padding:\s*0 12px;/)
-    expect(nav).toMatch(/font-size:\s*12px;/)
+    expect(nav).toMatch(/font-size:\s*14px;/)
     expect(nav).toMatch(/font-weight:\s*600;/)
     expect(session).toMatch(/grid-template-columns:\s*24px minmax\(0, 1fr\);/)
     expect(session).toMatch(/column-gap:\s*15px;/)
     expect(session).toMatch(/padding:\s*0 40px 0 12px;/)
-    expect(componentStyles).toMatch(/\.session-name\s*\{[^}]*font-size:\s*12px;[^}]*font-weight:\s*600;/)
-    expect(componentStyles).toMatch(/\.session-type-icon\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px;[^}]*place-self:\s*center;/)
-    expect(componentStyles).toMatch(/\.session-type-icon\[data-label-length="2"\]\s*\{[^}]*font-size:\s*8\.5px;/)
-    expect(componentStyles).toMatch(/\.session-type-icon\[data-label-length="4"\]\s*\{[^}]*font-size:\s*6\.5px;/)
+    expect(componentStyles).toMatch(/\.session-name\s*\{[^}]*font-size:\s*14px;[^}]*font-weight:\s*600;/)
+    expect(componentStyles).toMatch(/\.session-type-icon\s*\{[^}]*width:\s*22px;[^}]*height:\s*22px;[^}]*place-self:\s*center;/)
+    expect(componentStyles).toMatch(/\.session-type-icon\[data-label-length="2"\]\s*\{[^}]*font-size:\s*10px;/)
+    expect(componentStyles).toMatch(/\.session-type-icon\[data-label-length="4"\]\s*\{[^}]*font-size:\s*7\.5px;/)
     expect(componentStyles).toMatch(/\.primary-nav\s*\{[^}]*gap:\s*5px;/)
-    expect(componentStyles).toMatch(/\.nav-item > svg\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px;[^}]*justify-self:\s*center;/)
+    expect(componentStyles).toMatch(/\.nav-item > svg\s*\{[^}]*width:\s*22px;[^}]*height:\s*22px;[^}]*justify-self:\s*center;/)
     expect(componentStyles).toMatch(/\.session-activity-dot\s*\{[^}]*position:\s*absolute;[^}]*width:\s*6px;[^}]*height:\s*6px;[^}]*background:\s*var\(--success\);[^}]*pointer-events:\s*none;/)
   })
 
@@ -95,7 +117,7 @@ describe("UI quality stylesheet contract", () => {
     expect(close).toMatch(/opacity:\s*0;/)
     expect(close).toMatch(/pointer-events:\s*none;/)
     expect(componentStyles).toMatch(/\.sidebar-session-row:hover \.session-close-button,[\s\S]*?\.session-close-button:focus-visible\s*\{[^}]*opacity:\s*1;[^}]*pointer-events:\s*auto;/)
-    expect(componentStyles).toMatch(/\.sidebar\[data-compact="true"\] \.sidebar-session-row:hover \.session-type-icon,[\s\S]*?opacity:\s*0;/)
+    expect(componentStyles).not.toMatch(/\.sidebar\[data-compact="true"\] \.sidebar-session-row:hover \.session-type-icon/)
   })
 
   it("uses continuous corners on rounded app surfaces with circular indicator exceptions", () => {
