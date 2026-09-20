@@ -28,9 +28,9 @@ describe("UI quality stylesheet contract", () => {
 
   it("locks the SFTP workspace to the reference split-pane table geometry", () => {
     expect(layoutStyles).toMatch(/\.sftp-workspace-page\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);[^}]*gap:\s*1px;[^}]*overflow:\s*hidden;/)
-    expect(layoutStyles).toMatch(/\.sftp-file-pane\s*\{[^}]*grid-template-rows:\s*42px 34px 31px minmax\(0, 1fr\);[^}]*overflow:\s*hidden;/)
+    expect(layoutStyles).toMatch(/\.sftp-file-pane\s*\{[^}]*grid-template-rows:\s*50px 42px 39px minmax\(0, 1fr\);[^}]*overflow:\s*hidden;/)
     expect(componentStyles).toMatch(/\.sftp-file-table-header,[\s\S]*?\.sftp-file-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 43fr\) minmax\(0, 24fr\) minmax\(0, 16fr\) minmax\(0, 17fr\);/)
-    expect(componentStyles).toMatch(/\.sftp-file-row\s*\{[^}]*height:\s*36px;/)
+    expect(componentStyles).toMatch(/\.sftp-file-row\s*\{[^}]*height:\s*44px;/)
     expect(componentStyles).toMatch(/\.sftp-file-table-body\s*\{[^}]*overflow-y:\s*auto;/)
     expect(componentStyles).toMatch(/\.sftp-pane-titlebar\s*\{[^}]*padding:\s*0 12px;[^}]*background:\s*var\(--sftp-header\);/)
   })

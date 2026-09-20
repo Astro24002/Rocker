@@ -164,7 +164,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, them
                   openSessionMenu(session.id, event.currentTarget)
                 }} onClick={() => {
                   onSessionActivate?.(session.id)
-                  if (!onSessionActivate || !isPortForwardingSession(session) || session.profileId) {
+                  if (!onSessionActivate || !isPortForwardingSession(session)) {
                     onNavigate(sessionKind(session) === "sftp" ? "sftp" : "terminal")
                   }
                 }}>

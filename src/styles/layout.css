@@ -17,6 +17,25 @@
   user-select: none;
 }
 
+.workspace[data-active-view="sftp"],
+.workspace[data-active-view="sftp"] .window-chrome {
+  background: var(--sftp-pane);
+}
+
+.workspace[data-active-view="sftp"] .window-controls button {
+  color: var(--sftp-text-secondary);
+}
+
+.workspace[data-active-view="sftp"] .window-controls button:hover {
+  color: var(--sftp-text);
+  background: var(--sftp-hover);
+}
+
+.workspace[data-active-view="sftp"] .window-controls .window-close:hover {
+  color: var(--sftp-host-ink);
+  background: var(--sftp-danger);
+}
+
 .window-chrome[data-platform="win32"] .window-controls,
 .window-chrome[data-platform="linux"] .window-controls,
 .window-chrome[data-platform="browser"] .window-controls {
@@ -253,7 +272,7 @@
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: 42px 34px 31px minmax(0, 1fr);
+  grid-template-rows: 50px 42px 39px minmax(0, 1fr);
   overflow: hidden;
   background: var(--sftp-pane);
 }

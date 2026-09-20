@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { chmod, lstat, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
-import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
-import { BrowserWindow, dialog, ipcMain, shell } from "electron"
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron"
 import type { OpenDialogOptions } from "electron"
 import type { DiagnosticLogger } from "../diagnostics/diagnostic-logger"
 import type { DiagnosticRuntimeMetadata } from "../diagnostics/diagnostic-types"
@@ -694,7 +693,7 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
 }
 
 async function listLocalDirectory(requestedPath: string | undefined): Promise<SftpDirectory> {
-  const directoryPath = resolve(requestedPath?.trim() || homedir())
+  const directoryPath = resolve(requestedPath?.trim() || app.getPath("desktop"))
   const directory = await lstat(directoryPath)
   if (!directory.isDirectory()) throw new Error("Local path is not a directory")
   const entries = await readdir(directoryPath, { withFileTypes: true })

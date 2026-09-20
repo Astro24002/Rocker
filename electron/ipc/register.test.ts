@@ -7,6 +7,7 @@ const electron = vi.hoisted(() => {
   const handlers = new Map<string, (event: { sender: { id: number } }, ...args: unknown[]) => unknown>()
   return {
     handlers,
+    app: { getPath: vi.fn(() => "/tmp") },
     ipcMain: {
       handle: vi.fn((channel: string, handler: (event: { sender: { id: number } }, ...args: unknown[]) => unknown) => {
         handlers.set(channel, handler)
@@ -48,6 +49,7 @@ describe("registerIpcHandlers", () => {
   afterEach(() => {
     electron.handlers.clear()
     vi.clearAllMocks()
+    electron.app.getPath.mockReturnValue("/tmp")
   })
 
   it("routes output only to the session owner", () => {
@@ -320,6 +322,10 @@ describe("registerIpcHandlers", () => {
       await writeFile(join(directory, "notes.txt"), "hello", "utf8")
       const harness = createHarness()
       registerIpcHandlers(harness.dependencies)
+      electron.app.getPath.mockReturnValue(directory)
+
+      await expect(invokeFrom(21, ipcChannels.sftpListLocal)).resolves.toMatchObject({ path: directory })
+      expect(electron.app.getPath).toHaveBeenCalledWith("desktop")
 
       await expect(invokeFrom(21, ipcChannels.sftpListLocal, directory)).resolves.toMatchObject({
         path: directory,

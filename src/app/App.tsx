@@ -444,7 +444,7 @@ function Workspace() {
       hostId: host.id,
       label: initial.label ?? host.name,
       kind: "sftp",
-      path: initial.path ?? "/"
+      path: initial.path ?? "."
     }))
     setActiveNav("sftp")
   }, [])
@@ -455,29 +455,30 @@ function Workspace() {
       setWorkspace((current) => patchSession(activateSession(current, existing.id), existing.id, {
         kind: "pf",
         profileId: profile.id,
-        label: initial.label ?? profile.name,
         forwardingId: runtime?.id,
         forwardingStatus: runtime?.status ?? existing.forwardingStatus,
         state: runtime ? forwardingToSessionState(runtime.status) : existing.state,
         applicationProtocol: initial.applicationProtocol ?? existing.applicationProtocol
       }))
       setRecentSessionState((current) => recordSessionFocus(current, existing.id))
-      setActiveNav("terminal")
+      setHostForwardingHostId(profile.hostId)
+      setActiveNav("host-port-forwarding")
       return
     }
     const sessionId = crypto.randomUUID()
     setWorkspace((current) => openSession(current, {
       id: sessionId,
       hostId: profile.hostId,
-      label: initial.label ?? profile.name,
+      label: initial.label ?? hosts.find((host) => host.id === profile.hostId)?.name ?? profile.hostId,
       kind: "pf",
       profileId: profile.id,
       forwardingId: runtime?.id,
       forwardingStatus: runtime?.status ?? "stopped",
       applicationProtocol: initial.applicationProtocol
     }))
-    setActiveNav("terminal")
-  }, [])
+    setHostForwardingHostId(profile.hostId)
+    setActiveNav("host-port-forwarding")
+  }, [hosts])
 
   const openHostForwardingFromHost = useCallback((host: HostProfile): void => {
     const session = workspaceRef.current.sessions.find((candidate) => candidate.hostId === host.id && isPortForwardingSession(candidate))
@@ -650,7 +651,7 @@ function Workspace() {
             const restoredActive = restored.workspace.sessions.find((session) => session.id === restored.workspace.activeSessionId)
             if (isSftpSession(restoredActive)) {
               setActiveNav("sftp")
-            } else if (isPortForwardingSession(restoredActive) && !restoredActive.profileId) {
+            } else if (isPortForwardingSession(restoredActive)) {
               setHostForwardingHostId(restoredActive.hostId)
               setActiveNav("host-port-forwarding")
             } else {
@@ -954,7 +955,7 @@ function Workspace() {
     setRecentSessionState((current) => recordSessionFocus(current, sessionId))
     if (isSftpSession(session)) {
       setActiveNav("sftp")
-    } else if (isPortForwardingSession(session) && !session.profileId) {
+    } else if (isPortForwardingSession(session)) {
       setHostForwardingHostId(session.hostId)
       setActiveNav("host-port-forwarding")
     } else {
@@ -1072,7 +1073,8 @@ function Workspace() {
     }
     if (currentWorkspace.activeSessionId === session.id && activeNavigationRef.current === "sftp") {
       const nextActive = nextWorkspace.sessions.find((candidate) => candidate.id === nextWorkspace.activeSessionId)
-      setActiveNav(nextActive ? (isSftpSession(nextActive) ? "sftp" : "terminal") : "hosts")
+      if (isPortForwardingSession(nextActive)) setHostForwardingHostId(nextActive.hostId)
+      setActiveNav(nextActive ? (isSftpSession(nextActive) ? "sftp" : isPortForwardingSession(nextActive) ? "host-port-forwarding" : "terminal") : "hosts")
     }
     if (remaining.length === 0 && (activeNavigationRef.current === "terminal" || activeNavigationRef.current === "sftp")) {
       setHostForwardingHostId(undefined)
@@ -1411,7 +1413,7 @@ function Workspace() {
         onRestoreFocus={restoreSidebarFocus}
         commandContext={commandContext}
       />
-      <main className="workspace">
+      <main className="workspace" data-active-view={activeNav === "sftp" ? "sftp" : undefined}>
           <WorkspaceResizeHandle width={sidebarWidth} onWidthChange={changeSidebarWidth} />
           <WindowChrome />
           <RecoveryBanner state={bootstrapState} onRetry={retryBootstrap} onExportDiagnostics={() => bridge.diagnostics.export()} />

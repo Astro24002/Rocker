@@ -27,13 +27,15 @@ const session: SftpWorkspaceSession = {
 }
 
 describe("SftpWorkspaceView", () => {
-  it("starts with Local on the left and a Hosts chooser on the right", () => {
+  it("starts at the local desktop with a Hosts chooser on the right", async () => {
     const onOpen = vi.fn()
     const bridge = createBridge()
     const { container } = render(<I18nProvider><SftpWorkspaceView hosts={[host]} bridge={bridge} onOpen={onOpen} onPatch={vi.fn()} /></I18nProvider>)
 
     expect(screen.getByRole("heading", { name: "Local" })).toBeInTheDocument()
     expect(screen.getByRole("heading", { name: "Hosts" })).toBeInTheDocument()
+    await waitFor(() => expect(bridge.sftp.listLocal).toHaveBeenCalledWith(undefined))
+    expect(await screen.findByRole("button", { name: "Desktop" })).toHaveAttribute("aria-current", "location")
     expect(container.querySelectorAll(".sftp-file-pane")).toHaveLength(2)
     expect(container.querySelector(".view-header")).not.toBeInTheDocument()
     for (const pane of container.querySelectorAll(".sftp-file-pane")) {
@@ -76,6 +78,17 @@ describe("SftpWorkspaceView", () => {
     const remotePane = screen.getByRole("heading", { name: "G11" }).closest(".sftp-file-pane") as HTMLElement
     fireEvent.click(within(remotePane).getByRole("button", { name: "home" }))
     expect(onPatch).toHaveBeenCalledWith(session.id, expect.objectContaining({ kind: "sftp", browser: expect.objectContaining({ path: "/home" }) }))
+  })
+
+  it("resolves a new host workspace to its real home and retains the resolved path", async () => {
+    const bridge = createBridge()
+    vi.mocked(bridge.sftp.list).mockResolvedValue({ path: "/srv/users/root", entries: [] })
+    const onPatch = vi.fn()
+    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, browser: { ...session.browser, path: "." } }} bridge={bridge} onOpen={vi.fn()} onPatch={onPatch} /></I18nProvider>)
+
+    expect(screen.getByRole("button", { name: "~" })).toHaveAttribute("aria-current", "location")
+    await waitFor(() => expect(bridge.sftp.list).toHaveBeenCalledWith(session.id, "."))
+    await waitFor(() => expect(onPatch).toHaveBeenCalledWith(session.id, expect.objectContaining({ browser: expect.objectContaining({ path: "/srv/users/root" }) })))
   })
 
   it("selects and opens real local directories without changing the remote session", async () => {
@@ -132,7 +145,7 @@ describe("SftpWorkspaceView", () => {
 function createBridge(): RockerBridge {
   return {
     sftp: {
-      listLocal: vi.fn(async () => ({ path: "/home/test", entries: [] })),
+      listLocal: vi.fn(async () => ({ path: "/home/test/Desktop", entries: [] })),
       open: vi.fn(async (workspaceId: string, hostId: string) => ({ workspaceId, hostId, connectionId: "connection-a", state: "ready" as const })),
       close: vi.fn(async () => undefined),
       list: vi.fn(async (workspaceId: string, path: string) => ({ workspaceId, path, entries: [] })),

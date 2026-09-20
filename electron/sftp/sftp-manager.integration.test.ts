@@ -23,6 +23,18 @@ afterEach(async () => {
 })
 
 describe("SftpManager", () => {
+  it("resolves the server's home directory for a new workspace without changing explicit paths", async () => {
+    const fixture = await createSshTestServer({ sftpHome: "/home/rocker-test", sftpFiles: { "/home/rocker-test/hello.txt": "hello" } })
+    fixtures.push(fixture)
+    const { manager } = createManager(fixture.port)
+    const workspace = await manager.open("00000000-0000-4000-8000-000000000104", "fixture", owner)
+
+    const home = await manager.list(workspace.workspaceId, ".", owner)
+    expect(home.path).toBe("/home/rocker-test")
+    expect(home.entries).toEqual(expect.arrayContaining([expect.objectContaining({ name: "hello.txt", path: "/home/rocker-test/hello.txt" })]))
+    expect((await manager.list(workspace.workspaceId, "/", owner)).path).toBe("/")
+  })
+
   it("shares the verified SSH transport and performs real directory operations", async () => {
     const fixture = await createSshTestServer({ sftpFiles: { "/docs/guide.txt": "guide" } })
     fixtures.push(fixture)

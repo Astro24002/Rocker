@@ -381,7 +381,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
   ] : [], [selectedRemoteEntry, selectedSession, t])
 
   const remoteBreadcrumbs = selectedSession
-    ? pathBreadcrumbs(remotePath)
+    ? remotePath === "." ? [{ id: ".", label: "~" }] : pathBreadcrumbs(remotePath)
     : [{ id: "hosts", label: t("workspace.sftp.hosts") }]
 
   return (
@@ -425,7 +425,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
         error={selectedSession?.browser.error ?? actionError}
         emptyMessage={selectedSession ? t("session.sftp.emptyTitle") : t("workspace.sftp.selectHost")}
         filterPlaceholder={t("workspace.sftp.filterPlaceholder")}
-        onBack={selectedSession && remotePath !== "/" ? () => navigateRemote(parentSftpPath(remotePath)) : undefined}
+        onBack={selectedSession && remotePath !== "/" && remotePath !== "." ? () => navigateRemote(parentSftpPath(remotePath)) : undefined}
         onBreadcrumbSelect={(item) => { if (selectedSession) navigateRemote(item.id) }}
         onEntrySelect={(entry) => setSelectedRemoteId(entry.id)}
         onEntryOpen={(entry) => {
@@ -579,12 +579,10 @@ function PaneBreadcrumb({ items, onBack, onSelect }: { items: readonly PaneBread
 
 function FileTableHeader(): ReactElement {
   const { t } = useI18n()
+  const columns = [t("session.sftp.column.name"), t("session.sftp.column.dateModified"), t("session.sftp.column.size"), t("session.sftp.column.kind")]
   return (
     <div className="sftp-file-table-header" role="row">
-      <span role="columnheader">{t("session.sftp.column.name")}</span>
-      <span role="columnheader">{t("session.sftp.column.dateModified")}</span>
-      <span role="columnheader">{t("session.sftp.column.size")}</span>
-      <span role="columnheader">{t("session.sftp.column.kind")}</span>
+      {columns.map((label) => <span key={label} role="columnheader" title={label}>{label}</span>)}
     </div>
   )
 }

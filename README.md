@@ -54,7 +54,7 @@ release boundary. The v0.7 candidate builds on the SFTP foundation with a
 main-process service, typed bridge, local and remote directory browsing,
 fixture integration tests, and an independent transfer model. Its browser preview
 fallback remains demo-only and never stands in for a real SSH/SFTP connection.
-See the [v0.7 RC1 verification record](docs/releases/v0.7.0-rc.1-verification.md).
+See the [v0.7 RC2 verification record](docs/releases/v0.7.0-rc.2-verification.md).
 
 The RC1 candidate was published from tag `v0.6.0-rc.1`; GitHub Actions builds
 the six Windows/macOS installer and archive assets and marks the GitHub Release

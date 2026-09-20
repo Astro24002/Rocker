@@ -258,11 +258,11 @@ function createBrowserPreviewBridge(): RockerBridge {
     // Browser preview only: this in-memory route never represents a real SSH/SFTP connection.
     sftp: {
       listLocal: async (path): Promise<SftpDirectory> => ({
-        path: path?.trim() || "/Users/rock",
+        path: path?.trim() || "/Users/rock/Desktop",
         entries: [
-          { name: "Documents", path: "/Users/rock/Documents", type: "directory", modifiedAt: new Date(0).toISOString() },
-          { name: "Downloads", path: "/Users/rock/Downloads", type: "directory", modifiedAt: new Date(0).toISOString() },
-          { name: "notes.txt", path: "/Users/rock/notes.txt", type: "file", size: 768, modifiedAt: new Date(0).toISOString() }
+          { name: "Documents", path: "/Users/rock/Desktop/Documents", type: "directory", modifiedAt: new Date(0).toISOString() },
+          { name: "Downloads", path: "/Users/rock/Desktop/Downloads", type: "directory", modifiedAt: new Date(0).toISOString() },
+          { name: "notes.txt", path: "/Users/rock/Desktop/notes.txt", type: "file", size: 768, modifiedAt: new Date(0).toISOString() }
         ]
       }),
       open: async (workspaceId, hostId) => {
@@ -273,10 +273,13 @@ function createBrowserPreviewBridge(): RockerBridge {
       list: async (workspaceId, path): Promise<SftpDirectory> => {
         const workspace = mockSftpWorkspaces.get(workspaceId)
         if (!workspace) throw new Error("SFTP workspace was not opened")
-        const normalized = path.trim() || "/"
+        const normalized = path === "." ? "/home/rock" : path.trim() || "/"
         return {
           path: normalized.startsWith("/") ? normalized : `/${normalized}`,
-          entries: normalized === "/" ? [
+          entries: normalized === "/home/rock" ? [
+            { name: "projects", path: "/home/rock/projects", type: "directory" },
+            { name: "README.md", path: "/home/rock/README.md", type: "file", size: 1_024, modifiedAt: new Date(0).toISOString() }
+          ] : normalized === "/" ? [
             { name: "home", path: "/home", type: "directory" },
             { name: "README.md", path: "/README.md", type: "file", size: 1_024, modifiedAt: new Date(0).toISOString() }
           ] : []

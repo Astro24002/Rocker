@@ -112,8 +112,13 @@ jobs:
               --repo "$GITHUB_REPOSITORY"
               --verify-tag
               --title "Rocker $GITHUB_REF_NAME"
-              --generate-notes
             )
+            notes_file="docs/releases/${GITHUB_REF_NAME}-notes.md"
+            if [ -f "$notes_file" ]; then
+              release_args+=(--notes-file "$notes_file")
+            else
+              release_args+=(--generate-notes)
+            fi
             if [[ "$GITHUB_REF_NAME" == *-* ]]; then
               release_args+=(--prerelease)
             fi

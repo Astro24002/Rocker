@@ -87,6 +87,17 @@ describe("Sidebar session actions", () => {
     expect(onNavigate).not.toHaveBeenCalled()
   })
 
+  it("does not override the Host forwarding route for a rule-backed PF session", () => {
+    const onNavigate = vi.fn()
+    const onSessionActivate = vi.fn()
+    const pfSession = { id: "pf-rule", hostId: "host-1", label: "G11", state: "connected" as const, kind: "pf" as const, profileId: "profile-1", forwardingStatus: "forwarding" as const }
+    render(<I18nProvider><Sidebar width={220} activeNav="hosts" sessions={[pfSession]} onNavigate={onNavigate} onSessionActivate={onSessionActivate} /></I18nProvider>)
+
+    fireEvent.click(screen.getByRole("button", { name: "PF G11" }))
+    expect(onSessionActivate).toHaveBeenCalledWith(pfSession.id)
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
   it("dispatches the shared Close command from the row close button without activating the session", () => {
     const onNavigate = vi.fn()
     const onSessionActivate = vi.fn()

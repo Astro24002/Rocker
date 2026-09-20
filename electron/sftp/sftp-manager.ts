@@ -157,9 +157,13 @@ export class SftpManager {
 
   public async list(workspaceId: string, path: string, owner: RuntimeOwner): Promise<SftpDirectory> {
     const record = this.requireWorkspace(workspaceId, owner)
-    const normalizedPath = normalizeRemotePath(path)
-    return this.withSftp(record, (sftp) => new Promise<SftpDirectory>((resolve, reject) => {
-      sftp.readdir(normalizedPath, (error, entries) => {
+    return this.withSftp(record, async (sftp) => {
+      const normalizedPath = path === "."
+        ? normalizeRemotePath(await new Promise<string>((resolve, reject) => {
+            sftp.realpath(".", (error, resolved) => error ? reject(error) : resolve(resolved))
+          }))
+        : normalizeRemotePath(path)
+      return new Promise<SftpDirectory>((resolve, reject) => sftp.readdir(normalizedPath, (error, entries) => {
         if (error) {
           reject(error)
           return
@@ -168,8 +172,8 @@ export class SftpManager {
           path: normalizedPath,
           entries: entries.map((entry) => toDirectoryEntry(normalizedPath, entry))
         })
-      })
-    }))
+      }))
+    })
   }
 
   public async mkdir(workspaceId: string, path: string, owner: RuntimeOwner): Promise<void> {

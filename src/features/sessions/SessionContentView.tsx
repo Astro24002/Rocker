@@ -351,14 +351,12 @@ function PfSessionView({
         const forwardingId = match.runtime?.id
         const state = forwardingToSessionState(forwardingStatus)
         if (
-          session.label === match.profile.name
-          && session.forwardingId === forwardingId
+          session.forwardingId === forwardingId
           && session.forwardingStatus === forwardingStatus
           && session.state === state
         ) return
         onPatch(session.id, {
           kind: "pf",
-          label: match.profile.name,
           forwardingId,
           forwardingStatus,
           state
@@ -375,7 +373,7 @@ function PfSessionView({
       cancelled = true
       unsubscribe?.()
     }
-  }, [bridge, onPatch, session.forwardingId, session.forwardingStatus, session.hostId, session.id, session.label, session.profileId, session.state])
+  }, [bridge, onPatch, session.forwardingId, session.forwardingStatus, session.hostId, session.id, session.profileId, session.state])
 
   const profile = row?.profile
   const runtime = row?.runtime

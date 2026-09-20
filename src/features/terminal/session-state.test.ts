@@ -158,7 +158,7 @@ describe("terminal workspace state", () => {
     state = applyTerminalState(state, { kind: "state", sessionId: "sftp", channelGeneration: 1, state: "connected" })
     state = attachChannel(state, { sessionId: "sftp", hostId: "host-a", channelGeneration: 2, state: "connected" })
 
-    expect(state.sessions[0]).toMatchObject({ state: "idle", kind: "sftp", browser: { path: "/", entries: [], loading: false } })
+    expect(state.sessions[0]).toMatchObject({ state: "idle", kind: "sftp", browser: { path: ".", entries: [], loading: false } })
     expect(state.sessions[0]).not.toHaveProperty("channelGeneration")
   })
 
@@ -192,7 +192,7 @@ describe("terminal workspace state", () => {
     expect(state.activeSessionId).toBe("ssh")
     expect(state.sessions).toHaveLength(1)
 
-    state = openSession(state, { id: "pf", hostId: "host-a", label: "Web", kind: "pf", profileId: "profile-1" })
+    state = openSession(state, { id: "pf", hostId: "host-a", label: "Host A", kind: "pf", profileId: "profile-1" })
     state = synchronizePortForwardingSessions(state, [{
       profile: {
         id: "profile-1",
@@ -209,6 +209,6 @@ describe("terminal workspace state", () => {
     }])
 
     expect(state.sessions).toHaveLength(2)
-    expect(state.sessions[1]).toMatchObject({ label: "Web renamed", forwardingStatus: "stopped", state: "disconnected" })
+    expect(state.sessions[1]).toMatchObject({ label: "Host A", forwardingStatus: "stopped", state: "disconnected" })
   })
 })

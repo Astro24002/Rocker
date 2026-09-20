@@ -14,6 +14,7 @@ export interface SshTestServerOptions {
   welcome?: string
   onPtyResize?: (info: WindowChangeInfo) => void
   sftpFiles?: Record<string, string>
+  sftpHome?: string
 }
 
 export interface SshResourceSnapshot {
@@ -169,7 +170,7 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
       })
       session.on("sftp", (sftpAccept, sftpReject) => {
         try {
-          installSftpFixture(sftpAccept(), sftpRoot)
+          installSftpFixture(sftpAccept(), sftpRoot, options.sftpHome)
         } catch {
           sftpReject()
         }
@@ -259,7 +260,7 @@ type FixtureHandle =
   | { kind: "file"; file: FileHandle }
   | { kind: "directory"; path: string; entries: string[]; index: number }
 
-function installSftpFixture(sftp: SFTPWrapper, root: string): void {
+function installSftpFixture(sftp: SFTPWrapper, root: string, home = "/"): void {
   const handles = new Map<string, FixtureHandle>()
   let nextHandle = 1
   const allocateHandle = (handle: FixtureHandle): Buffer => {
@@ -272,7 +273,7 @@ function installSftpFixture(sftp: SFTPWrapper, root: string): void {
 
   sftp.on("REALPATH", (id: number, remotePath: string) => {
     void Promise.resolve().then(() => {
-      const normalized = normalizeFixtureRemotePath(remotePath)
+      const normalized = remotePath === "." ? home : normalizeFixtureRemotePath(remotePath)
       sftp.name(id, [{ filename: normalized, longname: normalized, attrs: emptySftpAttributes() }])
     }).catch((error: unknown) => sendSftpError(sftp, id, error))
   })

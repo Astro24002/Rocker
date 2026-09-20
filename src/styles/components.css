@@ -742,7 +742,7 @@ textarea:focus-visible {
   overflow: hidden;
   margin: 0;
   color: var(--sftp-text);
-  font-size: 13px;
+  font-size: 21px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -777,7 +777,7 @@ textarea:focus-visible {
 
 .sftp-pane-control {
   display: inline-flex;
-  min-height: 28px;
+  min-height: 34px;
   align-items: center;
   gap: 5px;
   padding: 0 7px;
@@ -785,7 +785,7 @@ textarea:focus-visible {
   border-radius: 4px;
   color: var(--sftp-text-secondary);
   background: transparent;
-  font-size: 11px;
+  font-size: 19px;
   font-weight: 550;
   cursor: pointer;
 }
@@ -807,7 +807,7 @@ textarea:focus-visible {
 
 .sftp-pane-popover {
   position: absolute;
-  top: 36px;
+  top: 44px;
   right: 12px;
   z-index: 8;
   border: 1px solid var(--sftp-line-strong);
@@ -819,8 +819,8 @@ textarea:focus-visible {
 
 .sftp-filter-popover {
   display: flex;
-  width: min(240px, calc(100% - 24px));
-  height: 34px;
+  width: min(300px, calc(100% - 24px));
+  height: 40px;
   align-items: center;
   gap: 7px;
   padding: 0 9px;
@@ -834,7 +834,7 @@ textarea:focus-visible {
   outline: 0;
   color: var(--sftp-text);
   background: transparent;
-  font-size: 12px;
+  font-size: 20px;
 }
 
 .sftp-filter-popover input::placeholder {
@@ -843,7 +843,7 @@ textarea:focus-visible {
 
 .sftp-actions-menu {
   display: grid;
-  width: 190px;
+  width: min(270px, calc(100% - 24px));
   overflow: hidden;
   padding: 4px;
 }
@@ -851,7 +851,7 @@ textarea:focus-visible {
 .sftp-actions-menu button {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
-  min-height: 30px;
+  min-height: 38px;
   align-items: center;
   gap: 7px;
   padding: 0 8px;
@@ -859,7 +859,7 @@ textarea:focus-visible {
   border-radius: 3px;
   color: var(--sftp-text-secondary);
   background: transparent;
-  font-size: 12px;
+  font-size: 20px;
   text-align: left;
   cursor: pointer;
 }
@@ -884,7 +884,7 @@ textarea:focus-visible {
 .sftp-actions-empty {
   padding: 8px;
   color: var(--sftp-text-muted);
-  font-size: 11px;
+  font-size: 19px;
 }
 
 .sftp-pane-breadcrumb {
@@ -943,13 +943,13 @@ textarea:focus-visible {
 .sftp-pane-breadcrumb li button {
   overflow: hidden;
   max-width: 160px;
-  height: 24px;
+  height: 32px;
   padding: 0 5px;
   border: 0;
   border-radius: 3px;
   color: var(--sftp-text-secondary);
   background: transparent;
-  font-size: 11px;
+  font-size: 19px;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
@@ -979,7 +979,7 @@ textarea:focus-visible {
   border-bottom: 1px solid var(--sftp-line-strong);
   color: var(--sftp-text-secondary);
   background: var(--sftp-header);
-  font-size: 11px;
+  font-size: 19px;
   font-weight: 600;
 }
 
@@ -987,6 +987,12 @@ textarea:focus-visible {
 .sftp-file-row > span {
   min-width: 0;
   padding-right: 10px;
+}
+
+.sftp-file-table-header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sftp-file-table-body {
@@ -1003,12 +1009,12 @@ textarea:focus-visible {
 }
 
 .sftp-file-row {
-  height: 36px;
+  height: 44px;
   padding: 0 12px;
   border-bottom: 1px solid var(--sftp-line);
   color: var(--sftp-text);
   background: var(--sftp-pane);
-  font-size: 12px;
+  font-size: 20px;
   cursor: default;
   user-select: none;
 }
@@ -1047,7 +1053,7 @@ textarea:focus-visible {
 
 .sftp-file-meta {
   color: var(--sftp-text-secondary);
-  font-size: 11px;
+  font-size: 19px;
 }
 
 .sftp-pane-message {
@@ -1056,7 +1062,7 @@ textarea:focus-visible {
   place-items: center;
   padding: 12px;
   color: var(--sftp-text-muted);
-  font-size: 12px;
+  font-size: 20px;
   text-align: center;
 }
 

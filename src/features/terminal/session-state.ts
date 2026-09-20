@@ -156,7 +156,7 @@ function createSession(input: OpenSessionInput): WorkspaceSession {
       kind: "sftp",
       state: "idle",
       browser: {
-        path: input.path ?? "/",
+        path: input.path ?? ".",
         entries: [],
         loading: false
       }
@@ -301,7 +301,6 @@ export function synchronizePortForwardingSessions(
     if (isPortForwardingSession(existing)) {
       return patchSession(current, existing.id, {
         kind: "pf",
-        label: profile.name,
         forwardingId: runtime?.id,
         forwardingStatus,
         state: forwardingToSessionState(forwardingStatus)
