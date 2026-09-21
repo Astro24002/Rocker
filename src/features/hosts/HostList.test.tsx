@@ -110,9 +110,10 @@ describe("HostList", () => {
 
     expect(screen.getByPlaceholderText("Find a host or ssh user@hostname")).toBeInTheDocument()
     expect(screen.getByText("Server A")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Server A, SSH, root" })).toHaveTextContent("SSH · root")
+    expect(screen.getByRole("button", { name: "Server A, SSH, root" })).toHaveTextContent("SSH, root")
     expect(screen.getByLabelText("ubuntu platform")).toBeInTheDocument()
     expect(screen.queryByText("10.0.0.11")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Favorite Host" })).toHaveAttribute("aria-pressed", "false")
 
     const connect = screen.getByRole("button", { name: /Connect/ })
     expect(connect).toBeDisabled()
@@ -120,6 +121,23 @@ describe("HostList", () => {
     expect(connect).toBeEnabled()
     fireEvent.click(connect)
     expect(onCommandConnect).toHaveBeenCalledWith("ssh root@127.0.0.1 -p 27001")
+  })
+
+  it("keeps right-hand favorite and edit actions separate from selecting or connecting the host", async () => {
+    const onEdit = vi.fn()
+    const onConnect = vi.fn()
+    const onToggleFavorite = vi.fn().mockResolvedValue({ ...host, favorite: true })
+    render(<I18nProvider><HostList hosts={[host]} onConnect={onConnect} onAdd={vi.fn()} onEdit={onEdit} onImport={vi.fn()} onDuplicate={vi.fn()} onToggleFavorite={onToggleFavorite} onRemove={vi.fn()} /></I18nProvider>)
+
+    const card = screen.getByRole("button", { name: "Server A, SSH, root" })
+    fireEvent.click(screen.getByRole("button", { name: "Favorite Host" }))
+    await waitFor(() => expect(onToggleFavorite).toHaveBeenCalledWith(host))
+    fireEvent.click(screen.getByRole("button", { name: "Edit Host" }))
+    expect(onEdit).toHaveBeenCalledWith(host)
+    expect(card).toHaveAttribute("aria-pressed", "false")
+    expect(onConnect).not.toHaveBeenCalled()
+    fireEvent.contextMenu(card)
+    expect(screen.getByRole("menuitem", { name: "Favorite Host" })).toBeInTheDocument()
   })
 
   it("localizes the host command search affordance", () => {

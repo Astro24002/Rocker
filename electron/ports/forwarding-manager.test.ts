@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events"
-import type { Socket } from "node:net"
-import type { Client, ConnectConfig, HostFingerprintVerifier } from "ssh2"
+import { connect, type Socket } from "node:net"
+import { PassThrough } from "node:stream"
+import type { Client, ClientChannel, ConnectConfig, HostFingerprintVerifier } from "ssh2"
 import { describe, expect, it, vi } from "vitest"
 import {
   SshConnectionManager,
@@ -44,6 +45,47 @@ const profile: ForwardingProfile = {
 }
 
 describe("ForwardingManager", () => {
+  it("keeps the same forward available when the remote service recovers", async () => {
+    const connections = new FakeConnections()
+    const remote = new PassThrough()
+    const restored = new PassThrough()
+    const forwardOut = vi.fn()
+      .mockImplementationOnce(() => { throw new Error("Not connected") })
+      .mockImplementationOnce((_src: string, _port: number, _dst: string, _remotePort: number, callback: (error: Error, channel?: ClientChannel) => void) => {
+        callback(new Error("(SSH) Channel open failure: Connection refused"))
+      })
+      .mockImplementationOnce((_src: string, _port: number, _dst: string, _remotePort: number, callback: (error: undefined, channel: ClientChannel) => void) => {
+        callback(undefined, remote as unknown as ClientChannel)
+      })
+      .mockImplementationOnce((_src: string, _port: number, _dst: string, _remotePort: number, callback: (error: undefined, channel: ClientChannel) => void) => {
+        callback(undefined, restored as unknown as ClientChannel)
+      })
+    vi.spyOn(connections, "getClientForConnection").mockReturnValue({ forwardOut } as unknown as Client)
+    const forwards = new ForwardingManager(connections)
+    const forward = await forwards.start(connectionId, { ...loopbackSpec, localPort: 0 }, owner)
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const socket = connect(forward.localPort, "127.0.0.1")
+      socket.on("error", () => undefined)
+      const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()))
+      await waitFor(() => forwardOut.mock.calls.length === attempt + 1)
+      if (attempt === 2) remote.emit("error", new Error("SSH channel lost"))
+      await closed
+      expect(forwards.get(forward.id)).toMatchObject({ status: "forwarding" })
+    }
+
+    const socket = connect(forward.localPort, "127.0.0.1")
+    socket.on("error", () => undefined)
+    const echoed = new Promise<string>((resolve) => socket.once("data", (data: Buffer) => resolve(data.toString())))
+    socket.once("connect", () => socket.write("service restored"))
+    expect(await echoed).toBe("service restored")
+    expect(forwardOut).toHaveBeenCalledTimes(4)
+    expect(forwards.get(forward.id)).toMatchObject({ localPort: forward.localPort, status: "forwarding" })
+    socket.destroy()
+    await forwards.stop(forward.id)
+    expect(connections.activeLeaseCount()).toBe(0)
+  })
+
   it("returns count-only resources and returns to baseline after stopping a forward", async () => {
     const connections = new FakeConnections()
     const forwards = new ForwardingManager(connections, { createListener: createListenerFactory().create })

@@ -29,11 +29,14 @@ describe("UI quality stylesheet contract", () => {
   it("fits up to seven Host cards across the available workspace width", () => {
     expect(layoutStyles).toMatch(/\.host-card-content\s*\{[^}]*container-type:\s*inline-size;/)
     expect(componentStyles).toMatch(/\.host-card-grid\s*\{[^}]*grid-template-columns:\s*repeat\(7, minmax\(0, 1fr\)\);/)
-    for (const [width, columns] of [[1170, 6], [1000, 5], [830, 4], [660, 3], [490, 2]]) {
+    for (const [width, columns] of [[1600, 6], [1380, 5], [1140, 4], [920, 3], [680, 2]]) {
       expect(componentStyles).toContain(`@container (max-width: ${width}px) {\n  .host-card-grid { grid-template-columns: repeat(${columns}, minmax(0, 1fr)); }`)
     }
-    expect(componentStyles).toContain("@container (max-width: 320px) {\n  .host-card-grid { grid-template-columns: 1fr; }")
+    expect(componentStyles).toContain("@container (max-width: 460px) {\n  .host-card-grid { grid-template-columns: 1fr; }")
     expect(componentStyles).toMatch(/\.host-card-copy small\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/)
+    expect(componentStyles).toMatch(/\.host-card\s*\{[^}]*min-height:\s*76px;[^}]*align-items:\s*center;[^}]*gap:\s*14px;[^}]*padding:\s*10px 66px 10px 10px;/)
+    expect(componentStyles).toMatch(/\.host-card-inline-actions\s*\{[^}]*position:\s*absolute;[^}]*right:\s*8px;[^}]*top:\s*50%;[^}]*opacity:\s*0;[^}]*pointer-events:\s*none;/)
+    expect(componentStyles).toMatch(/\.host-card-shell:hover \.host-card-inline-actions,[\s\S]*?\.host-card-shell:focus-within \.host-card-inline-actions\s*\{[^}]*opacity:\s*1;[^}]*pointer-events:\s*auto;/)
   })
 
   it("enlarges Port Forwarding text while allowing narrow rule tables to scroll", () => {
@@ -44,6 +47,7 @@ describe("UI quality stylesheet contract", () => {
     expect(componentStyles).toMatch(/\.forwarding-form label\s*\{[^}]*font-size:\s*12px;/)
     expect(layoutStyles).toMatch(/\.ports-overview-table,\s*\.ports-host-table\s*\{\s*overflow-x:\s*auto;/)
     expect(layoutStyles).toMatch(/\.ports-overview-row,[\s\S]*?\.ports-profile-row\s*\{\s*min-width:\s*880px;/)
+    expect(layoutStyles).toMatch(/\.ports-overview-table \.ports-heading,\s*\.ports-overview-row\s*\{\s*min-width:\s*700px;/)
   })
 
   it("locks the SFTP workspace to the reference split-pane table geometry", () => {
@@ -86,12 +90,12 @@ describe("UI quality stylesheet contract", () => {
     const brand = componentStyles.match(/\.sidebar-brand\s*\{([^}]*)\}/)?.[1]
     const nav = componentStyles.match(/\.nav-item\s*\{([^}]*)\}/)?.[1]
     const session = componentStyles.match(/^\.session-activate-button\s*\{([^}]*)\}/m)?.[1]
-    expect(brand).toMatch(/gap:\s*14px;/)
-    expect(brand).toMatch(/padding:\s*0 23px;/)
+    expect(brand).toMatch(/gap:\s*15px;/)
+    expect(brand).toMatch(/padding:\s*0 24px;/)
     expect(brand).toMatch(/font-size:\s*17px;/)
-    expect(componentStyles).toMatch(/\.sidebar-brand img\s*\{[^}]*width:\s*26px;[^}]*height:\s*26px;/)
-    expect(23 + 26 / 2).toBe(12 + 12 + 24 / 2)
-    expect(23 + 26 + 14).toBe(12 + 12 + 24 + 15)
+    expect(componentStyles).toMatch(/\.sidebar-brand img\s*\{[^}]*width:\s*24px;[^}]*height:\s*24px;/)
+    expect(24 + 24 / 2).toBe(12 + 12 + 24 / 2)
+    expect(24 + 24 + 15).toBe(12 + 12 + 24 + 15)
     expect(nav).toMatch(/grid-template-columns:\s*24px minmax\(0, 1fr\);/)
     expect(nav).toMatch(/column-gap:\s*15px;/)
     expect(nav).toMatch(/padding:\s*0 12px;/)
@@ -101,11 +105,11 @@ describe("UI quality stylesheet contract", () => {
     expect(session).toMatch(/column-gap:\s*15px;/)
     expect(session).toMatch(/padding:\s*0 40px 0 12px;/)
     expect(componentStyles).toMatch(/\.session-name\s*\{[^}]*font-size:\s*14px;[^}]*font-weight:\s*600;/)
-    expect(componentStyles).toMatch(/\.session-type-icon\s*\{[^}]*width:\s*22px;[^}]*height:\s*22px;[^}]*place-self:\s*center;/)
-    expect(componentStyles).toMatch(/\.session-type-icon\[data-label-length="2"\]\s*\{[^}]*font-size:\s*10px;/)
-    expect(componentStyles).toMatch(/\.session-type-icon\[data-label-length="4"\]\s*\{[^}]*font-size:\s*7\.5px;/)
+    expect(componentStyles).toMatch(/\.session-type-icon\s*\{[^}]*width:\s*20px;[^}]*height:\s*20px;[^}]*place-self:\s*center;/)
+    expect(componentStyles).toMatch(/\.session-type-icon\[data-label-length="2"\]\s*\{[^}]*font-size:\s*9\.5px;/)
+    expect(componentStyles).toMatch(/\.session-type-icon\[data-label-length="4"\]\s*\{[^}]*font-size:\s*7px;/)
     expect(componentStyles).toMatch(/\.primary-nav\s*\{[^}]*gap:\s*5px;/)
-    expect(componentStyles).toMatch(/\.nav-item > svg\s*\{[^}]*width:\s*22px;[^}]*height:\s*22px;[^}]*justify-self:\s*center;/)
+    expect(componentStyles).toMatch(/\.nav-item > svg\s*\{[^}]*width:\s*20px;[^}]*height:\s*20px;[^}]*justify-self:\s*center;/)
     expect(componentStyles).toMatch(/\.session-activity-dot\s*\{[^}]*position:\s*absolute;[^}]*width:\s*6px;[^}]*height:\s*6px;[^}]*background:\s*var\(--success\);[^}]*pointer-events:\s*none;/)
   })
 

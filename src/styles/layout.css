@@ -298,6 +298,11 @@
   min-width: 880px;
 }
 
+.ports-overview-table .ports-heading,
+.ports-overview-row {
+  min-width: 700px;
+}
+
 @media (max-width: 980px) {
   .ports-content {
     padding: 16px 18px;

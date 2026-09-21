@@ -270,13 +270,13 @@ export function HostList({
                   }}
                 >
                   <HostPlatformMark host={host} />
-                  <span className="host-card-copy"><strong>{host.name}</strong><small><b>SSH</b> · {host.username}</small></span>
+                  <span className="host-card-copy"><strong>{host.name}</strong><small><b>SSH</b>, {host.username}</small></span>
                 </button>
                 <div className="host-card-inline-actions">
-                  <button aria-label={host.favorite ? t("hosts.action.unfavorite") : t("hosts.action.favorite")} className="icon-button" type="button" disabled={disabled || actionBusy} onClick={(event) => { event.stopPropagation(); void runHostAction(async () => { await onToggleFavorite(host) }) }}>
-                    {host.favorite ? <Star aria-hidden="true" size={14} fill="currentColor" /> : <StarOff aria-hidden="true" size={14} />}
+                  <button aria-label={host.favorite ? t("hosts.action.unfavorite") : t("hosts.action.favorite")} aria-pressed={host.favorite} className="icon-button" title={host.favorite ? t("hosts.action.unfavorite") : t("hosts.action.favorite")} type="button" disabled={disabled || actionBusy} onClick={(event) => { event.stopPropagation(); void runHostAction(async () => { await onToggleFavorite(host) }) }}>
+                    <Star aria-hidden="true" size={14} fill={host.favorite ? "currentColor" : "none"} />
                   </button>
-                  <button aria-label={t("hosts.action.edit")} className="icon-button" type="button" disabled={disabled} onClick={(event) => { event.stopPropagation(); onEdit(host) }}><Pencil aria-hidden="true" size={14} /></button>
+                  <button aria-label={t("hosts.action.edit")} className="icon-button" title={t("hosts.action.edit")} type="button" disabled={disabled} onClick={(event) => { event.stopPropagation(); onEdit(host) }}><Pencil aria-hidden="true" size={14} /></button>
                 </div>
               </div>
             ))}

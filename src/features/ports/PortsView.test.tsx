@@ -1,11 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import { I18nProvider } from "../../i18n"
 import { PortsView } from "./PortsView"
 
 describe("PortsView", () => {
-  it("renders the global overview without a create action and can restart a stopped profile", async () => {
+  it("opens details separately from starting and pausing a saved rule", async () => {
     const startProfile = vi.fn(async () => ({
       id: "runtime-1",
       profileId: "profile-1",
@@ -31,9 +31,110 @@ describe("PortsView", () => {
 
     expect(screen.queryByRole("button", { name: /new forward/i })).not.toBeInTheDocument()
     expect(await screen.findByText("Web console")).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "host-a" })).toBeInTheDocument()
+    expect(screen.getByText("Stopped")).toBeInTheDocument()
+    expect(screen.queryByText("Ready to restart")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "View details" }))
+    expect(onOpenSession).toHaveBeenCalledWith(profileFixture(), undefined)
+    onOpenSession.mockClear()
     fireEvent.click(screen.getByRole("button", { name: "Start forwarding" }))
     expect(startProfile).toHaveBeenCalledWith("profile-1")
-    await waitFor(() => expect(onOpenSession).toHaveBeenCalledWith(profileFixture(), expect.objectContaining({ id: "runtime-1", status: "forwarding" })))
+    const pause = await screen.findByRole("button", { name: "Pause forwarding" })
+    expect(onOpenSession).not.toHaveBeenCalled()
+    fireEvent.click(pause)
+    await waitFor(() => expect(bridge.ports.stop).toHaveBeenCalledWith("runtime-1"))
+    expect(await screen.findByRole("button", { name: "Start forwarding" })).toBeInTheDocument()
+    expect(screen.getByText("Stopped")).toBeInTheDocument()
+    expect(onOpenSession).not.toHaveBeenCalled()
+  })
+
+  it("groups by Host, showing only each Host's two newest rules until independently expanded", async () => {
+    const profiles = [
+      { ...profileFixture(), id: "a-old", name: "A old", createdAt: "2026-09-01T00:00:00Z" },
+      { ...profileFixture(), id: "b-new", hostId: "host-b", name: "B new", createdAt: "2026-09-06T00:00:00Z" },
+      { ...profileFixture(), id: "a-new", name: "A new", createdAt: "2026-09-05T00:00:00Z" },
+      { ...profileFixture(), id: "a-middle", name: "A middle", createdAt: "2026-09-03T00:00:00Z" },
+      { ...profileFixture(), id: "b-old", hostId: "host-b", name: "B old", createdAt: "2026-09-02T00:00:00Z" },
+      { ...profileFixture(), id: "b-middle", hostId: "host-b", name: "B middle", createdAt: "2026-09-04T00:00:00Z" }
+    ]
+    const bridge = { ports: { listOverview: vi.fn(async () => profiles.map((profile) => ({ profile }))) } } as unknown as RockerBridge
+    const hosts = [
+      { id: "host-a", name: "G11", host: "10.0.0.1", port: 22, username: "root", authMethod: "password" as const, favorite: false, notes: "" },
+      { id: "host-b", name: "G12", host: "10.0.0.2", port: 22, username: "deploy", authMethod: "password" as const, favorite: false, notes: "" }
+    ]
+    const onOpenSession = vi.fn()
+    render(<I18nProvider><PortsView bridge={bridge} mode="global" hosts={hosts} onOpenSession={onOpenSession} /></I18nProvider>)
+
+    const first = await screen.findByRole("region", { name: "G12" })
+    const second = screen.getByRole("region", { name: "G11" })
+    expect(screen.getAllByRole("region")).toEqual([first, second])
+    expect(within(first).getByRole("heading", { name: "G12" })).toBeInTheDocument()
+    expect(within(first).queryByText("deploy@10.0.0.2:22")).not.toBeInTheDocument()
+    expect(within(first).getByText("Rule")).toBeInTheDocument()
+    expect(within(first).getByText("Route")).toBeInTheDocument()
+    expect(within(first).getAllByText(/^B (new|middle)$/).map((element) => element.textContent)).toEqual(["B new", "B middle"])
+    expect(within(second).getAllByText(/^A (new|middle)$/).map((element) => element.textContent)).toEqual(["A new", "A middle"])
+    expect(screen.queryByText("A old")).not.toBeInTheDocument()
+    expect(screen.queryByText("B old")).not.toBeInTheDocument()
+
+    const showA = within(second).getByRole("button", { name: "Show 1 more" })
+    expect(showA).toHaveAttribute("aria-expanded", "false")
+    fireEvent.click(showA)
+    expect(within(second).getByText("A old")).toBeInTheDocument()
+    expect(within(first).queryByText("B old")).not.toBeInTheDocument()
+    expect(within(second).getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true")
+    fireEvent.click(within(second).getByRole("button", { name: "Show less" }))
+    expect(within(second).queryByText("A old")).not.toBeInTheDocument()
+    fireEvent.click(within(first).getByRole("button", { name: "Show 1 more" }))
+    const oldB = within(first).getByText("B old").closest(".ports-overview-row")
+    expect(oldB).not.toBeNull()
+    fireEvent.click(within(oldB as HTMLElement).getByRole("button", { name: "View details" }))
+    expect(onOpenSession).toHaveBeenCalledWith(profiles[4], undefined)
+  })
+
+  it("keeps a removed Host's rules accessible under its own group", async () => {
+    const bridge = { ports: { listOverview: vi.fn(async () => [{ profile: profileFixture() }]), removeProfile: vi.fn(async () => undefined) } } as unknown as RockerBridge
+    const onProfileRemoved = vi.fn()
+    render(<I18nProvider><PortsView bridge={bridge} mode="global" hosts={[]} onProfileRemoved={onProfileRemoved} /></I18nProvider>)
+
+    const group = await screen.findByRole("region", { name: "host-a" })
+    expect(within(group).getByRole("heading", { name: "host-a" })).toBeInTheDocument()
+    expect(within(group).getByText("Web console")).toBeInTheDocument()
+    expect(within(group).getByRole("button", { name: "SSH command unavailable for this Host" })).toBeDisabled()
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false)
+    try {
+      fireEvent.click(within(group).getByRole("button", { name: "Remove forwarding profile" }))
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Web console"))
+      expect(bridge.ports.removeProfile).not.toHaveBeenCalled()
+      expect(onProfileRemoved).not.toHaveBeenCalled()
+      confirm.mockReturnValue(true)
+      fireEvent.click(within(group).getByRole("button", { name: "Remove forwarding profile" }))
+      await waitFor(() => expect(screen.queryByRole("region", { name: "host-a" })).not.toBeInTheDocument())
+      expect(bridge.ports.removeProfile).toHaveBeenCalledWith("profile-1")
+      expect(onProfileRemoved).toHaveBeenCalledWith("profile-1")
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
+  it("copies a valid SSH forwarding command without starting or navigating", async () => {
+    const writeText = vi.fn(async () => undefined)
+    const previousClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard")
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } })
+    try {
+      const bridge = { ports: { listOverview: vi.fn(async () => [{ profile: profileFixture() }]), startProfile: vi.fn() } } as unknown as RockerBridge
+      const hosts = [{ id: "host-a", name: "G11", host: "10.0.0.1", port: 2222, username: "root", authMethod: "agent" as const, favorite: false, notes: "" }]
+      const onOpenSession = vi.fn()
+      render(<I18nProvider><PortsView bridge={bridge} mode="global" hosts={hosts} onOpenSession={onOpenSession} /></I18nProvider>)
+      fireEvent.click(await screen.findByRole("button", { name: "Copy SSH command" }))
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith('ssh -N -L "127.0.0.1:18080:127.0.0.1:8080" -p 2222 "root@10.0.0.1"'))
+      expect(screen.getByRole("button", { name: "SSH command copied" })).toBeInTheDocument()
+      expect(bridge.ports.startProfile).not.toHaveBeenCalled()
+      expect(onOpenSession).not.toHaveBeenCalled()
+    } finally {
+      if (previousClipboard) Object.defineProperty(navigator, "clipboard", previousClipboard)
+      else Reflect.deleteProperty(navigator, "clipboard")
+    }
   })
 
   it("saves a Host-local profile without starting it", async () => {

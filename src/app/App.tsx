@@ -980,16 +980,6 @@ function Workspace() {
     if (host) openHostForwardingFromHost(host)
   }, [hosts, openHostForwardingFromHost])
 
-  const openHostWorkspace = useCallback((hostId: string): void => {
-    const host = hosts.find((candidate) => candidate.id === hostId)
-    if (host) {
-      openHostForwardingFromHost(host)
-      return
-    }
-    setHostForwardingHostId(hostId)
-    setActiveNav("host-port-forwarding")
-  }, [hosts, openHostForwardingFromHost])
-
   const openSearchForSession = useCallback((sessionOrId: WorkspaceSession | string): void => {
     const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId.id
     if (!workspaceRef.current.sessions.some((session) => session.id === sessionId)) return
@@ -1493,7 +1483,11 @@ function Workspace() {
               return <PortsView mode="host" bridge={bridge} hostId={hostForwardingHostId} hostName={host?.name} connectionId={hostConnectionId} session={forwardingSession} username={host?.username} bindAddress={settings.bindAddress} onOpenSession={openPfSession} />
             })()
           ) : activeNav === "port-forwarding" ? (
-            <PortsView mode="global" bridge={bridge} hosts={hosts} onOpenHost={openHostWorkspace} onOpenSession={openPfSession} />
+            <PortsView mode="global" bridge={bridge} hosts={hosts} onOpenSession={openPfSession} onProfileRemoved={(profileId) => {
+              setWorkspace((current) => current.sessions.reduce((next, session) => isPortForwardingSession(session) && session.profileId === profileId
+                ? patchSession(next, session.id, { kind: "pf", profileId: undefined, forwardingId: undefined, forwardingStatus: "stopped", state: "disconnected" })
+                : next, current))
+            }} />
           ) : activeNav === "sftp" ? (
             <SftpWorkspaceView
               hosts={hosts}

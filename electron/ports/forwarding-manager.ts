@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { createServer, type Socket } from "node:net"
+import type { ClientChannel } from "ssh2"
 import type {
   ConnectionCommandExecutor,
   ConnectionEvent,
@@ -377,34 +378,45 @@ export class ForwardingManager {
   }
 
   private forwardSocket(record: ForwardingRecord, listener: LocalListener | undefined, socket: Socket): void {
+    let remote: ClientChannel | undefined
+    socket.on("error", () => remote?.destroy())
+    socket.on("close", () => remote?.destroy())
     if (record.listener !== listener || record.info.status !== "forwarding") {
       socket.destroy()
       return
     }
     if (!record.info.connectionId) {
-      socket.destroy(new Error("SSH connection is not ready"))
+      socket.destroy()
       return
     }
     let client
     try {
       client = this.connections.getClientForConnection(record.info.connectionId)
-    } catch (error) {
-      socket.destroy(error instanceof Error ? error : undefined)
+    } catch {
+      socket.destroy()
       return
     }
-    client.forwardOut(
-      socket.remoteAddress ?? "127.0.0.1",
-      socket.remotePort ?? 0,
-      record.info.remoteAddress,
-      record.info.remotePort,
-      (error, stream) => {
-        if (error || !stream) {
-          socket.destroy(error ?? new Error("SSH forwarding channel was not opened"))
-          return
+    try {
+      client.forwardOut(
+        socket.remoteAddress ?? "127.0.0.1",
+        socket.remotePort ?? 0,
+        record.info.remoteAddress,
+        record.info.remotePort,
+        (error, stream) => {
+          if (error || !stream || socket.destroyed || record.listener !== listener || record.info.status !== "forwarding") {
+            stream?.destroy()
+            socket.destroy()
+            return
+          }
+          remote = stream
+          stream.on("error", () => socket.destroy())
+          stream.on("close", () => socket.destroy())
+          socket.pipe(stream).pipe(socket)
         }
-        socket.pipe(stream).pipe(socket)
-      }
-    )
+      )
+    } catch {
+      socket.destroy()
+    }
   }
 
   private handleConnectionEvent(event: ConnectionEvent): void {

@@ -1,13 +1,13 @@
-import { AlertTriangle, Clipboard, ExternalLink, PanelTopOpen, Pencil, Play, Plus, RefreshCw, Server, Square, Trash2, X } from "lucide-react"
+import { AlertTriangle, Check, ChevronDown, ChevronUp, Clipboard, ExternalLink, Eye, Pause, PanelTopOpen, Pencil, Play, Plus, RefreshCw, Server, Share2, Square, Trash2, X } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import type { ForwardingProfileRequest, ForwardingProfileView } from "../../../electron/ports/types"
 import type { ForwardingProfile } from "../../../electron/storage/types"
 import type { AppSettings, DiscoveredPort, ForwardingInfo, HostProfile, PortStatus } from "../../app/types"
-import type { TranslationKey } from "../../i18n/en"
 import { IconButton } from "../../components/IconButton"
 import { useI18n } from "../../i18n"
 import type { WorkspaceSession } from "../terminal/session-state"
+import { forwardingSshCommand } from "./forwarding-command"
 import { applyDiscoveredPorts, applyForwarding, createPortState, setPortError, setPortLoading } from "./port-state"
 
 interface PortsViewProps {
@@ -20,8 +20,8 @@ interface PortsViewProps {
   username?: string
   bindAddress?: AppSettings["bindAddress"]
   hosts?: readonly HostProfile[]
-  onOpenHost?(hostId: string): void
   onOpenSession?(profile: ForwardingProfile, runtime?: ForwardingInfo): void
+  onProfileRemoved?(profileId: string): void
 }
 
 export function PortsView(props: PortsViewProps) {
@@ -168,11 +168,34 @@ function LegacyPortsView({ bridge, connectionId, session, username, bindAddress 
   )
 }
 
-function GlobalPortsView({ bridge, hosts, onOpenHost, onOpenSession }: PortsViewProps) {
+function GlobalPortsView({ bridge, hosts, onOpenSession, onProfileRemoved }: PortsViewProps) {
   const { t } = useI18n()
   const [rows, setRows] = useState<ForwardingProfileView[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
+  const [expandedHosts, setExpandedHosts] = useState<Record<string, boolean>>({})
+  const [busyProfileId, setBusyProfileId] = useState<string>()
+  const [copiedProfileId, setCopiedProfileId] = useState<string>()
+
+  useEffect(() => {
+    if (!copiedProfileId) return
+    const timeout = window.setTimeout(() => setCopiedProfileId(undefined), 2000)
+    return () => window.clearTimeout(timeout)
+  }, [copiedProfileId])
+
+  const groups = useMemo(() => {
+    const byHost = new Map<string, ForwardingProfileView[]>()
+    for (const row of rows) {
+      const hostRows = byHost.get(row.profile.hostId) ?? []
+      hostRows.push(row)
+      byHost.set(row.profile.hostId, hostRows)
+    }
+    const createdAt = (row: ForwardingProfileView): number => Date.parse(row.profile.createdAt) || 0
+    return [...byHost.entries()].map(([hostId, profiles]) => ({
+      hostId,
+      profiles: profiles.sort((a, b) => createdAt(b) - createdAt(a) || a.profile.id.localeCompare(b.profile.id))
+    })).sort((a, b) => createdAt(b.profiles[0]) - createdAt(a.profiles[0]) || a.hostId.localeCompare(b.hostId))
+  }, [rows])
 
   const refresh = async (): Promise<void> => {
     setLoading(true)
@@ -197,30 +220,54 @@ function GlobalPortsView({ bridge, hosts, onOpenHost, onOpenSession }: PortsView
   }, [bridge])
 
   const restart = async (profile: ForwardingProfile): Promise<void> => {
+    setBusyProfileId(profile.id)
     try {
       const runtime = await bridge.ports.startProfile(profile.id)
       setRows((current) => current.map((row) => row.profile.id === profile.id ? { ...row, runtime } : row))
-      onOpenSession?.(profile, runtime)
+      setError(undefined)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusyProfileId(undefined)
     }
   }
 
-  const stop = async (runtime: ForwardingInfo): Promise<void> => {
+  const pause = async (profile: ForwardingProfile, runtime: ForwardingInfo): Promise<void> => {
+    setBusyProfileId(profile.id)
     try {
       await bridge.ports.stop(runtime.id)
       setRows((current) => current.map((row) => row.runtime?.id === runtime.id ? { ...row, runtime: { ...runtime, status: "stopped" } } : row))
+      setError(undefined)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusyProfileId(undefined)
     }
   }
 
-  const removeStaleProfile = async (profile: ForwardingProfile): Promise<void> => {
+  const removeProfile = async (profile: ForwardingProfile): Promise<void> => {
+    if (!window.confirm(t("ports.removeConfirm").replace("{name}", profile.name))) return
+    setBusyProfileId(profile.id)
     try {
       await bridge.ports.removeProfile(profile.id)
       setRows((current) => current.filter((row) => row.profile.id !== profile.id))
+      onProfileRemoved?.(profile.id)
+      setError(undefined)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setBusyProfileId(undefined)
+    }
+  }
+
+  const share = async (command: string, profileId: string): Promise<void> => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error(t("ports.shareFailed"))
+      await navigator.clipboard.writeText(command)
+      setCopiedProfileId(profileId)
+      setError(undefined)
+    } catch {
+      setError(t("ports.shareFailed"))
     }
   }
 
@@ -239,32 +286,44 @@ function GlobalPortsView({ bridge, hosts, onOpenHost, onOpenSession }: PortsView
       <div className="ports-content">
         {error && <div className="inline-error">{error}</div>}
         {rows.length > 0 ? (
-          <div className="ports-table ports-overview-table">
-            <div className="ports-heading"><span>{t("ports.host")}</span><span>{t("ports.route")}</span><span>{t("ports.status")}</span><span>{t("ports.connection")}</span><span /></div>
-            {rows.map(({ profile, runtime }) => {
-              const status = runtime?.status ?? "stopped"
-              const active = status === "forwarding" || status === "starting" || status === "stopping"
-              const host = hosts?.find((candidate) => candidate.id === profile.hostId)
-              const hostAvailable = hosts === undefined || host !== undefined
-              return (
-                <div className="port-row ports-overview-row" key={profile.id}>
-                  <div className="port-host-cell"><Server size={15} /><div><strong>{host?.name ?? (hostAvailable ? profile.hostId : t("ports.hostUnavailable"))}</strong><small>{profile.name}</small><small>{host ? `${host.username}@${host.host}:${host.port}` : profile.hostId}</small></div></div>
-                  <code>{formatAddress(profile.localAddress, profile.localPort)} <span className="route-arrow">-&gt;</span> {profile.remoteAddress}:{profile.remotePort}</code>
-                  <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
-                  <span className="port-connection-summary">{connectionSummary(status, t)}</span>
-                  <div className="port-actions">
-                    {onOpenSession && <IconButton label={t("session.open")} onClick={() => onOpenSession(profile, runtime)}><PanelTopOpen size={14} /></IconButton>}
-                    {active && runtime ? <>
-                      {status === "forwarding" && <IconButton label={t("ports.openAddress")} onClick={() => void bridge.ports.openAddress(runtime.id)}><ExternalLink size={14} /></IconButton>}
-                      <IconButton label={t("ports.stopForwarding")} onClick={() => void stop(runtime)}><Square size={13} /></IconButton>
-                    </> : <button className="secondary-command compact-command" type="button" onClick={() => void restart(profile)}>
-                      <Play size={14} />{status === "suspended" ? t("ports.resumeForwarding") : t("ports.startForwarding")}
-                    </button>}
-                    {hostAvailable && onOpenHost && <IconButton label={t("ports.openHost")} onClick={() => onOpenHost(profile.hostId)}><ExternalLink size={14} /></IconButton>}
-                    {!hostAvailable && <IconButton label={t("ports.removeProfile")} onClick={() => void removeStaleProfile(profile)}><Trash2 size={14} /></IconButton>}
-                  </div>
+          <div className="ports-overview-groups">
+            {groups.map(({ hostId, profiles }) => {
+              const host = hosts?.find((candidate) => candidate.id === hostId)
+              const expanded = expandedHosts[hostId] ?? false
+              return <section className="ports-overview-group" key={hostId} aria-label={host?.name ?? hostId}>
+                <header className="ports-overview-host-header">
+                  <Server size={17} aria-hidden="true" />
+                  <h2 title={host?.name ?? hostId}>{host?.name ?? hostId}</h2>
+                </header>
+                <div className="ports-table ports-overview-table">
+                  <div className="ports-heading"><span>{t("ports.rule")}</span><span>{t("ports.route")}</span><span>{t("ports.status")}</span><span /></div>
+                  {(expanded ? profiles : profiles.slice(0, 2)).map(({ profile, runtime }) => {
+                    const status = runtime?.status ?? "stopped"
+                    const command = host ? forwardingSshCommand(profile, host) : undefined
+                    const transitioning = status === "starting" || status === "stopping"
+                    const busy = busyProfileId === profile.id || transitioning
+                    return <div className="port-row ports-overview-row" key={profile.id}>
+                      <div className="port-profile-cell"><strong title={profile.name}>{profile.name}</strong></div>
+                      <code title={`${formatAddress(profile.localAddress, profile.localPort)} -> ${profile.remoteAddress}:${profile.remotePort}`}>{formatAddress(profile.localAddress, profile.localPort)} <span className="route-arrow">-&gt;</span> {profile.remoteAddress}:{profile.remotePort}</code>
+                      <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
+                      <div className="port-actions ports-overview-actions">
+                        <IconButton label={t("ports.viewDetails")} disabled={!onOpenSession} onClick={() => onOpenSession?.(profile, runtime)}><Eye size={15} /></IconButton>
+                        {status === "forwarding" || transitioning
+                          ? <IconButton label={t("ports.pauseForwarding")} disabled={busy || !runtime} onClick={() => { if (runtime) void pause(profile, runtime) }}><Pause size={15} /></IconButton>
+                          : <IconButton label={t("ports.startForwarding")} disabled={busy} onClick={() => void restart(profile)}><Play size={15} /></IconButton>}
+                        <IconButton label={t("ports.removeProfile")} disabled={busy} onClick={() => void removeProfile(profile)}><Trash2 size={15} /></IconButton>
+                        <IconButton label={command ? (copiedProfileId === profile.id ? t("ports.shareCopied") : t("ports.shareCommand")) : t("ports.shareUnavailable")} disabled={!command} onClick={() => { if (command) void share(command, profile.id) }}>
+                          {copiedProfileId === profile.id ? <Check size={15} /> : <Share2 size={15} />}
+                        </IconButton>
+                      </div>
+                    </div>
+                  })}
                 </div>
-              )
+                {profiles.length > 2 && <button className="ports-overview-disclosure" type="button" aria-expanded={expanded} onClick={() => setExpandedHosts((current) => ({ ...current, [hostId]: !current[hostId] }))}>
+                  {expanded ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+                  {expanded ? t("ports.showLess") : t("ports.showMore").replace("{count}", String(profiles.length - 2))}
+                </button>}
+              </section>
             })}
           </div>
         ) : !loading ? (
@@ -553,12 +612,6 @@ function runtimeToFallbackProfile(runtime: ForwardingInfo): ForwardingProfile {
     createdAt: now,
     updatedAt: now
   }
-}
-
-function connectionSummary(status: PortStatus, t: (key: TranslationKey) => string): string {
-  if (status === "forwarding" || status === "starting" || status === "stopping") return t("ports.sharedTransport")
-  if (status === "suspended") return t("ports.reconnectRequired")
-  return t("ports.readyToRestart")
 }
 
 function normalizeRemoteAddress(address: string): string {

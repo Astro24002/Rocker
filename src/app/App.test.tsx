@@ -401,7 +401,7 @@ describe("desktop workspace shell", () => {
     render(<App />)
 
     fireEvent.click(await screen.findByRole("button", { name: "Port Forwarding" }))
-    fireEvent.click(await screen.findByRole("button", { name: "Open session" }))
+    fireEvent.click(await screen.findByRole("button", { name: "View details" }))
     const pfButton = await screen.findByRole("button", { name: "PF G11" })
     expect(pfButton).toHaveAttribute("aria-current", "page")
     expect(screen.getByText("Rocker / Port Forwarding / G11")).toBeInTheDocument()
@@ -410,7 +410,7 @@ describe("desktop workspace shell", () => {
     expect(screen.queryByRole("button", { name: "PF 5174" })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "Port Forwarding" }))
-    fireEvent.click(await screen.findByRole("button", { name: "Open session" }))
+    fireEvent.click(await screen.findByRole("button", { name: "View details" }))
     expect(screen.getAllByRole("button", { name: "PF G11" })).toHaveLength(1)
     expect(pfButton).toHaveAttribute("aria-current", "page")
 
@@ -434,6 +434,34 @@ describe("desktop workspace shell", () => {
     await waitFor(() => expect(screen.getByText("Rocker / Port Forwarding / G11")).toBeInTheDocument())
     expect(screen.getByRole("button", { name: "PF G11" })).toHaveAttribute("aria-current", "page")
     expect(bridge.sessions.open).not.toHaveBeenCalled()
+  })
+
+  it("keeps PF sessions but clears the deleted rule reference after overview deletion", async () => {
+    const sessionId = "44444444-4444-4444-8444-444444444444"
+    const snapshot = workspaceSnapshot(host.id)
+    bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], {
+      ...snapshot,
+      activeSessionId: sessionId,
+      sessions: [...snapshot.sessions, { sessionId, hostId: host.id, label: "G11", kind: "pf", profileId: "profile-1" }]
+    }))
+    bridge.ports.listOverview.mockResolvedValue([forwardingRow()])
+    render(<App />)
+
+    await waitFor(() => expect(workspace().sessions.find((session) => session.id === sessionId)).toMatchObject({ profileId: "profile-1" }))
+    fireEvent.click(screen.getByRole("button", { name: "Port Forwarding" }))
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true)
+    try {
+      fireEvent.click(await screen.findByRole("button", { name: "Remove forwarding profile" }))
+      await waitFor(() => expect(bridge.ports.removeProfile).toHaveBeenCalledWith("profile-1"))
+      await waitFor(() => expect(workspace().sessions.find((session) => session.id === sessionId)).toMatchObject({
+        kind: "pf", profileId: undefined, forwardingId: undefined, forwardingStatus: "stopped", state: "disconnected"
+      }))
+      expect(workspace().sessions).toHaveLength(2)
+      expect(workspace().activeSessionId).toBe(sessionId)
+      expect(workspace().sessions.some((session) => session.kind === "ssh")).toBe(true)
+    } finally {
+      confirm.mockRestore()
+    }
   })
 
   it("opens Host forwarding details directly from a Host card", async () => {
@@ -477,14 +505,14 @@ describe("desktop workspace shell", () => {
     expect(bridge.sessions.open).not.toHaveBeenCalled()
   })
 
-  it("opens Host forwarding details from the global forwarding row", async () => {
+  it("opens Host forwarding details from the global rule's detail action", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
     bridge.ports.listOverview.mockResolvedValue([forwardingRow()])
     bridge.ports.listForHost.mockResolvedValue([])
     render(<App />)
 
     fireEvent.click(await screen.findByRole("button", { name: "Port Forwarding" }))
-    fireEvent.click(await screen.findByRole("button", { name: "Open Host workspace" }))
+    fireEvent.click(await screen.findByRole("button", { name: "View details" }))
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Host forwarding" })).toBeInTheDocument())
     expect(document.querySelector(".ports-overview-view[data-mode='global']")).not.toBeInTheDocument()
