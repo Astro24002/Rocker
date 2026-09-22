@@ -31,7 +31,7 @@ export class WorkAreaMaximizer {
     const normal = window.isMaximized() ? window.getNormalBounds() : window.getBounds()
     if (window.isMaximized()) window.unmaximize()
     this.normalBounds.set(window, normal)
-    window.setContentBounds(this.workAreaFor(normal))
+    window.setBounds(this.workAreaFor(normal))
   }
 
   public toggle(window: WorkAreaWindow): void {
@@ -55,7 +55,7 @@ export class WorkAreaMaximizer {
 
   public refreshWorkAreas(): void {
     for (const [window] of this.normalBounds) {
-      window.setContentBounds(this.workAreaFor(window.getBounds()))
+      window.setBounds(this.workAreaFor(window.getBounds()))
     }
   }
 }

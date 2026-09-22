@@ -259,6 +259,32 @@ describe("WorkspaceSnapshotStore", () => {
     }])
   })
 
+  it("discards session records while preserving window placement metadata", async () => {
+    const filePath = await temporaryFilePath()
+    const store = new WorkspaceSnapshotStore(filePath)
+    store.saveWindow({
+      workspaceId,
+      bounds: { x: 10, y: 20, width: 1440, height: 900 },
+      maximized: true,
+      activeSessionId: sessionId,
+      sessions: [{ sessionId, hostId: "host-a", label: "G11", cols: 120, rows: 40 }],
+      layout: { kind: "leaf", sessionId }
+    })
+    await store.flush()
+
+    await store.discardSessionRecords()
+
+    expect(await store.load()).toEqual({
+      version: 1,
+      windows: [{
+        workspaceId,
+        bounds: { x: 10, y: 20, width: 1440, height: 900 },
+        maximized: true,
+        sessions: []
+      }]
+    })
+  })
+
   it("updates persisted native bounds without receiving a new renderer workspace", async () => {
     const filePath = await temporaryFilePath()
     const store = new WorkspaceSnapshotStore(filePath)

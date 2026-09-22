@@ -127,6 +127,39 @@ describe("SftpWorkspaceView", () => {
     expect(bridge.sftp.open).not.toHaveBeenCalled()
   })
 
+  it("uploads a local file dragged from the left pane into the remote pane", async () => {
+    const bridge = createBridge()
+    const localFile = { name: "payload.txt", path: "/home/test/Desktop/payload.txt", type: "file" as const, size: 7, modifiedAt: "2026-09-18T00:00:00.000Z" }
+    vi.mocked(bridge.sftp.listLocal).mockResolvedValue({ path: "/home/test/Desktop", entries: [localFile] })
+    vi.mocked(bridge.sftp.chooseUpload).mockResolvedValue({ selectionId: "selection-a", workspaceId: session.id, name: localFile.name, size: localFile.size, remotePath: "/payload.txt" })
+    vi.mocked(bridge.sftp.upload).mockResolvedValue({ kind: "started", task: {
+      id: "transfer-a",
+      workspaceId: session.id,
+      hostId: host.id,
+      direction: "upload",
+      name: localFile.name,
+      remotePath: "/payload.txt",
+      status: "queued",
+      bytesTransferred: 0,
+      totalBytes: localFile.size,
+      attempt: 1,
+      createdAt: "2026-09-18T00:00:00.000Z",
+      updatedAt: "2026-09-18T00:00:00.000Z"
+    } })
+    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={session} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+
+    const localRow = await screen.findByRole("row", { name: /payload\.txt/ })
+    const dataTransfer = createDataTransfer()
+    fireEvent.dragStart(localRow, { dataTransfer })
+    const remotePane = screen.getByRole("heading", { name: "G11" }).closest(".sftp-file-pane") as HTMLElement
+    const remoteBody = remotePane.querySelector(".sftp-file-table-body") as HTMLElement
+    fireEvent.dragOver(remoteBody, { dataTransfer })
+    fireEvent.drop(remoteBody, { dataTransfer })
+
+    await waitFor(() => expect(bridge.sftp.chooseUpload).toHaveBeenCalledWith(session.id, "/", localFile.path))
+    expect(bridge.sftp.upload).toHaveBeenCalledWith("selection-a")
+  })
+
   it("opens compact Filter and Actions overlays without changing the pane layout", () => {
     const bridge = createBridge()
     const { container } = render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={session} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
@@ -162,4 +195,15 @@ function createBridge(): RockerBridge {
     },
     events: { onSftpEvent: vi.fn(() => () => undefined) }
   } as unknown as RockerBridge
+}
+
+function createDataTransfer() {
+  const values = new Map<string, string>()
+  return {
+    files: [],
+    effectAllowed: "none",
+    dropEffect: "none",
+    setData: (type: string, value: string) => { values.set(type, value) },
+    getData: (type: string) => values.get(type) ?? ""
+  }
 }

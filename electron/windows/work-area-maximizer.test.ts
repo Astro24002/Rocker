@@ -30,7 +30,7 @@ describe("WorkAreaMaximizer", () => {
 
     placement.toggle(window)
     expect(workAreaFor).toHaveBeenCalledWith(normal)
-    expect(window.setContentBounds).toHaveBeenCalledWith(reservedTaskbar)
+    expect(window.setBounds).toHaveBeenCalledWith(reservedTaskbar)
     expect(placement.isMaximized(window)).toBe(true)
     expect(placement.boundsToSave(window)).toEqual(normal)
 
@@ -48,7 +48,7 @@ describe("WorkAreaMaximizer", () => {
 
     available = display
     placement.refreshWorkAreas()
-    expect(window.setContentBounds).toHaveBeenLastCalledWith(display)
+    expect(window.setBounds).toHaveBeenLastCalledWith(display)
     expect(placement.boundsToSave(window)).toEqual(normal)
   })
 
@@ -60,12 +60,12 @@ describe("WorkAreaMaximizer", () => {
     emit("maximize")
 
     expect(window.unmaximize).toHaveBeenCalledOnce()
-    expect(window.setContentBounds).toHaveBeenCalledWith(reservedTaskbar)
+    expect(window.setBounds).toHaveBeenCalledWith(reservedTaskbar)
     expect(placement.isMaximized(window)).toBe(true)
 
     emit("closed")
-    vi.mocked(window.setContentBounds).mockClear()
+    vi.mocked(window.setBounds).mockClear()
     placement.refreshWorkAreas()
-    expect(window.setContentBounds).not.toHaveBeenCalled()
+    expect(window.setBounds).not.toHaveBeenCalled()
   })
 })

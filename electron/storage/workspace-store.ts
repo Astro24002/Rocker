@@ -69,6 +69,24 @@ export class WorkspaceSnapshotStore {
     })
   }
 
+  public async discardSessionRecords(): Promise<void> {
+    const loaded = await this.ensureLoaded(false, false)
+    if (loaded.status === "blocked") throw new StorageBlockedError(loaded.issue)
+    const current = this.document ?? loaded.value
+    this.document = {
+      version: 1,
+      windows: current.windows.map((window) => ({
+        workspaceId: window.workspaceId,
+        ...(window.bounds ? { bounds: structuredClone(window.bounds) } : {}),
+        maximized: window.maximized,
+        sessions: []
+      }))
+    }
+    this.pendingMutations.length = 0
+    this.dirty = true
+    await this.flush()
+  }
+
   public updateWindowBounds(
     workspaceId: string,
     update: Pick<StoredWorkspaceWindow, "bounds" | "maximized">

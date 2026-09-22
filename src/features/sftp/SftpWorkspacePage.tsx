@@ -69,6 +69,8 @@ interface PaneAction {
   onSelect(): void
 }
 
+const localFileDragType = "application/x-rocker-sftp-local-path"
+
 interface FilePaneProps {
   id: string
   title: string
@@ -85,6 +87,7 @@ interface FilePaneProps {
   onBreadcrumbSelect?(item: PaneBreadcrumbItem): void
   onEntrySelect(entry: FilePaneEntry): void
   onEntryOpen(entry: FilePaneEntry): void
+  onEntryDragStart?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
   onDragEnter?(event: DragEvent<HTMLDivElement>): void
   onDragOver?(event: DragEvent<HTMLDivElement>): void
   onDragLeave?(event: DragEvent<HTMLDivElement>): void
@@ -172,17 +175,22 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
     setLocalError(undefined)
   }
 
+  const uploadLocalPath = async (localPath: string): Promise<void> => {
+    if (!selectedSession) return
+    const selection = await bridge.sftp.chooseUpload(selectedSession.id, remotePath, localPath)
+    if (!selection) return
+    let result = await bridge.sftp.upload(selection.selectionId)
+    if (result.kind === "overwrite-required") {
+      if (!window.confirm(t("session.sftp.overwritePrompt"))) return
+      result = await bridge.sftp.upload(selection.selectionId, true)
+    }
+  }
+
   const uploadLocalFile = async (file: { path?: string } | undefined): Promise<void> => {
-    if (!selectedSession || !file?.path) return
+    if (!file?.path) return
     try {
-      const selection = await bridge.sftp.chooseUpload(selectedSession.id, remotePath, file.path)
-      if (!selection) return
-      let result = await bridge.sftp.upload(selection.selectionId)
-      if (result.kind === "overwrite-required") {
-        if (!window.confirm(t("session.sftp.overwritePrompt"))) return
-        result = await bridge.sftp.upload(selection.selectionId, true)
-      }
-      if (result.kind === "started") setLocalError(undefined)
+      await uploadLocalPath(file.path)
+      setLocalError(undefined)
     } catch (reason) {
       setLocalError(reason instanceof Error ? reason.message : String(reason))
     }
@@ -276,19 +284,29 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
   const handleDrop = (event: DragEvent<HTMLDivElement>): void => {
     event.preventDefault()
     setDropActive(false)
-    const paths = Array.from(event.dataTransfer.files)
+    const internalPath = event.dataTransfer.getData(localFileDragType)
+    const paths = [internalPath, ...Array.from(event.dataTransfer.files)
       .map(localFilePath)
-      .filter((value): value is string => value !== undefined)
+      .filter((value): value is string => value !== undefined)]
+      .filter((value, index, values): value is string => value.length > 0 && values.indexOf(value) === index)
     if (!selectedSession || paths.length === 0) {
       setActionError(t("session.sftp.dropUnsupported"))
       return
     }
     void (async (): Promise<void> => {
-      for (const path of paths) {
-        const selection = await bridge.sftp.chooseUpload(selectedSession.id, remotePath, path)
-        if (selection) await bridge.sftp.upload(selection.selectionId)
-      }
+      for (const path of paths) await uploadLocalPath(path)
+      setActionError(undefined)
     })().catch((reason: unknown) => setActionError(reason instanceof Error ? reason.message : String(reason)))
+  }
+
+  const handleLocalDragStart = (entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void => {
+    if (entry.kind !== "file" || !entry.path) {
+      event.preventDefault()
+      return
+    }
+    event.dataTransfer.effectAllowed = "copy"
+    event.dataTransfer.setData(localFileDragType, entry.path)
+    event.dataTransfer.setData("text/plain", entry.name)
   }
 
   const localEntries = useMemo<FilePaneEntry[]>(() => [
@@ -409,6 +427,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
         onBack={localDirectory.path && !isLocalRoot(localDirectory.path) ? () => navigateLocal(parentLocalPath(localDirectory.path)) : undefined}
         onBreadcrumbSelect={(item) => navigateLocal(item.id)}
         onEntrySelect={(entry) => setSelectedLocalId(entry.id)}
+        onEntryDragStart={handleLocalDragStart}
         onEntryOpen={(entry) => {
           if (entry.kind === "folder" && entry.path) navigateLocal(entry.path)
         }}
@@ -463,6 +482,7 @@ export function FilePane({
   onBreadcrumbSelect,
   onEntrySelect,
   onEntryOpen,
+  onEntryDragStart,
   onDragEnter,
   onDragOver,
   onDragLeave,
@@ -488,6 +508,7 @@ export function FilePane({
         emptyMessage={emptyMessage}
         onEntrySelect={onEntrySelect}
         onEntryOpen={onEntryOpen}
+        onEntryDragStart={onEntryDragStart}
         onDragEnter={onDragEnter}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
@@ -595,6 +616,7 @@ function FileTableBody({
   emptyMessage,
   onEntrySelect,
   onEntryOpen,
+  onEntryDragStart,
   onDragEnter,
   onDragOver,
   onDragLeave,
@@ -622,13 +644,20 @@ function FileTableBody({
           selected={entry.id === selectedEntryId}
           onSelect={() => onEntrySelect(entry)}
           onOpen={() => onEntryOpen(entry)}
+          onDragStart={onEntryDragStart}
         />
       ))}
     </div>
   )
 }
 
-function FileRow({ entry, selected, onSelect, onOpen }: { entry: FilePaneEntry; selected: boolean; onSelect(): void; onOpen(): void }): ReactElement {
+function FileRow({ entry, selected, onSelect, onOpen, onDragStart }: {
+  entry: FilePaneEntry
+  selected: boolean
+  onSelect(): void
+  onOpen(): void
+  onDragStart?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
+}): ReactElement {
   const { t } = useI18n()
   const kindLabel = entry.kind === "folder"
     ? t("session.sftp.kind.folder")
@@ -645,10 +674,12 @@ function FileRow({ entry, selected, onSelect, onOpen }: { entry: FilePaneEntry; 
       aria-selected={selected}
       className="sftp-file-row"
       data-kind={entry.kind}
+      draggable={onDragStart !== undefined && entry.kind === "file" && entry.path !== undefined}
       role="row"
       tabIndex={0}
       onClick={onSelect}
       onDoubleClick={onOpen}
+      onDragStart={(event) => onDragStart?.(entry, event)}
       onKeyDown={(event) => {
         if (event.key !== "Enter") return
         event.preventDefault()

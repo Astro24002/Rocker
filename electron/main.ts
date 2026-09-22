@@ -118,6 +118,13 @@ async function startApplication(): Promise<void> {
   const initialWorkspaceResult = await loadInitialWorkspace(snapshots, (error) => {
     recordUnexpectedStorageFailure(diagnostics, "workspace", "startup-load", error)
   })
+  if (initialWorkspaceResult.status !== "blocked" && initialWorkspaceResult.value?.windows.some((window) => window.sessions.length > 0)) {
+    try {
+      await snapshots.discardSessionRecords()
+    } catch (error) {
+      recordUnexpectedStorageFailure(diagnostics, "workspace", "startup-discard-sessions", error)
+    }
+  }
   let windows: WorkspaceWindowManager
   const connections = new SshConnectionManager({
     resolve: createConnectionResolver({ hosts, credentials, settings, hostKeys }),
@@ -315,6 +322,11 @@ async function shutdownApplication(applicationRuntime: ApplicationRuntime): Prom
     await applicationRuntime.snapshots.flush()
   } catch {
     // Shutdown should still release active transports when a snapshot write fails.
+  }
+  try {
+    await applicationRuntime.snapshots.discardSessionRecords()
+  } catch {
+    // A blocked workspace store cannot be cleared, but it must not prevent shutdown.
   }
   try {
     await applicationRuntime.forwardingProfiles.flush()

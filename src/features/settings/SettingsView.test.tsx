@@ -60,7 +60,7 @@ describe("SettingsView", () => {
     render(<I18nProvider><SettingsView locale="en" settings={settings} onLocaleChange={vi.fn()} onUpdate={onUpdate} onExportDiagnostics={vi.fn(async () => ({ canceled: true }))} /></I18nProvider>)
 
     fireEvent.change(screen.getByRole("combobox", { name: "Reconnect mode" }), { target: { value: "continuous" } })
-    fireEvent.click(screen.getByRole("checkbox", { name: "Restore previous workspace" }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "Restore previous window" }))
     fireEvent.click(screen.getByRole("checkbox", { name: "Confirm multi-line paste" }))
 
     expect(onUpdate).toHaveBeenCalledWith({ reconnectMode: "continuous" })

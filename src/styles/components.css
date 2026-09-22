@@ -1005,6 +1005,14 @@ textarea:focus-visible {
   user-select: none;
 }
 
+.sftp-file-row[draggable="true"] {
+  cursor: grab;
+}
+
+.sftp-file-row[draggable="true"]:active {
+  cursor: grabbing;
+}
+
 .sftp-file-row:hover {
   background: var(--sftp-hover);
 }
