@@ -182,6 +182,7 @@ export interface RockerBridge {
     list(workspaceId: string, path: string): Promise<SftpDirectory>
     mkdir(workspaceId: string, path: string): Promise<void>
     rename(workspaceId: string, path: string, nextPath: string): Promise<void>
+    move(workspaceId: string, path: string, nextPath: string, kind: "file" | "directory"): Promise<SftpTransferStartResult>
     remove(workspaceId: string, path: string, kind: "file" | "directory"): Promise<void>
     chooseUpload(workspaceId: string, remoteDirectory: string, localPath?: string): Promise<SftpUploadSelection | undefined>
     chooseDownload(workspaceId: string, remotePath: string, suggestedName: string): Promise<SftpDownloadSelection | undefined>
@@ -274,6 +275,7 @@ export const ipcChannels = {
   sftpList: "rocker:sftp:list",
   sftpMkdir: "rocker:sftp:mkdir",
   sftpRename: "rocker:sftp:rename",
+  sftpMove: "rocker:sftp:move",
   sftpRemove: "rocker:sftp:remove",
   sftpChooseUpload: "rocker:sftp:choose-upload",
   sftpChooseDownload: "rocker:sftp:choose-download",

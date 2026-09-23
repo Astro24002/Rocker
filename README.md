@@ -80,6 +80,11 @@ It also removes the bottom Target/Type/Status strip so Session content fills the
 Content Stage. See the
 [RC5 verification record](docs/releases/v0.6.0-rc.5-verification.md).
 
+The current v0.7 candidate, `v0.7.0-rc.6`, adds real remote-to-remote SFTP file
+and folder moves through the main-process task model, with an in-workspace move
+status row shown only while a move is active. See the
+[RC6 verification record](docs/releases/v0.7.0-rc.6-verification.md).
+
 ## Requirements
 
 - Node.js 20 or newer. CI uses Node.js 24.

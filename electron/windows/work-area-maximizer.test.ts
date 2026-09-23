@@ -8,6 +8,7 @@ const reservedTaskbar = { ...display, height: 752 }
 function createWindow() {
   let bounds = normal
   let nativeMaximized = false
+  let resizable = true
   const listeners = new Map<string, () => void>()
   const window: WorkAreaWindow = {
     getBounds: vi.fn(() => bounds),
@@ -16,6 +17,8 @@ function createWindow() {
     setContentBounds: vi.fn((next: WindowBounds) => { bounds = next }),
     isMaximized: vi.fn(() => nativeMaximized),
     unmaximize: vi.fn(() => { nativeMaximized = false }),
+    isResizable: vi.fn(() => resizable),
+    setResizable: vi.fn((next: boolean) => { resizable = next }),
     on: vi.fn((event: string, listener: () => void) => { listeners.set(event, listener) }),
     once: vi.fn((event: string, listener: () => void) => { listeners.set(event, listener) })
   }
@@ -31,11 +34,13 @@ describe("WorkAreaMaximizer", () => {
     placement.toggle(window)
     expect(workAreaFor).toHaveBeenCalledWith(normal)
     expect(window.setBounds).toHaveBeenCalledWith(reservedTaskbar)
+    expect(window.setResizable).toHaveBeenCalledWith(false)
     expect(placement.isMaximized(window)).toBe(true)
     expect(placement.boundsToSave(window)).toEqual(normal)
 
     placement.toggle(window)
     expect(window.setBounds).toHaveBeenCalledWith(normal)
+    expect(window.setResizable).toHaveBeenLastCalledWith(true)
     expect(placement.isMaximized(window)).toBe(false)
   })
 
@@ -61,6 +66,7 @@ describe("WorkAreaMaximizer", () => {
 
     expect(window.unmaximize).toHaveBeenCalledOnce()
     expect(window.setBounds).toHaveBeenCalledWith(reservedTaskbar)
+    expect(window.setResizable).toHaveBeenCalledWith(false)
     expect(placement.isMaximized(window)).toBe(true)
 
     emit("closed")

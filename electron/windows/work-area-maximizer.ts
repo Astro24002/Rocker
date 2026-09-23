@@ -12,12 +12,19 @@ export interface WorkAreaWindow {
   setContentBounds(bounds: WindowBounds): void
   isMaximized(): boolean
   unmaximize(): void
+  isResizable(): boolean
+  setResizable(resizable: boolean): void
   on(event: "maximize", listener: () => void): void
   once(event: "closed", listener: () => void): void
 }
 
+interface SavedWindowState {
+  bounds: WindowBounds
+  resizable: boolean
+}
+
 export class WorkAreaMaximizer {
-  private readonly normalBounds = new Map<WorkAreaWindow, WindowBounds>()
+  private readonly normalBounds = new Map<WorkAreaWindow, SavedWindowState>()
 
   public constructor(private readonly workAreaFor: (bounds: WindowBounds) => WindowBounds) {}
 
@@ -28,21 +35,28 @@ export class WorkAreaMaximizer {
 
   public maximize(window: WorkAreaWindow): void {
     if (this.normalBounds.has(window)) return
-    const normal = window.isMaximized() ? window.getNormalBounds() : window.getBounds()
+    const state: SavedWindowState = {
+      bounds: window.isMaximized() ? window.getNormalBounds() : window.getBounds(),
+      resizable: window.isResizable()
+    }
+    this.normalBounds.set(window, state)
     if (window.isMaximized()) window.unmaximize()
-    this.normalBounds.set(window, normal)
-    window.setBounds(this.workAreaFor(normal))
+    // Electron's Windows frameless thick frame adds an invisible resize inset.
+    // Disable it while maximized so the visible HWND stays inside workArea.
+    window.setResizable(false)
+    window.setBounds(this.workAreaFor(state.bounds))
   }
 
   public toggle(window: WorkAreaWindow): void {
-    const normal = this.normalBounds.get(window)
-    if (!normal) {
+    const state = this.normalBounds.get(window)
+    if (!state) {
       this.maximize(window)
       return
     }
     this.normalBounds.delete(window)
     if (window.isMaximized()) window.unmaximize()
-    window.setBounds(normal)
+    window.setBounds(state.bounds)
+    window.setResizable(state.resizable)
   }
 
   public isMaximized(window: WorkAreaWindow): boolean {
@@ -50,7 +64,7 @@ export class WorkAreaMaximizer {
   }
 
   public boundsToSave(window: WorkAreaWindow): WindowBounds {
-    return this.normalBounds.get(window) ?? (window.isMaximized() ? window.getNormalBounds() : window.getBounds())
+    return this.normalBounds.get(window)?.bounds ?? (window.isMaximized() ? window.getNormalBounds() : window.getBounds())
   }
 
   public refreshWorkAreas(): void {

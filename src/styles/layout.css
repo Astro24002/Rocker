@@ -255,11 +255,22 @@
 .workspace-picker-row span { display: grid; min-width: 0; gap: 3px; }
 .workspace-picker-row small { color: var(--text-muted); }
 
+.sftp-workspace-shell {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--sftp-text);
+  background: var(--sftp-pane);
+}
+
 .sftp-workspace-page {
   display: grid;
   min-width: 0;
   min-height: 0;
-  flex: 1;
+  flex: 1 1 auto;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px;
   overflow: hidden;

@@ -313,13 +313,17 @@ describe("registerIpcHandlers", () => {
     expect(harness.ports.scan).not.toHaveBeenCalled()
   })
 
-  it("keeps SFTP rename and dropped-upload requests owner scoped", async () => {
+  it("keeps SFTP rename, move, and dropped-upload requests owner scoped", async () => {
     const harness = createHarness()
     harness.sftp.selectUpload.mockResolvedValue({ selectionId: "selection-1", workspaceId: "workspace-1", name: "drop.txt", size: 4, remotePath: "/drop.txt" })
     registerIpcHandlers(harness.dependencies)
 
     await expect(invokeFrom(21, ipcChannels.sftpRename, "workspace-1", "/old.txt", "/new.txt")).resolves.toBeUndefined()
     expect(harness.sftp.rename).toHaveBeenCalledWith("workspace-1", "/old.txt", "/new.txt", owner21)
+
+    harness.sftp.move.mockResolvedValue({ kind: "started", task: { id: "move-1" } })
+    await expect(invokeFrom(21, ipcChannels.sftpMove, "workspace-1", "/old.txt", "/docs/old.txt", "file")).resolves.toMatchObject({ kind: "started" })
+    expect(harness.sftp.move).toHaveBeenCalledWith("workspace-1", "/old.txt", "/docs/old.txt", "file", owner21)
 
     await expect(invokeFrom(21, ipcChannels.sftpChooseUpload, "workspace-1", "/", "/tmp/drop.txt"))
       .resolves.toMatchObject({ selectionId: "selection-1", remotePath: "/drop.txt" })
@@ -329,6 +333,10 @@ describe("registerIpcHandlers", () => {
     await expect(invokeFrom(21, ipcChannels.sftpRename, "workspace-1", 42, "/new.txt"))
       .rejects.toThrow("Invalid SFTP rename request")
     expect(harness.sftp.rename).toHaveBeenCalledTimes(1)
+
+    await expect(invokeFrom(21, ipcChannels.sftpMove, "workspace-1", "/old.txt", "/new.txt", "symlink"))
+      .rejects.toThrow("Invalid SFTP move request")
+    expect(harness.sftp.move).toHaveBeenCalledTimes(1)
   })
 
   it("lists real local directory metadata through the owner-scoped SFTP bridge", async () => {
@@ -1106,6 +1114,7 @@ function createHarness() {
   const forwarding = { start: vi.fn(), stop: vi.fn(), list: vi.fn(() => [] as ForwardingInfo[]), get: vi.fn(), resume: vi.fn(), ownerForForwarding: vi.fn(), releaseOwner: vi.fn(), onEvent: vi.fn(() => vi.fn()), startProfile: vi.fn() }
   const sftp = {
     rename: vi.fn(),
+    move: vi.fn(),
     selectUpload: vi.fn(),
     onEvent: vi.fn(() => vi.fn())
   }

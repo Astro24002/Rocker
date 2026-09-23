@@ -1,4 +1,4 @@
-import { Clipboard, Download, ExternalLink, File, Folder, FolderOpen, Globe, Network, Pencil, Play, Plus, RefreshCw, Square, Trash2, Upload } from "lucide-react"
+import { ArrowRightLeft, Clipboard, Download, ExternalLink, File, Folder, FolderOpen, Globe, Network, Pencil, Play, Plus, RefreshCw, Square, Trash2, Upload } from "lucide-react"
 import { useCallback, useEffect, useState, type DragEvent, type ReactElement } from "react"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import type { ForwardingInfo, ForwardingProfileView, PortStatus } from "../../../electron/ports/types"
@@ -303,8 +303,8 @@ function SftpTransferRow({ task, bridge, onRefresh }: { task: SftpTransferTask; 
   const progress = task.totalBytes && task.totalBytes > 0 ? Math.min(100, Math.round(task.bytesTransferred / task.totalBytes * 100)) : undefined
   const statusLabel = task.status === "queued"
     ? t("session.sftp.transferStatus.queued")
-    : task.status === "running"
-      ? t("session.sftp.transferStatus.running")
+      : task.status === "running"
+        ? task.direction === "move" ? t("session.sftp.transferStatus.moving") : t("session.sftp.transferStatus.running")
       : task.status === "completed"
         ? t("session.sftp.transferStatus.completed")
         : task.status === "failed"
@@ -312,7 +312,7 @@ function SftpTransferRow({ task, bridge, onRefresh }: { task: SftpTransferTask; 
           : t("session.sftp.transferStatus.cancelled")
   return (
     <div className="sftp-transfer-row">
-      <span>{task.direction === "upload" ? <Upload size={14} /> : <Download size={14} />}{task.name}</span>
+      <span>{task.direction === "move" ? <ArrowRightLeft size={14} /> : task.direction === "upload" ? <Upload size={14} /> : <Download size={14} />}{task.name}</span>
       <span>{progress === undefined ? statusLabel : `${progress}%`}</span>
       {task.status === "queued" || task.status === "running" ? <IconButton label={t("session.sftp.cancelTransfer")} onClick={() => void bridge.sftp.cancelTransfer(task.id).then(onRefresh)}><Square size={13} /></IconButton> : null}
       {task.status === "failed" || task.status === "cancelled" ? <IconButton label={t("session.sftp.retryTransfer")} onClick={() => void bridge.sftp.retryTransfer(task.id).then(onRefresh)}><RefreshCw size={13} /></IconButton> : null}

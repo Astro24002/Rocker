@@ -158,6 +158,100 @@ describe("SftpWorkspaceView", () => {
 
     await waitFor(() => expect(bridge.sftp.chooseUpload).toHaveBeenCalledWith(session.id, "/", localFile.path))
     expect(bridge.sftp.upload).toHaveBeenCalledWith("selection-a")
+    expect(screen.queryByRole("contentinfo", { name: "Transfers" })).not.toBeInTheDocument()
+  })
+
+  it("moves a remote file into a folder and locks the source row while it runs", async () => {
+    const bridge = createBridge()
+    const source = { name: "payload.txt", path: "/payload.txt", type: "file" as const, size: 7 }
+    const folder = { name: "docs", path: "/docs", type: "directory" as const }
+    vi.mocked(bridge.sftp.list).mockResolvedValue({ path: "/", entries: [source, folder] })
+    vi.mocked(bridge.sftp.move).mockResolvedValue({ kind: "started", task: {
+      id: "move-a",
+      workspaceId: session.id,
+      hostId: host.id,
+      direction: "move",
+      name: source.name,
+      remotePath: "/docs/payload.txt",
+      sourcePath: source.path,
+      entryType: "file",
+      status: "running",
+      bytesTransferred: 0,
+      attempt: 1,
+      createdAt: "2026-09-18T00:00:00.000Z",
+      updatedAt: "2026-09-18T00:00:00.000Z"
+    } })
+    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, browser: { ...session.browser, entries: [source, folder] } }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+
+    const sourceRow = await screen.findByRole("row", { name: /payload\.txt/ })
+    const folderRow = await screen.findByRole("row", { name: /docs/ })
+    const dataTransfer = createDataTransfer()
+    fireEvent.dragStart(sourceRow, { dataTransfer })
+    dataTransfer.setData("application/x-rocker-sftp-remote-path", JSON.stringify({ path: source.path, name: source.name, kind: "file" }))
+    const dropDataTransfer = { ...dataTransfer, types: ["application/x-rocker-sftp-remote-path"] }
+    fireEvent.dragOver(folderRow, { dataTransfer: dropDataTransfer })
+    fireEvent.drop(folderRow, { dataTransfer: dropDataTransfer })
+
+    await waitFor(() => expect(bridge.sftp.move).toHaveBeenCalledWith(session.id, "/payload.txt", "/docs/payload.txt", "file"))
+    expect(sourceRow).toHaveAttribute("aria-disabled", "true")
+    expect(sourceRow).toHaveAttribute("draggable", "false")
+    fireEvent.click(sourceRow)
+    expect(sourceRow).toHaveAttribute("aria-selected", "false")
+  })
+
+  it("shows a move task as one non-blocking progress row at the bottom", async () => {
+    const bridge = createBridge()
+    const movingFolder = { name: "docs", path: "/docs", type: "directory" as const }
+    const task = {
+      id: "move-folder-a",
+      workspaceId: session.id,
+      hostId: host.id,
+      direction: "move" as const,
+      name: movingFolder.name,
+      remotePath: "/archive/docs",
+      sourcePath: movingFolder.path,
+      entryType: "directory" as const,
+      status: "running" as const,
+      bytesTransferred: 0,
+      attempt: 1,
+      createdAt: "2026-09-18T00:00:00.000Z",
+      updatedAt: "2026-09-18T00:00:00.000Z"
+    }
+    vi.mocked(bridge.sftp.list).mockResolvedValue({ path: "/", entries: [movingFolder] })
+    vi.mocked(bridge.sftp.listTransfers).mockResolvedValue([task])
+    const { container } = render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, browser: { ...session.browser, entries: [movingFolder] } }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+
+    expect(await screen.findByRole("contentinfo", { name: "Transfers" })).toBeInTheDocument()
+    expect(screen.getByRole("progressbar", { name: /docs Moving/ })).toBeInTheDocument()
+    expect(container.querySelectorAll(".sftp-transfer-task")).toHaveLength(1)
+    const row = await screen.findByRole("row", { name: /docs/ })
+    expect(row).toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("hides the workspace move status after the move reaches a terminal state", async () => {
+    const bridge = createBridge()
+    const movedFolder = { name: "docs", path: "/docs", type: "directory" as const }
+    vi.mocked(bridge.sftp.list).mockResolvedValue({ path: "/", entries: [movedFolder] })
+    vi.mocked(bridge.sftp.listTransfers).mockResolvedValue([{
+      id: "move-folder-completed",
+      workspaceId: session.id,
+      hostId: host.id,
+      direction: "move",
+      name: movedFolder.name,
+      remotePath: "/archive/docs",
+      sourcePath: movedFolder.path,
+      entryType: "directory",
+      status: "completed",
+      bytesTransferred: 0,
+      attempt: 1,
+      createdAt: "2026-09-18T00:00:00.000Z",
+      updatedAt: "2026-09-18T00:00:00.000Z"
+    }])
+    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, browser: { ...session.browser, entries: [movedFolder] } }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+
+    await screen.findByRole("row", { name: /docs/ })
+    expect(screen.queryByRole("contentinfo", { name: "Transfers" })).not.toBeInTheDocument()
+    expect(screen.getByRole("row", { name: /docs/ })).not.toHaveAttribute("aria-disabled", "true")
   })
 
   it("opens compact Filter and Actions overlays without changing the pane layout", () => {
@@ -184,6 +278,7 @@ function createBridge(): RockerBridge {
       list: vi.fn(async (workspaceId: string, path: string) => ({ workspaceId, path, entries: [] })),
       mkdir: vi.fn(async () => undefined),
       rename: vi.fn(async () => undefined),
+      move: vi.fn(),
       remove: vi.fn(async () => undefined),
       chooseUpload: vi.fn(async () => undefined),
       chooseDownload: vi.fn(async () => undefined),

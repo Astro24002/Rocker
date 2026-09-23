@@ -293,6 +293,14 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     if (typeof path !== "string" || typeof nextPath !== "string") throw new Error("Invalid SFTP rename request")
     await dependencies.sftp.rename(workspaceId, path, nextPath, owner)
   })
+  ipcMain.handle(ipcChannels.sftpMove, async (event, workspaceId: unknown, path: unknown, nextPath: unknown, kind: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(workspaceId, "SFTP workspace")
+    if (typeof path !== "string" || typeof nextPath !== "string" || (kind !== "file" && kind !== "directory")) {
+      throw new Error("Invalid SFTP move request")
+    }
+    return dependencies.sftp.move(workspaceId, path, nextPath, kind, owner)
+  })
   ipcMain.handle(ipcChannels.sftpRemove, async (event, workspaceId: unknown, path: unknown, kind: unknown) => {
     const owner = currentOwnerForWebContents(dependencies, event.sender.id)
     assertId(workspaceId, "SFTP workspace")

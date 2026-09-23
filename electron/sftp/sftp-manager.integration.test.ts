@@ -62,6 +62,26 @@ describe("SftpManager", () => {
     expect(() => normalizeRemotePath("docs/../../etc")).toThrow("Remote path traversal is not allowed")
   })
 
+  it("runs file and folder moves as non-blocking transfer tasks", async () => {
+    const fixture = await createSshTestServer({ sftpFiles: { "/docs/guide.txt": "guide" } })
+    fixtures.push(fixture)
+    const { manager } = createManager(fixture.port)
+    const workspace = await manager.open("00000000-0000-4000-8000-000000000105", "fixture", owner)
+
+    const fileMove = await manager.move(workspace.workspaceId, "/docs/guide.txt", "/docs/moved.txt", "file", owner)
+    expect(fileMove).toMatchObject({ kind: "started", task: { direction: "move", sourcePath: "/docs/guide.txt", remotePath: "/docs/moved.txt", entryType: "file" } })
+    if (fileMove.kind !== "started") throw new Error("Expected file move task")
+    await waitFor(() => manager.listTransfers(owner).some((task) => task.id === fileMove.task.id && task.status === "completed"))
+
+    const folderMove = await manager.move(workspace.workspaceId, "/docs", "/archive", "directory", owner)
+    expect(folderMove).toMatchObject({ kind: "started", task: { direction: "move", sourcePath: "/docs", remotePath: "/archive", entryType: "directory" } })
+    if (folderMove.kind !== "started") throw new Error("Expected folder move task")
+    await waitFor(() => manager.listTransfers(owner).some((task) => task.id === folderMove.task.id && task.status === "completed"))
+
+    const archive = await manager.list(workspace.workspaceId, "/archive", owner)
+    expect(archive.entries.map((entry) => entry.name)).toContain("moved.txt")
+  })
+
   it("uploads and downloads real files with overwrite confirmation", async () => {
     const fixture = await createSshTestServer()
     fixtures.push(fixture)

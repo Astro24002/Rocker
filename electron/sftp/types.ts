@@ -42,7 +42,7 @@ export interface SftpDownloadSelection {
   remotePath: string
 }
 
-export type SftpTransferDirection = "upload" | "download"
+export type SftpTransferDirection = "upload" | "download" | "move"
 export type SftpTransferStatus = "queued" | "running" | "completed" | "failed" | "cancelled"
 
 export interface SftpTransferTask {
@@ -52,6 +52,8 @@ export interface SftpTransferTask {
   direction: SftpTransferDirection
   name: string
   remotePath: string
+  sourcePath?: string
+  entryType?: "file" | "directory"
   status: SftpTransferStatus
   bytesTransferred: number
   totalBytes?: number

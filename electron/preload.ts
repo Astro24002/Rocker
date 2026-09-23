@@ -59,6 +59,7 @@ const bridge: RockerBridge = {
     list: (workspaceId, path) => ipcRenderer.invoke(ipcChannels.sftpList, workspaceId, path),
     mkdir: (workspaceId, path) => ipcRenderer.invoke(ipcChannels.sftpMkdir, workspaceId, path),
     rename: (workspaceId, path, nextPath) => ipcRenderer.invoke(ipcChannels.sftpRename, workspaceId, path, nextPath),
+    move: (workspaceId, path, nextPath, kind) => ipcRenderer.invoke(ipcChannels.sftpMove, workspaceId, path, nextPath, kind),
     remove: (workspaceId, path, kind) => ipcRenderer.invoke(ipcChannels.sftpRemove, workspaceId, path, kind),
     chooseUpload: (workspaceId, remoteDirectory, localPath) => ipcRenderer.invoke(ipcChannels.sftpChooseUpload, workspaceId, remoteDirectory, localPath),
     chooseDownload: (workspaceId, remotePath, suggestedName) => ipcRenderer.invoke(ipcChannels.sftpChooseDownload, workspaceId, remotePath, suggestedName),

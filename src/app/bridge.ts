@@ -287,6 +287,7 @@ function createBrowserPreviewBridge(): RockerBridge {
       },
       mkdir: async () => undefined,
       rename: async () => undefined,
+      move: async () => { throw new Error("SFTP moves are unavailable in browser preview") },
       remove: async () => undefined,
       chooseUpload: async () => { throw new Error("SFTP uploads are unavailable in browser preview") },
       chooseDownload: async () => { throw new Error("SFTP downloads are unavailable in browser preview") },

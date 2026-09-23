@@ -14,7 +14,6 @@ import type {
   SftpDirectoryEntry,
   SftpDownloadSelection,
   SftpRuntimeEvent,
-  SftpTransferDirection,
   SftpTransferStartResult,
   SftpTransferTask,
   SftpUploadSelection,
@@ -46,7 +45,7 @@ interface SftpSelectionRecord {
   selectionId: string
   workspaceId: string
   owner: RuntimeOwner
-  direction: SftpTransferDirection
+  direction: "upload" | "download"
   localPath: string
   remotePath: string
   name: string
@@ -56,7 +55,7 @@ interface SftpSelectionRecord {
 interface SftpTransferRecord {
   task: SftpTransferTask
   owner: RuntimeOwner
-  localPath: string
+  localPath?: string
   controller: AbortController
   lease?: ConnectionLease
   channel?: SFTPWrapper
@@ -195,6 +194,25 @@ export class SftpManager {
     await this.withSftp(record, (sftp) => new Promise<void>((resolve, reject) => {
       sftp.rename(normalizedPath, normalizedNextPath, (error) => error ? reject(error) : resolve())
     }))
+  }
+
+  public async move(
+    workspaceId: string,
+    path: string,
+    nextPath: string,
+    kind: "file" | "directory",
+    owner: RuntimeOwner
+  ): Promise<SftpTransferStartResult> {
+    const record = this.requireWorkspace(workspaceId, owner)
+    const normalizedPath = normalizeRemotePath(path)
+    const normalizedNextPath = normalizeRemotePath(nextPath)
+    if (normalizedPath === "/" || normalizedNextPath === "/") throw new Error("Cannot move the root directory")
+    if (normalizedPath === normalizedNextPath) throw new Error("The destination must be different")
+    if (kind === "directory" && normalizedNextPath.startsWith(`${normalizedPath}/`)) {
+      throw new Error("A directory cannot be moved into itself")
+    }
+    if (await this.remotePathExists(record, normalizedNextPath)) throw new Error("Remote destination already exists")
+    return this.enqueueMove(record.info.workspaceId, record.info.hostId, normalizedPath, normalizedNextPath, basename(normalizedPath), kind, owner)
   }
 
   public async remove(workspaceId: string, path: string, kind: "file" | "directory", owner: RuntimeOwner): Promise<void> {
@@ -376,7 +394,7 @@ export class SftpManager {
     }
   }
 
-  private requireSelection(selectionId: string, owner: RuntimeOwner, direction: SftpTransferDirection): SftpSelectionRecord {
+  private requireSelection(selectionId: string, owner: RuntimeOwner, direction: "upload" | "download"): SftpSelectionRecord {
     const selection = this.selections.get(selectionId)
     if (!selection || selection.direction !== direction) throw new Error("SFTP selection was not found")
     if (!sameRuntimeOwner(selection.owner, owner)) throw new Error("SFTP selection is owned by another window")
@@ -424,6 +442,42 @@ export class SftpManager {
     return { kind: "started", task: { ...task } }
   }
 
+  private enqueueMove(
+    workspaceId: string,
+    hostId: string,
+    sourcePath: string,
+    remotePath: string,
+    name: string,
+    entryType: "file" | "directory",
+    owner: RuntimeOwner
+  ): SftpTransferStartResult {
+    const now = new Date().toISOString()
+    const task: SftpTransferTask = {
+      id: randomUUID(),
+      workspaceId,
+      hostId,
+      direction: "move",
+      name,
+      remotePath,
+      sourcePath,
+      entryType,
+      status: "queued",
+      bytesTransferred: 0,
+      attempt: 1,
+      createdAt: now,
+      updatedAt: now
+    }
+    const record: SftpTransferRecord = {
+      task,
+      owner,
+      controller: new AbortController()
+    }
+    this.transfers.set(task.id, record)
+    this.emit(owner, { kind: "transfer", task: { ...task } })
+    record.runPromise = this.runTransfer(record)
+    return { kind: "started", task: { ...task } }
+  }
+
   private async runTransfer(record: SftpTransferRecord): Promise<void> {
     if (record.controller.signal.aborted || record.task.status === "cancelled") return
     this.updateTask(record, { status: "running", error: undefined })
@@ -433,10 +487,15 @@ export class SftpManager {
       if (record.controller.signal.aborted) return
       await this.withSftpLease(lease, async (sftp) => {
         record.channel = sftp
+        if (record.task.direction === "move") {
+          await moveRemoteEntry(sftp, record.task.sourcePath, record.task.remotePath)
+          return
+        }
         if (record.task.direction === "download") {
           const totalBytes = await this.remoteFileSize(sftp, record.task.remotePath)
           this.updateTask(record, { totalBytes })
         } else if (record.task.totalBytes === undefined) {
+          if (!record.localPath) throw new Error("The local transfer source is missing")
           const local = await statLocal(record.localPath)
           this.updateTask(record, { totalBytes: local.size })
         }
@@ -545,10 +604,25 @@ function runFastTransfer(
     const step = (total: number, _chunk: number, fileSize: number): void => onProgress(total, fileSize)
     const done = (error?: Error | null): void => error ? reject(error) : resolve()
     if (record.task.direction === "upload") {
+      if (!record.localPath) {
+        reject(new Error("The local upload source is missing"))
+        return
+      }
       sftp.fastPut(record.localPath, record.task.remotePath, { step }, done)
     } else {
+      if (!record.localPath) {
+        reject(new Error("The local download destination is missing"))
+        return
+      }
       sftp.fastGet(record.task.remotePath, record.localPath, { step }, done)
     }
+  })
+}
+
+function moveRemoteEntry(sftp: SFTPWrapper, sourcePath: string | undefined, destinationPath: string): Promise<void> {
+  if (!sourcePath) return Promise.reject(new Error("The remote move source is missing"))
+  return new Promise<void>((resolve, reject) => {
+    sftp.rename(sourcePath, destinationPath, (error) => error ? reject(error) : resolve())
   })
 }
 

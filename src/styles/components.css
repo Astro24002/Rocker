@@ -1021,6 +1021,18 @@ textarea:focus-visible {
   background: var(--sftp-selected);
 }
 
+.sftp-file-row[data-moving="true"] {
+  pointer-events: none;
+  color: var(--sftp-text-muted);
+  background: var(--sftp-header);
+  cursor: progress;
+  opacity: .58;
+}
+
+.sftp-file-row[data-moving="true"] .sftp-file-name > svg {
+  color: var(--sftp-text-muted);
+}
+
 .sftp-file-name {
   display: flex;
   min-width: 0;
@@ -1062,6 +1074,122 @@ textarea:focus-visible {
 
 .sftp-pane-message[role="alert"] {
   color: var(--sftp-danger);
+}
+
+.sftp-transfer-footer {
+  flex: 0 0 auto;
+  min-height: 38px;
+  overflow: hidden;
+  border-top: 1px solid var(--sftp-line-strong);
+  color: var(--sftp-text);
+  background: var(--sftp-pane);
+}
+
+.sftp-transfer-task {
+  display: grid;
+  min-width: 0;
+  min-height: 38px;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 220px) 92px 28px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  font-size: 14px;
+}
+
+.sftp-transfer-task-name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sftp-transfer-task-name > svg {
+  flex: 0 0 auto;
+  color: var(--sftp-folder);
+}
+
+.sftp-transfer-task-name strong,
+.sftp-transfer-task-name > span,
+.sftp-transfer-task-name code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-transfer-task-name strong {
+  flex: 0 0 auto;
+  color: var(--sftp-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.sftp-transfer-task-name code {
+  min-width: 0;
+  color: var(--sftp-text-muted);
+  font-size: 12px;
+}
+
+.sftp-transfer-progress-track {
+  position: relative;
+  display: block;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--sftp-line-strong);
+}
+
+.sftp-transfer-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--sftp-folder);
+  transition: width 160ms ease;
+}
+
+.sftp-transfer-progress-track > span.is-indeterminate {
+  width: 42%;
+  animation: sftp-transfer-indeterminate 1.15s ease-in-out infinite;
+}
+
+.sftp-transfer-task-status {
+  overflow: hidden;
+  color: var(--sftp-text-secondary);
+  font-size: 12px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-transfer-task-action {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  color: var(--sftp-text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sftp-transfer-task-action:hover {
+  color: var(--sftp-text);
+  background: var(--sftp-hover);
+}
+
+@keyframes sftp-transfer-indeterminate {
+  0% { transform: translateX(-110%); }
+  50%, 100% { transform: translateX(245%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sftp-transfer-progress-track > span.is-indeterminate {
+    animation: none;
+    width: 100%;
+  }
 }
 
 .session-content-body {
