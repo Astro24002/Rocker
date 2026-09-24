@@ -51,8 +51,8 @@ describe("UI quality stylesheet contract", () => {
   })
 
   it("locks the SFTP workspace to the reference split-pane table geometry", () => {
-    expect(layoutStyles).toMatch(/\.sftp-workspace-shell\s*\{[^}]*--sftp-canvas:\s*var\(--workspace-bg\);[^}]*--sftp-pane:\s*var\(--workspace-bg\);[^}]*grid-template-rows:\s*42px minmax\(0, 1fr\);[^}]*overflow:\s*hidden;/)
-    expect(layoutStyles).not.toMatch(/\.sftp-workspace-shell\s*\{[^}]*color-scheme:\s*light;/)
+    expect(layoutStyles).toMatch(/\.sftp-workspace-shell\s*\{[^}]*--sftp-canvas:\s*var\(--sftp-workspace-canvas\);[^}]*--sftp-pane:\s*var\(--sftp-workspace-pane\);[^}]*grid-template-rows:\s*42px minmax\(0, 1fr\);[^}]*overflow:\s*hidden;/)
+    expect(layoutStyles).toMatch(/\.sftp-workspace-shell\s*\{[^}]*color-scheme:\s*light;/)
     expect(layoutStyles).toMatch(/\.sftp-workspace-stage\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*overflow:\s*hidden;/)
     expect(layoutStyles).toMatch(/\.sftp-workspace-page\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);[^}]*gap:\s*1px;[^}]*overflow:\s*hidden;/)
     expect(layoutStyles).toMatch(/\.sftp-file-pane\s*\{[^}]*grid-template-rows:\s*58px 42px 38px minmax\(0, 1fr\);[^}]*overflow:\s*hidden;/)
@@ -61,7 +61,22 @@ describe("UI quality stylesheet contract", () => {
     expect(componentStyles).toMatch(/\.sftp-file-table-body\s*\{[^}]*overflow-y:\s*auto;/)
     expect(componentStyles).toMatch(/\.sftp-pane-titlebar\s*\{[^}]*padding:\s*0 14px;[^}]*background:\s*var\(--sftp-header\);/)
     expect(componentStyles).toMatch(/\.sftp-transfer-footer\s*\{[^}]*min-height:\s*46px;/)
-    expect(componentStyles).toMatch(/\.sftp-route-breadcrumb li\[aria-current="page"\]\s*\{[^}]*color:\s*var\(--text-primary\);/)
+    expect(layoutStyles).toMatch(/\.sftp-page-topbar\s*\{[^}]*background:\s*var\(--sftp-canvas\);/)
+    expect(componentStyles).toMatch(/\.sftp-route-breadcrumb li\[aria-current="page"\]\s*\{[^}]*color:\s*var\(--sftp-text\);/)
+  })
+
+  it("uses the approved light gray SFTP surfaces in Forest while preserving other themes", () => {
+    expect(tokenStyles).toMatch(/--sftp-workspace-canvas:\s*#e6e9ec;/)
+    expect(tokenStyles).toMatch(/--sftp-workspace-pane:\s*#f5f6f7;/)
+    expect(tokenStyles).toMatch(/--sftp-workspace-header:\s*#eceff1;/)
+    expect(layoutStyles).toMatch(/--sftp-line-subtle:\s*var\(--sftp-workspace-line-subtle\);/)
+    expect(tokenStyles).toMatch(/\[data-theme="dracula"\]\s*\{[\s\S]*?--sftp-workspace-canvas:\s*var\(--workspace-bg\);[\s\S]*?--sftp-workspace-header:\s*var\(--workspace-raised\);/)
+    expect(tokenStyles).toMatch(/\[data-theme="paper"\]\s*\{[\s\S]*?--sftp-workspace-canvas:\s*var\(--workspace-bg\);[\s\S]*?--sftp-workspace-header:\s*var\(--workspace-raised\);/)
+  })
+
+  it("matches the window chrome to SFTP only while that workspace is active", () => {
+    expect(layoutStyles).toMatch(/\.workspace\[data-active-view="sftp"\]\s*>\s*\.window-chrome\s*\{[^}]*background:\s*var\(--sftp-workspace-canvas\);/)
+    expect(layoutStyles).toMatch(/\.workspace\[data-active-view="sftp"\]\s*>\s*\.window-chrome \.window-controls button\s*\{[^}]*color:\s*var\(--sftp-workspace-secondary\);/)
   })
 
   it("positions the session context menu above the scrolling list", () => {

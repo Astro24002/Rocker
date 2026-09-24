@@ -83,6 +83,107 @@ describe("SftpWorkspaceView", () => {
     expect(onPatch).toHaveBeenCalledWith(session.id, expect.objectContaining({ kind: "sftp", browser: expect.objectContaining({ path: "/home" }) }))
   })
 
+  it("hides dotfiles by default and keeps the local and remote visibility controls independent", async () => {
+    const bridge = createBridge()
+    const localHidden = { name: ".local-secret", path: "/home/test/Desktop/.local-secret", type: "file" as const, size: 1 }
+    const remoteHidden = { name: ".remote-secret", path: "/.remote-secret", type: "file" as const, size: 1 }
+    vi.mocked(bridge.sftp.listLocal).mockResolvedValue({ path: "/home/test/Desktop", entries: [
+      localHidden,
+      { name: "local.txt", path: "/home/test/Desktop/local.txt", type: "file", size: 2 }
+    ] })
+    render(<I18nProvider><SftpWorkspaceView
+      hosts={[host]}
+      selectedSession={{ ...session, browser: { ...session.browser, entries: [
+        remoteHidden,
+        { name: "remote.txt", path: "/remote.txt", type: "file", size: 2 }
+      ] } }}
+      bridge={bridge}
+      onOpen={vi.fn()}
+      onPatch={vi.fn()}
+    /></I18nProvider>)
+
+    const localPane = screen.getByRole("heading", { name: "Local" }).closest(".sftp-file-pane") as HTMLElement
+    const remotePane = screen.getByRole("heading", { name: "G11" }).closest(".sftp-file-pane") as HTMLElement
+    await screen.findByRole("row", { name: /local\.txt/ })
+    await screen.findByRole("row", { name: /remote\.txt/ })
+    const localToggle = within(localPane).getByRole("checkbox", { name: "Show hidden files" })
+    const remoteToggle = within(remotePane).getByRole("checkbox", { name: "Show hidden files" })
+
+    expect(localToggle).not.toBeChecked()
+    expect(remoteToggle).not.toBeChecked()
+    expect(within(localPane).queryByRole("row", { name: /\.local-secret/ })).not.toBeInTheDocument()
+    expect(within(remotePane).queryByRole("row", { name: /\.remote-secret/ })).not.toBeInTheDocument()
+    expect(within(localPane).getByRole("row", { name: /local\.txt/ })).toBeInTheDocument()
+    expect(within(remotePane).getByRole("row", { name: /remote\.txt/ })).toBeInTheDocument()
+
+    fireEvent.click(remoteToggle)
+    expect(remoteToggle).toBeChecked()
+    expect(within(remotePane).getByRole("row", { name: /\.remote-secret/ })).toBeInTheDocument()
+    expect(within(localPane).queryByRole("row", { name: /\.local-secret/ })).not.toBeInTheDocument()
+
+    fireEvent.click(localToggle)
+    expect(within(localPane).getByRole("row", { name: /\.local-secret/ })).toBeInTheDocument()
+  })
+
+  it("resets hidden-file visibility when an SFTP session closes and is opened again", async () => {
+    const bridge = createBridge()
+    const hiddenEntry = { name: ".ssh-config", path: "/.ssh-config", type: "file" as const, size: 1 }
+    const selectedSession = { ...session, browser: { ...session.browser, entries: [hiddenEntry] } }
+    const rendered = render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={selectedSession} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+    let remotePane = screen.getByRole("heading", { name: "G11" }).closest(".sftp-file-pane") as HTMLElement
+    await waitFor(() => expect(bridge.sftp.list).toHaveBeenCalledWith(session.id, "/"))
+    fireEvent.click(within(remotePane).getByRole("checkbox", { name: "Show hidden files" }))
+    expect(within(remotePane).getByRole("row", { name: /\.ssh-config/ })).toBeInTheDocument()
+
+    rendered.rerender(<I18nProvider><SftpWorkspaceView hosts={[host]} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+    const hostsPane = screen.getByRole("heading", { name: "Hosts" }).closest(".sftp-file-pane") as HTMLElement
+    expect(within(hostsPane).queryByRole("checkbox", { name: "Show hidden files" })).not.toBeInTheDocument()
+
+    rendered.rerender(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={selectedSession} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+    remotePane = screen.getByRole("heading", { name: "G11" }).closest(".sftp-file-pane") as HTMLElement
+    expect(within(remotePane).getByRole("checkbox", { name: "Show hidden files" })).not.toBeChecked()
+    expect(within(remotePane).queryByRole("row", { name: /\.ssh-config/ })).not.toBeInTheDocument()
+  })
+
+  it("sorts by Name ascending by default and supports every column in both directions", async () => {
+    const bridge = createBridge()
+    const entries = [
+      { name: "zeta.txt", path: "/zeta.txt", type: "file" as const, size: 200, modifiedAt: "2026-09-19T10:00:00.000Z" },
+      { name: "Alpha.zip", path: "/Alpha.zip", type: "file" as const, size: 10, modifiedAt: "2026-09-20T10:00:00.000Z" },
+      { name: "beta.log", path: "/beta.log", type: "file" as const, size: 100, modifiedAt: "2026-09-18T10:00:00.000Z" }
+    ]
+    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, browser: { ...session.browser, entries } }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+    const remotePane = screen.getByRole("heading", { name: "G11" }).closest(".sftp-file-pane") as HTMLElement
+    const column = (name: string): HTMLElement => within(remotePane).getByRole("columnheader", { name })
+
+    expect(column("Name")).toHaveAttribute("aria-sort", "ascending")
+    expect(rowNames(remotePane)).toEqual(["Alpha.zip", "beta.log", "zeta.txt"])
+
+    fireEvent.click(within(column("Size")).getByRole("button", { name: "Size" }))
+    expect(column("Size")).toHaveAttribute("aria-sort", "ascending")
+    expect(rowNames(remotePane)).toEqual(["Alpha.zip", "beta.log", "zeta.txt"])
+    fireEvent.click(within(column("Size")).getByRole("button", { name: "Size" }))
+    expect(column("Size")).toHaveAttribute("aria-sort", "descending")
+    expect(rowNames(remotePane)).toEqual(["zeta.txt", "beta.log", "Alpha.zip"])
+
+    fireEvent.click(within(column("Date Modified")).getByRole("button", { name: "Date Modified" }))
+    expect(column("Date Modified")).toHaveAttribute("aria-sort", "ascending")
+    expect(rowNames(remotePane)).toEqual(["beta.log", "zeta.txt", "Alpha.zip"])
+
+    fireEvent.click(within(column("Kind")).getByRole("button", { name: "Kind" }))
+    expect(column("Kind")).toHaveAttribute("aria-sort", "ascending")
+    expect(rowNames(remotePane)).toEqual(["Alpha.zip", "beta.log", "zeta.txt"])
+    fireEvent.click(within(column("Kind")).getByRole("button", { name: "Kind" }))
+    expect(column("Kind")).toHaveAttribute("aria-sort", "descending")
+    expect(rowNames(remotePane)).toEqual(["zeta.txt", "beta.log", "Alpha.zip"])
+
+    fireEvent.click(within(column("Name")).getByRole("button", { name: "Name" }))
+    expect(column("Name")).toHaveAttribute("aria-sort", "ascending")
+    fireEvent.click(within(column("Name")).getByRole("button", { name: "Name" }))
+    expect(column("Name")).toHaveAttribute("aria-sort", "descending")
+    expect(rowNames(remotePane)).toEqual(["zeta.txt", "beta.log", "Alpha.zip"])
+  })
+
   it("shows a disconnected SFTP session as disconnected rather than connecting", async () => {
     const bridge = createBridge()
     const { container } = render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, state: "disconnected" }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
@@ -411,4 +512,8 @@ function createDataTransfer() {
     setData: (type: string, value: string) => { values.set(type, value) },
     getData: (type: string) => values.get(type) ?? ""
   }
+}
+
+function rowNames(pane: HTMLElement): string[] {
+  return Array.from(pane.querySelectorAll<HTMLElement>(".sftp-file-row .sftp-file-name > span"), (name) => name.textContent ?? "")
 }

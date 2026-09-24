@@ -1,5 +1,7 @@
 import {
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   ArrowRightLeft,
   Archive,
   ChevronRight,
@@ -74,6 +76,16 @@ interface PaneAction {
   onSelect(): void
 }
 
+type FileSortColumn = "name" | "modifiedAt" | "size" | "kind"
+type FileSortDirection = "ascending" | "descending"
+
+interface FileSortState {
+  column: FileSortColumn
+  direction: FileSortDirection
+}
+
+const fileEntryCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
+
 const localFileDragType = "application/x-rocker-sftp-local-path"
 const remoteFileDragType = "application/x-rocker-sftp-remote-path"
 
@@ -115,6 +127,7 @@ interface FilePaneProps {
   entries: readonly FilePaneEntry[]
   selectedEntryId?: string
   actions: readonly PaneAction[]
+  supportsHiddenFileFilter?: boolean
   loading?: boolean
   error?: string
   emptyMessage: string
@@ -558,6 +571,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       <div className="sftp-workspace-stage">
         <div className="sftp-workspace-page">
       <FilePane
+        key={`local-${selectedSession?.id ?? "hosts"}`}
         id="local"
         title={t("workspace.sftp.local")}
         subtitle={t("workspace.sftp.localSubtitle")}
@@ -566,6 +580,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
         entries={localEntries}
         selectedEntryId={selectedLocalId}
         actions={localActions}
+        supportsHiddenFileFilter
         emptyMessage={t("workspace.sftp.noLocalFiles")}
         filterPlaceholder={t("workspace.sftp.filterPlaceholder")}
         loading={localDirectory.loading}
@@ -582,6 +597,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
         }}
       />
       <FilePane
+        key={`remote-${selectedSession?.id ?? "hosts"}`}
         id="remote"
         title={remoteTitle}
         subtitle={remoteSubtitle}
@@ -590,6 +606,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
         entries={remoteEntries}
         selectedEntryId={selectedRemoteId}
         actions={remoteActions}
+        supportsHiddenFileFilter={Boolean(selectedSession)}
         loading={selectedSession?.browser.loading}
         error={selectedSession?.browser.error ?? actionError}
         emptyMessage={selectedSession ? t("session.sftp.emptyTitle") : t("workspace.sftp.selectHost")}
@@ -639,6 +656,7 @@ export function FilePane({
   entries,
   selectedEntryId,
   actions,
+  supportsHiddenFileFilter = false,
   onPaneContextMenu,
   contextMenuEnabled = true,
   loading = false,
@@ -661,6 +679,8 @@ export function FilePane({
 }: FilePaneProps): ReactElement {
   const { t } = useI18n()
   const [filter, setFilter] = useState("")
+  const [showHiddenFiles, setShowHiddenFiles] = useState(false)
+  const [sort, setSort] = useState<FileSortState>({ column: "name", direction: "ascending" })
   const [contextMenu, setContextMenu] = useState<SftpContextMenuPosition>()
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const contextMenuTriggerRef = useRef<HTMLElement | null>(null)
@@ -684,9 +704,21 @@ export function FilePane({
     })
   }, [actions.length, contextMenuEnabled, onEntrySelect, onPaneContextMenu])
   const deferredFilter = useDeferredValue(filter.trim().toLocaleLowerCase())
-  const visibleEntries = deferredFilter
-    ? entries.filter((entry) => entry.name.toLocaleLowerCase().includes(deferredFilter))
-    : entries
+  const visibleEntries = useMemo(() => entries
+    .filter((entry) => {
+      if (supportsHiddenFileFilter && !showHiddenFiles && entry.name.startsWith(".")) return false
+      return !deferredFilter || entry.name.toLocaleLowerCase().includes(deferredFilter)
+    })
+    .map((entry, index) => ({ entry, index }))
+    .sort((left, right) => compareFileEntries(left.entry, right.entry, sort, t) || left.index - right.index)
+    .map(({ entry }) => entry), [deferredFilter, entries, showHiddenFiles, sort, supportsHiddenFileFilter, t])
+
+  const selectSortColumn = (column: FileSortColumn): void => {
+    setSort((current) => ({
+      column,
+      direction: current.column === column && current.direction === "ascending" ? "descending" : "ascending"
+    }))
+  }
 
   useEffect(() => {
     if (!contextMenu) return
@@ -726,9 +758,20 @@ export function FilePane({
 
   return (
     <section className="sftp-file-pane" aria-labelledby={`sftp-${id}-title`} data-pane={id}>
-      <PaneHeader id={`sftp-${id}-title`} title={title} subtitle={subtitle} icon={titleIcon} filter={filter} filterPlaceholder={filterPlaceholder} onFilterChange={setFilter} />
+      <PaneHeader
+        id={`sftp-${id}-title`}
+        title={title}
+        subtitle={subtitle}
+        icon={titleIcon}
+        filter={filter}
+        filterPlaceholder={filterPlaceholder}
+        onFilterChange={setFilter}
+        showHiddenFiles={showHiddenFiles}
+        onShowHiddenFilesChange={setShowHiddenFiles}
+        showHiddenFilesControl={supportsHiddenFileFilter}
+      />
       <PaneBreadcrumb items={breadcrumbs} onBack={onBack} onSelect={onBreadcrumbSelect} />
-      <FileTableHeader />
+      <FileTableHeader sort={sort} onSort={selectSortColumn} />
       <FileTableBody
         entries={visibleEntries}
         selectedEntryId={selectedEntryId}
@@ -788,7 +831,10 @@ function PaneHeader({
   icon,
   filter,
   filterPlaceholder,
-  onFilterChange
+  onFilterChange,
+  showHiddenFiles,
+  onShowHiddenFilesChange,
+  showHiddenFilesControl
 }: {
   id: string
   title: string
@@ -797,6 +843,9 @@ function PaneHeader({
   filter: string
   filterPlaceholder: string
   onFilterChange(value: string): void
+  showHiddenFiles: boolean
+  onShowHiddenFilesChange(value: boolean): void
+  showHiddenFilesControl: boolean
 }): ReactElement {
   const { t } = useI18n()
   const headerRef = useRef<HTMLElement>(null)
@@ -825,6 +874,16 @@ function PaneHeader({
           <ListFilter aria-hidden="true" size={15} />
           <span>{t("workspace.sftp.filter")}</span>
         </button>
+        {showHiddenFilesControl ? (
+          <label className="sftp-show-hidden-toggle" title={t("workspace.sftp.showHiddenFiles")}>
+            <input
+              checked={showHiddenFiles}
+              onChange={(event) => onShowHiddenFilesChange(event.target.checked)}
+              type="checkbox"
+            />
+            <span>{t("workspace.sftp.showHiddenFiles")}</span>
+          </label>
+        ) : null}
       </div>
       {filterOpen ? (
         <div className="sftp-pane-popover sftp-filter-popover" role="search">
@@ -853,12 +912,26 @@ function PaneBreadcrumb({ items, onBack, onSelect }: { items: readonly PaneBread
   )
 }
 
-function FileTableHeader(): ReactElement {
+function FileTableHeader({ sort, onSort }: { sort: FileSortState; onSort(column: FileSortColumn): void }): ReactElement {
   const { t } = useI18n()
-  const columns = [t("session.sftp.column.name"), t("session.sftp.column.dateModified"), t("session.sftp.column.size"), t("session.sftp.column.kind")]
+  const columns: readonly { key: FileSortColumn; label: string }[] = [
+    { key: "name", label: t("session.sftp.column.name") },
+    { key: "modifiedAt", label: t("session.sftp.column.dateModified") },
+    { key: "size", label: t("session.sftp.column.size") },
+    { key: "kind", label: t("session.sftp.column.kind") }
+  ]
   return (
     <div className="sftp-file-table-header" role="row">
-      {columns.map((label) => <span key={label} role="columnheader" title={label}>{label}</span>)}
+      {columns.map(({ key, label }) => {
+        const active = sort.column === key
+        const direction = active ? sort.direction : "none"
+        return <span aria-sort={direction} key={key} role="columnheader" title={label}>
+          <button className="sftp-file-sort-button" onClick={() => onSort(key)} type="button">
+            {label}
+            {active ? sort.direction === "ascending" ? <ArrowUp aria-hidden="true" size={13} /> : <ArrowDown aria-hidden="true" size={13} /> : null}
+          </button>
+        </span>
+      })}
     </div>
   )
 }
@@ -933,15 +1006,7 @@ function FileRow({ entry, selected, onSelect, onOpen, onDragStart, onDrop, onCon
   moving?: boolean
 }): ReactElement {
   const { t } = useI18n()
-  const kindLabel = entry.kind === "folder"
-    ? t("session.sftp.kind.folder")
-    : entry.kind === "file"
-      ? fileKindLabel(entry.name, t("session.sftp.kind.file"))
-      : entry.kind === "symlink"
-        ? t("session.sftp.kind.symlink")
-        : entry.kind === "host"
-          ? t("session.sftp.kind.host")
-          : t("session.sftp.kind.other")
+  const kindLabel = getFileEntryKindLabel(entry, t)
   const isFolder = entry.kind === "folder" || entry.kind === "host"
   const isArchive = entry.kind === "file" && kindLabel === "Archive"
   const canDrop = onDrop !== undefined && entry.kind === "folder"
@@ -1159,6 +1224,36 @@ function joinSftpPath(directory: string, name: string): string {
 function localFilePath(file: File): string | undefined {
   const candidate = file as File & { path?: unknown }
   return typeof candidate.path === "string" && candidate.path.trim().length > 0 ? candidate.path : undefined
+}
+
+function compareFileEntries(left: FilePaneEntry, right: FilePaneEntry, sort: FileSortState, t: ReturnType<typeof useI18n>["t"]): number {
+  let result: number
+  if (sort.column === "name") {
+    result = fileEntryCollator.compare(left.name, right.name)
+  } else if (sort.column === "kind") {
+    result = fileEntryCollator.compare(getFileEntryKindLabel(left, t), getFileEntryKindLabel(right, t))
+  } else {
+    const leftValue = sort.column === "size" ? left.size : parseModifiedAt(left.modifiedAt)
+    const rightValue = sort.column === "size" ? right.size : parseModifiedAt(right.modifiedAt)
+    if (leftValue === undefined) return rightValue === undefined ? 0 : 1
+    if (rightValue === undefined) return -1
+    result = leftValue - rightValue
+  }
+  return sort.direction === "ascending" ? result : -result
+}
+
+function parseModifiedAt(value: string | undefined): number | undefined {
+  if (!value) return undefined
+  const timestamp = Date.parse(value)
+  return Number.isNaN(timestamp) ? undefined : timestamp
+}
+
+function getFileEntryKindLabel(entry: FilePaneEntry, t: ReturnType<typeof useI18n>["t"]): string {
+  if (entry.kind === "folder") return t("session.sftp.kind.folder")
+  if (entry.kind === "file") return fileKindLabel(entry.name, t("session.sftp.kind.file"))
+  if (entry.kind === "symlink") return t("session.sftp.kind.symlink")
+  if (entry.kind === "host") return t("session.sftp.kind.host")
+  return t("session.sftp.kind.other")
 }
 
 function formatModifiedAt(value: string | undefined, todayLabel: string, yesterdayLabel: string): string {

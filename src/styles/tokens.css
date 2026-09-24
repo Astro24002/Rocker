@@ -110,6 +110,17 @@
   --sftp-progress-track: #dfe4e8;
   --sftp-menu-shadow: rgba(31, 37, 43, 0.16);
   --sftp-stage-shadow: rgba(31, 37, 43, 0.05);
+  --sftp-workspace-canvas: #e6e9ec;
+  --sftp-workspace-pane: #f5f6f7;
+  --sftp-workspace-header: #eceff1;
+  --sftp-workspace-line: #d4dbe0;
+  --sftp-workspace-line-strong: #c5cdd4;
+  --sftp-workspace-line-subtle: rgba(38, 49, 58, 0.1);
+  --sftp-workspace-text: #27333b;
+  --sftp-workspace-secondary: #4e5b64;
+  --sftp-workspace-muted: #64717a;
+  --sftp-workspace-hover: #e9edf0;
+  --sftp-workspace-selected: #dce5ed;
   --sidebar-width: 220px;
 }
 
@@ -157,6 +168,17 @@
   --terminal-bright-magenta: #ff92df;
   --terminal-bright-cyan: #a4ffff;
   --terminal-bright-white: #ffffff;
+  --sftp-workspace-canvas: var(--workspace-bg);
+  --sftp-workspace-pane: var(--workspace-bg);
+  --sftp-workspace-header: var(--workspace-raised);
+  --sftp-workspace-line: var(--line);
+  --sftp-workspace-line-strong: var(--line-strong);
+  --sftp-workspace-line-subtle: var(--line-subtle);
+  --sftp-workspace-text: var(--text-primary);
+  --sftp-workspace-secondary: var(--text-secondary);
+  --sftp-workspace-muted: var(--text-muted);
+  --sftp-workspace-hover: var(--workspace-hover);
+  --sftp-workspace-selected: var(--selection);
 }
 
 [data-theme="paper"] {
@@ -204,4 +226,15 @@
   --terminal-bright-magenta: #a855a1;
   --terminal-bright-cyan: #238e8c;
   --terminal-bright-white: #ffffff;
+  --sftp-workspace-canvas: var(--workspace-bg);
+  --sftp-workspace-pane: var(--workspace-bg);
+  --sftp-workspace-header: var(--workspace-raised);
+  --sftp-workspace-line: var(--line);
+  --sftp-workspace-line-strong: var(--line-strong);
+  --sftp-workspace-line-subtle: var(--line-subtle);
+  --sftp-workspace-text: var(--text-primary);
+  --sftp-workspace-secondary: var(--text-secondary);
+  --sftp-workspace-muted: var(--text-muted);
+  --sftp-workspace-hover: var(--workspace-hover);
+  --sftp-workspace-selected: var(--selection);
 }

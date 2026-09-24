@@ -25,6 +25,7 @@ export const en = {
   "workspace.sftp.hosts": "Hosts",
   "workspace.sftp.selectHost": "Choose a host to browse remote files.",
   "workspace.sftp.filter": "Filter",
+  "workspace.sftp.showHiddenFiles": "Show hidden files",
   "workspace.sftp.actions": "Actions",
   "workspace.sftp.filterPlaceholder": "Filter files",
   "workspace.sftp.pathNavigation": "Path navigation",

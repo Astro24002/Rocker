@@ -27,6 +27,7 @@ export const zhCN = {
   "workspace.sftp.hosts": "主机",
   "workspace.sftp.selectHost": "选择主机以浏览远程文件。",
   "workspace.sftp.filter": "筛选",
+  "workspace.sftp.showHiddenFiles": "显示隐藏文件",
   "workspace.sftp.actions": "操作",
   "workspace.sftp.filterPlaceholder": "筛选文件",
   "workspace.sftp.pathNavigation": "路径导航",
