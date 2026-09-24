@@ -3,6 +3,7 @@ import type { TranslationKey } from "./en"
 export const zhCN = {
   "app.tagline": "SSH 工作台",
   "workspace.personal": "个人空间",
+  "workspace.breadcrumbs": "导航路径",
   "workspace.sftpSplitSubtitle": "在右侧选择主机以打开远程文件工作区。",
   "workspace.sftp.title": "SFTP 工作区",
   "workspace.sftp.localSubtitle": "此设备",
@@ -109,6 +110,7 @@ export const zhCN = {
   "hosts.editor.close": "关闭",
   "hosts.editor.identity": "身份信息",
   "hosts.editor.label": "标签",
+  "hosts.editor.nameConflict": "此设备上已存在同名主机。",
   "hosts.editor.address": "地址",
   "hosts.editor.parentGroup": "所属分组",
   "hosts.editor.personalGroup": "个人",

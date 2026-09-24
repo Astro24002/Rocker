@@ -17,25 +17,6 @@
   user-select: none;
 }
 
-.workspace[data-active-view="sftp"],
-.workspace[data-active-view="sftp"] .window-chrome {
-  background: var(--sftp-pane);
-}
-
-.workspace[data-active-view="sftp"] .window-controls button {
-  color: var(--sftp-text-secondary);
-}
-
-.workspace[data-active-view="sftp"] .window-controls button:hover {
-  color: var(--sftp-text);
-  background: var(--sftp-hover);
-}
-
-.workspace[data-active-view="sftp"] .window-controls .window-close:hover {
-  color: var(--sftp-host-ink);
-  background: var(--sftp-danger);
-}
-
 .window-chrome[data-platform="win32"] .window-controls,
 .window-chrome[data-platform="linux"] .window-controls,
 .window-chrome[data-platform="browser"] .window-controls {
@@ -256,6 +237,32 @@
 .workspace-picker-row small { color: var(--text-muted); }
 
 .sftp-workspace-shell {
+  --sftp-canvas: var(--workspace-bg);
+  --sftp-pane: var(--workspace-bg);
+  --sftp-header: var(--workspace-raised);
+  --sftp-line: var(--line);
+  --sftp-line-strong: var(--line-strong);
+  --sftp-text: var(--text-primary);
+  --sftp-text-secondary: var(--text-secondary);
+  --sftp-text-muted: var(--text-muted);
+  --sftp-hover: var(--workspace-hover);
+  --sftp-selected: var(--selection);
+  --sftp-folder: var(--accent);
+  --sftp-folder-surface: var(--accent-soft);
+  --sftp-focus: var(--focus);
+  --sftp-danger: var(--danger);
+  --sftp-danger-strong: var(--danger);
+  --sftp-danger-surface: var(--danger-hover);
+  --sftp-brand-deep: var(--text-primary);
+  --sftp-text-row: var(--text-secondary);
+  --sftp-text-strong: var(--text-primary);
+  --sftp-text-description: var(--text-secondary);
+  --sftp-line-subtle: var(--line-subtle);
+  --sftp-status-success: var(--success);
+  --sftp-status-warning: var(--warning);
+  --sftp-progress-track: var(--line);
+  --sftp-menu-shadow: var(--overlay-shadow-soft);
+  --sftp-stage-shadow: var(--overlay-shadow-soft);
   display: grid;
   width: 100%;
   height: 100%;
@@ -266,7 +273,6 @@
   gap: 14px;
   padding: 18px 24px 20px;
   overflow: hidden;
-  color-scheme: light;
   color: var(--sftp-text);
   background: var(--sftp-canvas);
 }

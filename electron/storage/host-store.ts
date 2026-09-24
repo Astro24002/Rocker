@@ -7,6 +7,21 @@ import type { HostCharset, HostEnvironment, HostPlatform, HostProfile, HostTheme
 
 const defaultDocument: StoredHostDocument = { hosts: [] }
 
+export function hostNameKey(name: string): string {
+  return name.trim().normalize("NFKC").toLowerCase()
+}
+
+export function uniqueHostName(name: string, existingNames: Iterable<string>): string {
+  const base = name.trim().slice(0, 256).trimEnd()
+  const taken = new Set(Array.from(existingNames, hostNameKey))
+  if (!taken.has(hostNameKey(base))) return base
+  for (let suffixNumber = 2; ; suffixNumber += 1) {
+    const suffix = ` (${suffixNumber})`
+    const candidate = `${base.slice(0, 256 - suffix.length).trimEnd()}${suffix}`
+    if (!taken.has(hostNameKey(candidate))) return candidate
+  }
+}
+
 export class HostStore {
   private readonly store: JsonStore<StoredHostDocument>
 
@@ -29,6 +44,7 @@ export class HostStore {
     if (!normalized) throw new Error("Host profile is invalid")
     await this.store.update((document) => {
       const next = normalizeHostDocument(document) ?? structuredClone(defaultDocument)
+      assertUniqueHostName(next.hosts, normalized)
       const index = next.hosts.findIndex((host) => host.id === normalized.id)
       if (index === -1) next.hosts.push(normalized)
       else next.hosts[index] = normalized
@@ -49,6 +65,7 @@ export class HostStore {
       }
       const normalized = normalizeHostProfile(candidate)
       if (!normalized) throw new Error("Host profile is invalid")
+      assertUniqueHostName(next.hosts, normalized)
       const index = next.hosts.findIndex((host) => host.id === normalized.id)
       if (index === -1) next.hosts.push(normalized)
       else next.hosts[index] = normalized
@@ -64,7 +81,7 @@ export class HostStore {
       if (!source) throw new Error("Host profile was not found")
       duplicate = {
         id: randomUUID(),
-        name: `${source.name} copy`,
+        name: uniqueHostName(`${source.name} copy`, next.hosts.map((host) => host.name)),
         host: source.host,
         port: source.port,
         username: source.username,
@@ -107,18 +124,22 @@ export class HostStore {
 
   public async importOpenSSHConfig(text: string, homeDirectory = homedir()): Promise<HostProfile[]> {
     const profiles = parseOpenSSHConfig(text, homeDirectory)
+    let imported: HostProfile[] = []
     await this.store.update((document) => {
       const next = normalizeHostDocument(document) ?? structuredClone(defaultDocument)
       const existingIds = new Set(next.hosts.map((host) => host.id))
+      imported = []
       for (const profile of profiles) {
         if (!existingIds.has(profile.id)) {
-          next.hosts.push(profile)
+          const candidate = { ...profile, name: uniqueHostName(profile.name, next.hosts.map((host) => host.name)) }
+          next.hosts.push(candidate)
+          imported.push(candidate)
           existingIds.add(profile.id)
         }
       }
       return next
     })
-    return profiles
+    return imported
   }
 }
 
@@ -139,14 +160,19 @@ function createJsonStore(filePath: string, onDiagnostic?: StorageDiagnosticSink)
 
 export function normalizeHostDocument(value: unknown): StoredHostDocument | undefined {
   if (!isRecord(value) || !Array.isArray(value.hosts)) return undefined
-  const hosts = value.hosts.map(normalizeHostProfile)
-  if (hosts.some((host): host is undefined => host === undefined)) return undefined
-  return { hosts: hosts.filter((host): host is HostProfile => host !== undefined) }
+  const normalizedHosts = value.hosts.map(normalizeHostProfile)
+  if (normalizedHosts.some((host): host is undefined => host === undefined)) return undefined
+  const hosts: HostProfile[] = []
+  for (const host of normalizedHosts) {
+    if (!host) continue
+    hosts.push({ ...host, name: uniqueHostName(host.name, hosts.map((entry) => entry.name)) })
+  }
+  return { hosts }
 }
 
 export function normalizeHostProfile(value: unknown): HostProfile | undefined {
   if (!isRecord(value)) return undefined
-  if (!isBoundedString(value.id, 128) || !isBoundedString(value.name, 256) || !isBoundedString(value.host, 512)) return undefined
+  if (!isBoundedString(value.id, 128) || !isBoundedString(value.name, 256) || !value.name.trim() || !isBoundedString(value.host, 512)) return undefined
   if (!isPort(value.port) || !isString(value.username, 256) || !isString(value.notes, 10_000)) return undefined
   if (value.authMethod !== "password" && value.authMethod !== "privateKey" && value.authMethod !== "agent") return undefined
   if (typeof value.favorite !== "boolean") return undefined
@@ -159,7 +185,7 @@ export function normalizeHostProfile(value: unknown): HostProfile | undefined {
   const tags = normalizeHostTags(value.tags)
   return {
     id: value.id,
-    name: value.name,
+    name: value.name.trim(),
     host: value.host,
     port: value.port,
     username: value.username,
@@ -176,6 +202,13 @@ export function normalizeHostProfile(value: unknown): HostProfile | undefined {
     ...(tags ? { tags } : {}),
     favorite: value.favorite,
     notes: value.notes
+  }
+}
+
+function assertUniqueHostName(hosts: readonly HostProfile[], candidate: HostProfile): void {
+  const candidateKey = hostNameKey(candidate.name)
+  if (hosts.some((host) => host.id !== candidate.id && hostNameKey(host.name) === candidateKey)) {
+    throw new Error("Host name already exists")
   }
 }
 

@@ -51,7 +51,8 @@ describe("UI quality stylesheet contract", () => {
   })
 
   it("locks the SFTP workspace to the reference split-pane table geometry", () => {
-    expect(layoutStyles).toMatch(/\.sftp-workspace-shell\s*\{[^}]*grid-template-rows:\s*42px minmax\(0, 1fr\);[^}]*overflow:\s*hidden;/)
+    expect(layoutStyles).toMatch(/\.sftp-workspace-shell\s*\{[^}]*--sftp-canvas:\s*var\(--workspace-bg\);[^}]*--sftp-pane:\s*var\(--workspace-bg\);[^}]*grid-template-rows:\s*42px minmax\(0, 1fr\);[^}]*overflow:\s*hidden;/)
+    expect(layoutStyles).not.toMatch(/\.sftp-workspace-shell\s*\{[^}]*color-scheme:\s*light;/)
     expect(layoutStyles).toMatch(/\.sftp-workspace-stage\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*overflow:\s*hidden;/)
     expect(layoutStyles).toMatch(/\.sftp-workspace-page\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);[^}]*gap:\s*1px;[^}]*overflow:\s*hidden;/)
     expect(layoutStyles).toMatch(/\.sftp-file-pane\s*\{[^}]*grid-template-rows:\s*58px 42px 38px minmax\(0, 1fr\);[^}]*overflow:\s*hidden;/)
@@ -60,6 +61,7 @@ describe("UI quality stylesheet contract", () => {
     expect(componentStyles).toMatch(/\.sftp-file-table-body\s*\{[^}]*overflow-y:\s*auto;/)
     expect(componentStyles).toMatch(/\.sftp-pane-titlebar\s*\{[^}]*padding:\s*0 14px;[^}]*background:\s*var\(--sftp-header\);/)
     expect(componentStyles).toMatch(/\.sftp-transfer-footer\s*\{[^}]*min-height:\s*46px;/)
+    expect(componentStyles).toMatch(/\.sftp-route-breadcrumb li\[aria-current="page"\]\s*\{[^}]*color:\s*var\(--text-primary\);/)
   })
 
   it("positions the session context menu above the scrolling list", () => {

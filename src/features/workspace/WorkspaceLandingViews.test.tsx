@@ -60,6 +60,9 @@ describe("SftpWorkspaceView", () => {
     expect(screen.getByRole("heading", { name: "Local" })).toBeInTheDocument()
     expect(screen.queryByRole("heading", { name: "Hosts" })).not.toBeInTheDocument()
     expect(screen.getByRole("heading", { name: "G11" })).toBeInTheDocument()
+    const route = screen.getByRole("navigation", { name: "Breadcrumb" })
+    expect(Array.from(route.querySelectorAll("li"), (item) => item.textContent)).toEqual(["ROCKER", "SFTP", "G11"])
+    expect(screen.queryByRole("heading", { name: "SFTP workspace" })).not.toBeInTheDocument()
     expect(screen.getAllByRole("columnheader", { name: "Name" })).toHaveLength(2)
     expect(screen.getAllByRole("columnheader", { name: "Date Modified" })).toHaveLength(2)
     expect(screen.getAllByRole("columnheader", { name: "Size" })).toHaveLength(2)
@@ -85,7 +88,8 @@ describe("SftpWorkspaceView", () => {
     const { container } = render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, state: "disconnected" }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
-    expect(container.querySelector(".sftp-page-meta")).toHaveTextContent("Disconnected")
+    const remotePane = screen.getByRole("heading", { name: "G11" }).closest(".sftp-file-pane")
+    expect(remotePane?.querySelector(".sftp-pane-copy > span")).toHaveTextContent("Disconnected")
   })
 
   it("resolves a new host workspace to its real home and retains the resolved path", async () => {

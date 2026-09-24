@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { normalizeForwardingProfile } from "./forwarding-profile-store"
-import { normalizeHostProfile } from "./host-store"
+import { normalizeHostProfile, uniqueHostName } from "./host-store"
 import { normalizeSettings } from "./settings-store"
 import type { CredentialImportResult } from "./credentials"
 import type { CredentialKind, AppSettings, ForwardingProfile, HostProfile } from "./types"
@@ -684,15 +684,26 @@ function planHosts(
   requireResolution: boolean
 ): HostPlan[] {
   const localById = new Map(local.map((host) => [host.id, host]))
+  const reserved = [...local]
+  const reserve = (profile: HostProfile, name = profile.name, replaceId?: string): HostProfile => {
+    const existingNames = reserved.filter((host) => host.id !== replaceId).map((host) => host.name)
+    const planned = { ...profile, name: uniqueHostName(name, existingNames) }
+    if (replaceId) {
+      const index = reserved.findIndex((host) => host.id === replaceId)
+      if (index !== -1) reserved.splice(index, 1)
+    }
+    reserved.push(planned)
+    return planned
+  }
   return imported.map((profile) => {
     const existing = localById.get(profile.id)
-    if (!existing) return { imported: profile, profile, action: "new" }
+    if (!existing) return { imported: profile, profile: reserve(profile), action: "new" }
     if (sameHost(existing, profile)) return { imported: profile, profile: existing, original: existing, action: "matching" }
     const resolution = resolutions[profile.id]
     if (requireResolution && resolution === undefined) throw new Error("Import conflict requires resolution")
-    if (resolution === "use-imported") return { imported: profile, profile, original: existing, action: "replace" }
+    if (resolution === "use-imported") return { imported: profile, profile: reserve(profile, profile.name, existing.id), original: existing, action: "replace" }
     if (resolution === "create-copy") {
-      const copy = { ...profile, id: nextHostId(), name: importedCopyName(profile.name) }
+      const copy = reserve({ ...profile, id: nextHostId() }, importedCopyName(profile.name))
       return { imported: profile, profile: copy, original: existing, action: "copy" }
     }
     return { imported: profile, action: "skip" }

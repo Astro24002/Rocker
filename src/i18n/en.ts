@@ -1,6 +1,7 @@
 export const en = {
   "app.tagline": "SSH workspace",
   "workspace.personal": "Personal",
+  "workspace.breadcrumbs": "Breadcrumb",
   "workspace.sftpSplitSubtitle": "Choose a Host on the right to open its remote file workspace.",
   "workspace.sftp.title": "SFTP workspace",
   "workspace.sftp.localSubtitle": "This computer",
@@ -107,6 +108,7 @@ export const en = {
   "hosts.editor.close": "Close",
   "hosts.editor.identity": "Identity",
   "hosts.editor.label": "Label",
+  "hosts.editor.nameConflict": "A Host with this name already exists on this device.",
   "hosts.editor.address": "Address",
   "hosts.editor.parentGroup": "Parent group",
   "hosts.editor.personalGroup": "Personal",

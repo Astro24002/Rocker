@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { HostStore, normalizeHostProfile } from "./host-store"
+import { HostStore, normalizeHostDocument, normalizeHostProfile } from "./host-store"
 
 const temporaryPaths: string[] = []
 
@@ -26,6 +26,18 @@ describe("host profile platform metadata", () => {
     expect(normalizeHostProfile({ ...profile, platform: "ubuntu" })).toMatchObject({ platform: "ubuntu" })
     expect(normalizeHostProfile({ ...profile, platform: "plan9" })).not.toHaveProperty("platform")
     expect(normalizeHostProfile(profile)).not.toHaveProperty("platform")
+  })
+
+  it("disambiguates legacy duplicate names without changing Host ids", () => {
+    const document = normalizeHostDocument({ hosts: [
+      profile,
+      { ...profile, id: "host-b", name: " g11 " }
+    ] })
+
+    expect(document?.hosts.map(({ id, name }) => ({ id, name }))).toEqual([
+      { id: "host-a", name: "G11" },
+      { id: "host-b", name: "g11 (2)" }
+    ])
   })
 })
 
@@ -146,6 +158,7 @@ describe("host profile mutations", () => {
     })
 
     const duplicate = await store.duplicate("host-a")
+    const secondDuplicate = await store.duplicate("host-a")
 
     expect(duplicate).toMatchObject({
       name: "G11 copy",
@@ -167,6 +180,40 @@ describe("host profile mutations", () => {
     expect(duplicate).not.toHaveProperty("tags")
     expect(duplicate.snippetsEnabled).toBe(false)
     expect(duplicate.publicKeyEnabled).toBe(false)
+    expect(secondDuplicate.name).toBe("G11 copy (2)")
+  })
+
+  it("enforces trimmed case-insensitive unique names while allowing the same Host to be edited", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-host-store-unique-name-"))
+    temporaryPaths.push(directory)
+    const store = new HostStore(join(directory, "rocker.json"))
+    const profile = { id: "host-a", name: "G11", host: "g11.example.test", port: 22, username: "root", authMethod: "agent" as const, favorite: false, notes: "" }
+    await store.save(profile)
+
+    await expect(store.save({ ...profile, id: "host-b", name: "  g11  ", host: "other.example.test" }))
+      .rejects.toThrow("Host name already exists")
+    await expect(store.save({ ...profile, name: "  g11  " })).resolves.toBeUndefined()
+    await expect(store.list()).resolves.toMatchObject([{ id: "host-a", name: "g11" }])
+  })
+
+  it("assigns unique names to Hosts imported from OpenSSH config", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rocker-host-store-ssh-import-"))
+    temporaryPaths.push(directory)
+    const store = new HostStore(join(directory, "rocker.json"))
+    const imported = await store.importOpenSSHConfig([
+      "Host G11",
+      "  HostName g11.example.test",
+      "  User root",
+      "Host g11",
+      "  HostName g11-alt.example.test",
+      "  User root"
+    ].join("\n"), "/home/test")
+
+    expect(imported.map((host) => host.name)).toEqual(["G11", "g11 (2)"])
+    await expect(store.list()).resolves.toMatchObject([
+      { id: imported[0]?.id, name: "G11" },
+      { id: imported[1]?.id, name: "g11 (2)" }
+    ])
   })
 
   it("updates only the requested host favorite state", async () => {

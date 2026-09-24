@@ -46,6 +46,28 @@ describe("HostEditor", () => {
     expect(saved).not.toHaveProperty("snippetCollection")
   })
 
+  it("blocks a duplicate local Host name regardless of case or surrounding spaces", () => {
+    const onSave = vi.fn()
+    renderEditor(undefined, onSave, [baseProfile])
+    fillRequiredIdentity()
+    fireEvent.change(screen.getByLabelText("Label"), { target: { value: "  g11  " } })
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
+
+    expect(screen.getByRole("alert")).toHaveTextContent("A Host with this name already exists on this device")
+    expect(screen.getByRole("textbox", { name: "Label" })).toHaveAttribute("aria-invalid", "true")
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it("allows an existing Host to retain its own unique name", () => {
+    const onSave = vi.fn()
+    renderEditor(baseProfile, onSave, [baseProfile])
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ id: "host-a", name: "G11" }), expect.anything())
+  })
+
   it("does not expose or write retired organization metadata", () => {
     const onSave = vi.fn()
     renderEditor({ ...baseProfile, environment: "production", tags: ["core"] }, onSave)
@@ -171,10 +193,10 @@ describe("HostEditor", () => {
   })
 })
 
-function renderEditor(profile?: HostProfile, onSave = vi.fn()): void {
+function renderEditor(profile?: HostProfile, onSave = vi.fn(), hosts: readonly HostProfile[] = []): void {
   render(
     <I18nProvider>
-      <HostEditor open profile={profile} onClose={vi.fn()} onSave={onSave} />
+      <HostEditor open profile={profile} hosts={hosts} onClose={vi.fn()} onSave={onSave} />
     </I18nProvider>
   )
 }

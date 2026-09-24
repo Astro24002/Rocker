@@ -90,34 +90,19 @@ function SftpWorkspaceHeader({ hosts, selectedSession, samplePreview }: {
 }): ReactElement {
   const { t } = useI18n()
   const host = hosts.find((item) => item.id === selectedSession?.hostId)
-  const connectionState = selectedSession?.state === "connected"
-    ? t("workspace.sftp.state.connected")
-    : selectedSession?.state === "error"
-      ? t("workspace.sftp.state.error")
-      : selectedSession?.state === "disconnected"
-        ? t("workspace.sftp.state.disconnected")
-        : t("workspace.sftp.state.connecting")
+  const currentHostName = host?.name ?? selectedSession?.label
 
   return (
-    <header className="sftp-page-topbar">
-      <div className="sftp-page-heading">
-        <div aria-hidden="true" className="sftp-page-mark">R</div>
-        <div>
-          <p className="sftp-page-kicker">Rocker / SFTP</p>
-          <h1>{t("workspace.sftp.title")}</h1>
-        </div>
-      </div>
-      <div className="sftp-page-meta" aria-label={t("workspace.sftp.status")}>
-        <span aria-hidden="true" className="sftp-page-status-dot" data-state={samplePreview ? "connected" : selectedSession?.state ?? "idle"} />
-        {samplePreview ? <>
-          <span>{t("workspace.sftp.preview")}</span>
-          <span>{t("workspace.sftp.sampleData")}</span>
-        </> : selectedSession ? <>
-          <span>{`${host?.name ?? selectedSession.label} · ${host?.username ?? ""}`.trim()}</span>
-          <span>{connectionState}</span>
-        </> : <span>{t("workspace.sftp.selectHostSubtitle")}</span>}
-      </div>
-    </header>
+    <nav
+      aria-label={samplePreview ? `${t("workspace.breadcrumbs")}: ${t("workspace.sftp.preview")}, ${t("workspace.sftp.sampleData")}` : t("workspace.breadcrumbs")}
+      className="sftp-page-topbar sftp-route-breadcrumb"
+    >
+      <ol>
+        <li>ROCKER</li>
+        <li>SFTP</li>
+        {currentHostName ? <li aria-current="page">{currentHostName}</li> : null}
+      </ol>
+    </nav>
   )
 }
 
@@ -168,8 +153,15 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
   const remotePath = selectedSession?.browser.path || "."
   const selectedHost = hosts.find((host) => host.id === selectedSession?.hostId)
   const remoteTitle = selectedSession ? selectedHost?.name ?? selectedSession.label : t("workspace.sftp.hosts")
+  const connectionState = selectedSession?.state === "connected"
+    ? t("workspace.sftp.state.connected")
+    : selectedSession?.state === "error"
+      ? t("workspace.sftp.state.error")
+      : selectedSession?.state === "disconnected"
+        ? t("workspace.sftp.state.disconnected")
+        : t("workspace.sftp.state.connecting")
   const remoteSubtitle = selectedSession
-    ? `${t("workspace.sftp.protocolSsh")} · ${selectedHost?.username ?? ""}`.trim()
+    ? [t("workspace.sftp.protocolSsh"), selectedHost?.username, connectionState].filter(Boolean).join(" · ")
     : t("workspace.sftp.selectHostSubtitle")
   const selectedRemoteEntry = selectedSession?.browser.entries.find((entry) => entry.path === selectedRemoteId)
   const selectedLocalEntry = localDirectory.entries.find((entry) => entry.path === selectedLocalId)

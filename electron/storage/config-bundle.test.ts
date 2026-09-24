@@ -116,6 +116,24 @@ describe("configuration bundles", () => {
     expect(target.credentials.get("host-a:password")).toBe("password-value")
   })
 
+  it("assigns unique names when importing Hosts that collide locally or in the same bundle", async () => {
+    const target = createTarget()
+    target.hosts[0]!.name = "G11"
+    const imported = snapshot()
+    imported.hosts = [
+      { ...imported.hosts[0]!, id: "host-b", name: "G11", host: "one.example" },
+      { ...imported.hosts[0]!, id: "host-c", name: "g11", host: "two.example" }
+    ]
+    imported.hostKeys = []
+    imported.credentials = []
+    imported.profiles = []
+    const bundle = new TextEncoder().encode(JSON.stringify(exportTemplate(imported)))
+    const service = new ConfigBundleService(target)
+
+    await expect(service.import(bundle, undefined, {})).resolves.toMatchObject({ importedHosts: 2 })
+    expect(target.hosts.map((host) => host.name)).toEqual(["G11", "G11 (2)", "g11 (3)"])
+  })
+
   it("rolls back earlier store changes when a later import operation fails", async () => {
     const target = createTarget()
     const service = new ConfigBundleService(target)

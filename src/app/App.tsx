@@ -1501,7 +1501,7 @@ function Workspace() {
           )}
           </div>
       </main>
-      <HostEditor open={editor.open} profile={editor.profile} onClose={() => setEditor({ open: false })} onSave={saveHost} />
+      <HostEditor open={editor.open} profile={editor.profile} hosts={hosts} onClose={() => setEditor({ open: false })} onSave={saveHost} />
       <CommandPalette open={paletteOpen} context={commandContext} onClose={() => setPaletteOpen(false)} onRestoreFocus={restorePaletteFocus} />
       {!paletteOpen && terminalContextMenu && terminalMenuSession && <TerminalContextMenu open x={terminalContextMenu.x} y={terminalContextMenu.y} context={terminalMenuContext} onClose={closeTerminalContextMenu} onRestoreFocus={(request) => {
         if (request === "terminal.focus") return

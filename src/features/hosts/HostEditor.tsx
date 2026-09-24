@@ -10,11 +10,12 @@ type HostEditorProfile = HostProfile | BootstrapHostProfile
 interface HostEditorProps {
   open: boolean
   profile?: HostEditorProfile
+  hosts: readonly HostEditorProfile[]
   onClose(): void
   onSave(profile: HostSaveProfile, credentials: { password?: string; passphrase?: string }): void | Promise<void>
 }
 
-export function HostEditor({ open, profile, onClose, onSave }: HostEditorProps): ReactElement | null {
+export function HostEditor({ open, profile, hosts, onClose, onSave }: HostEditorProps): ReactElement | null {
   const { t } = useI18n()
   const [draft, setDraft] = useState<HostProfile>(() => draftFromProfile(profile))
   const [password, setPassword] = useState("")
@@ -24,6 +25,7 @@ export function HostEditor({ open, profile, onClose, onSave }: HostEditorProps):
   const [nonKeyAuthMethod, setNonKeyAuthMethod] = useState<"password" | "agent">(() => profile?.authMethod === "agent" ? "agent" : "password")
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState(false)
+  const [nameConflict, setNameConflict] = useState(false)
 
   useEffect(() => {
     setDraft(draftFromProfile(profile))
@@ -34,12 +36,14 @@ export function HostEditor({ open, profile, onClose, onSave }: HostEditorProps):
     setNonKeyAuthMethod(profile?.authMethod === "agent" ? "agent" : "password")
     setIsSaving(false)
     setSaveError(false)
+    setNameConflict(false)
   }, [profile, open])
 
   if (!open) return null
 
   const update = <Key extends keyof HostProfile>(key: Key, value: HostProfile[Key]): void => {
     setSaveError(false)
+    if (key === "name") setNameConflict(false)
     setDraft((current) => ({ ...current, [key]: value }))
   }
 
@@ -71,8 +75,15 @@ export function HostEditor({ open, profile, onClose, onSave }: HostEditorProps):
     event.preventDefault()
     if (isSaving) return
     setSaveError(false)
+    const name = draft.name.trim()
+    const nameKey = normalizeHostName(name)
+    if (hosts.some((host) => host.id !== draft.id && normalizeHostName(host.name) === nameKey)) {
+      setNameConflict(true)
+      return
+    }
+    setNameConflict(false)
     setIsSaving(true)
-    const saved = buildSaveProfile(draft, {
+    const saved = buildSaveProfile({ ...draft, name }, {
       keyPath,
       publicKeyEnabled,
       hasExistingKey: hasExistingKey(profile),
@@ -87,8 +98,9 @@ export function HostEditor({ open, profile, onClose, onSave }: HostEditorProps):
     setKeyPath("")
     try {
       await onSave(saved, credentials)
-    } catch {
-      setSaveError(true)
+    } catch (reason) {
+      if (reason instanceof Error && reason.message.toLowerCase().includes("host name already exists")) setNameConflict(true)
+      else setSaveError(true)
     } finally {
       setIsSaving(false)
     }
@@ -112,7 +124,18 @@ export function HostEditor({ open, profile, onClose, onSave }: HostEditorProps):
           <div className="form-grid host-editor-grid">
             <EditorSection icon={<Server size={15} />} title={t("hosts.editor.identity")}>
               <Field label={t("hosts.editor.label")} wide>
-                <input required maxLength={256} value={draft.name} onChange={(event) => update("name", event.target.value)} autoFocus />
+                <input
+                  id="host-name"
+                  required
+                  maxLength={256}
+                  value={draft.name}
+                  aria-label={t("hosts.editor.label")}
+                  aria-invalid={nameConflict}
+                  aria-describedby={nameConflict ? "host-name-error" : undefined}
+                  onChange={(event) => update("name", event.target.value)}
+                  autoFocus
+                />
+                {nameConflict ? <small className="field-error" id="host-name-error" role="alert">{t("hosts.editor.nameConflict")}</small> : null}
               </Field>
               <Field label={t("hosts.editor.address")} wide>
                 <input required maxLength={512} value={draft.host} onChange={(event) => update("host", event.target.value)} placeholder="server.example.com" />
@@ -216,6 +239,10 @@ function EditorSection({ icon, title, children }: { icon: ReactNode; title: stri
 
 function Field({ label, hint, wide, children }: { label: string; hint?: string; wide?: boolean; children: ReactNode }): ReactElement {
   return <label className={`field${wide ? " field-wide" : ""}`}><span>{label}</span>{children}{hint && <small className="field-hint">{hint}</small>}</label>
+}
+
+function normalizeHostName(name: string): string {
+  return name.trim().normalize("NFKC").toLowerCase()
 }
 
 function ToggleField({ label, description, checked, onChange, wide }: { label: string; description: string; checked: boolean; onChange(value: boolean): void; wide?: boolean }): ReactElement {
