@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import { I18nProvider } from "../../i18n"
@@ -80,6 +80,14 @@ describe("SftpWorkspaceView", () => {
     expect(onPatch).toHaveBeenCalledWith(session.id, expect.objectContaining({ kind: "sftp", browser: expect.objectContaining({ path: "/home" }) }))
   })
 
+  it("shows a disconnected SFTP session as disconnected rather than connecting", async () => {
+    const bridge = createBridge()
+    const { container } = render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, state: "disconnected" }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(container.querySelector(".sftp-page-meta")).toHaveTextContent("Disconnected")
+  })
+
   it("resolves a new host workspace to its real home and retains the resolved path", async () => {
     const bridge = createBridge()
     vi.mocked(bridge.sftp.list).mockResolvedValue({ path: "/srv/users/root", entries: [] })
@@ -103,9 +111,9 @@ describe("SftpWorkspaceView", () => {
     const documents = await screen.findByRole("row", { name: /Documents/ })
     fireEvent.click(documents)
     await waitFor(() => expect(documents).toHaveAttribute("aria-selected", "true"))
-    const localPane = screen.getByRole("heading", { name: "Local" }).closest(".sftp-file-pane") as HTMLElement
-    fireEvent.click(within(localPane).getByRole("button", { name: "Actions" }))
-    expect(within(localPane).getByRole("menuitem", { name: "Upload selected" })).toBeDisabled()
+    fireEvent.contextMenu(documents)
+    expect(screen.getByRole("menuitem", { name: "Refresh" })).toBeEnabled()
+    fireEvent.keyDown(window, { key: "Escape" })
     fireEvent.doubleClick(documents)
 
     await waitFor(() => expect(bridge.sftp.listLocal).toHaveBeenLastCalledWith("/Users/test/Documents"))
@@ -113,18 +121,46 @@ describe("SftpWorkspaceView", () => {
     expect(onPatch).not.toHaveBeenCalledWith(session.id, expect.objectContaining({ browser: expect.objectContaining({ path: "/Users/test/Documents" }) }))
   })
 
-  it("keeps selected local files in the Local pane without inventing remote state", async () => {
+  it("copies a real Local file through the SFTP bridge and locks it while copying", async () => {
     const bridge = createBridge()
-    const { container } = render(<I18nProvider><SftpWorkspaceView hosts={[host]} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
-    const file = new File(["payload"], "payload.txt", { type: "text/plain" })
-    const input = container.querySelector("input[type=\"file\"]") as HTMLInputElement
+    const localFile = { name: "payload.txt", path: "/home/test/Desktop/payload.txt", type: "file" as const, size: 7 }
+    const task = {
+      id: "copy-a",
+      workspaceId: session.id,
+      hostId: host.id,
+      direction: "upload" as const,
+      name: localFile.name,
+      remotePath: "/payload.txt",
+      sourcePath: localFile.path,
+      entryType: "file" as const,
+      status: "running" as const,
+      bytesTransferred: 0,
+      totalBytes: localFile.size,
+      attempt: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }
+    vi.mocked(bridge.sftp.listLocal).mockResolvedValue({ path: "/home/test/Desktop", entries: [localFile] })
+    vi.mocked(bridge.sftp.chooseUpload).mockResolvedValue({
+      selectionId: "selection-a",
+      workspaceId: session.id,
+      name: localFile.name,
+      size: localFile.size,
+      remotePath: "/payload.txt"
+    })
+    vi.mocked(bridge.sftp.upload).mockResolvedValue({ kind: "started", task })
+    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={session} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
 
-    fireEvent.change(input, { target: { files: [file] } })
-
-    await waitFor(() => expect(screen.getByText("payload.txt")).toBeInTheDocument())
-    expect(screen.getByRole("row", { name: /payload\.txt.*7 B.*File/ })).toHaveAttribute("aria-selected", "true")
-    expect(screen.getByRole("heading", { name: "Hosts" })).toBeInTheDocument()
-    expect(bridge.sftp.open).not.toHaveBeenCalled()
+    const row = await screen.findByRole("row", { name: /payload\.txt/ })
+    fireEvent.contextMenu(row)
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy to G11" }))
+    await waitFor(() => expect(bridge.sftp.chooseUpload).toHaveBeenCalledWith(session.id, "/", "/home/test/Desktop/payload.txt"))
+    await waitFor(() => expect(bridge.sftp.upload).toHaveBeenCalledWith("selection-a"))
+    expect(await screen.findByRole("contentinfo", { name: "Transfers" })).toBeInTheDocument()
+    expect(screen.getByRole("progressbar", { name: /payload\.txt Transferring/ })).toBeInTheDocument()
+    expect(row).toHaveAttribute("aria-disabled", "true")
+    expect(row).toHaveAttribute("aria-selected", "false")
+    expect(row).toHaveAttribute("draggable", "false")
   })
 
   it("uploads a local file dragged from the left pane into the remote pane", async () => {
@@ -139,6 +175,8 @@ describe("SftpWorkspaceView", () => {
       direction: "upload",
       name: localFile.name,
       remotePath: "/payload.txt",
+      sourcePath: localFile.path,
+      entryType: "file",
       status: "queued",
       bytesTransferred: 0,
       totalBytes: localFile.size,
@@ -158,7 +196,9 @@ describe("SftpWorkspaceView", () => {
 
     await waitFor(() => expect(bridge.sftp.chooseUpload).toHaveBeenCalledWith(session.id, "/", localFile.path))
     expect(bridge.sftp.upload).toHaveBeenCalledWith("selection-a")
-    expect(screen.queryByRole("contentinfo", { name: "Transfers" })).not.toBeInTheDocument()
+    expect(await screen.findByRole("contentinfo", { name: "Transfers" })).toBeInTheDocument()
+    expect(screen.getByRole("progressbar", { name: /payload\.txt Queued/ })).toBeInTheDocument()
+    expect(await screen.findByRole("row", { name: /payload\.txt/ })).toHaveAttribute("aria-disabled", "true")
   })
 
   it("moves a remote file into a folder and locks the source row while it runs", async () => {
@@ -197,6 +237,8 @@ describe("SftpWorkspaceView", () => {
     expect(sourceRow).toHaveAttribute("draggable", "false")
     fireEvent.click(sourceRow)
     expect(sourceRow).toHaveAttribute("aria-selected", "false")
+    fireEvent.contextMenu(sourceRow)
+    expect(screen.queryByRole("menu", { name: "G11 Actions" })).not.toBeInTheDocument()
   })
 
   it("shows a move task as one non-blocking progress row at the bottom", async () => {
@@ -228,8 +270,9 @@ describe("SftpWorkspaceView", () => {
     expect(row).toHaveAttribute("aria-disabled", "true")
   })
 
-  it("hides the workspace move status after the move reaches a terminal state", async () => {
+  it("keeps a completed transfer visible for one minute, then removes its status row", async () => {
     const bridge = createBridge()
+    vi.useFakeTimers({ now: Date.now() })
     const movedFolder = { name: "docs", path: "/docs", type: "directory" as const }
     vi.mocked(bridge.sftp.list).mockResolvedValue({ path: "/", entries: [movedFolder] })
     vi.mocked(bridge.sftp.listTransfers).mockResolvedValue([{
@@ -245,27 +288,90 @@ describe("SftpWorkspaceView", () => {
       bytesTransferred: 0,
       attempt: 1,
       createdAt: "2026-09-18T00:00:00.000Z",
-      updatedAt: "2026-09-18T00:00:00.000Z"
+      updatedAt: new Date().toISOString()
     }])
-    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, browser: { ...session.browser, entries: [movedFolder] } }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+    try {
+      await act(async () => {
+        render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, browser: { ...session.browser, entries: [movedFolder] } }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+        await Promise.resolve()
+      })
 
-    await screen.findByRole("row", { name: /docs/ })
-    expect(screen.queryByRole("contentinfo", { name: "Transfers" })).not.toBeInTheDocument()
-    expect(screen.getByRole("row", { name: /docs/ })).not.toHaveAttribute("aria-disabled", "true")
+      expect(screen.getByRole("contentinfo", { name: "Transfers" })).toBeInTheDocument()
+      expect(screen.getByRole("progressbar", { name: /docs Completed/ })).toBeInTheDocument()
+      expect(screen.getByRole("row", { name: /docs/ })).not.toHaveAttribute("aria-disabled", "true")
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_001) })
+      expect(screen.queryByRole("contentinfo", { name: "Transfers" })).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it("opens compact Filter and Actions overlays without changing the pane layout", () => {
+  it("opens the file actions from a row context menu in the requested order", async () => {
     const bridge = createBridge()
-    const { container } = render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={session} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+    const file = { name: "payload.txt", path: "/payload.txt", type: "file" as const, size: 7 }
+    vi.mocked(bridge.sftp.list).mockResolvedValue({ path: "/", entries: [file] })
+    const { container } = render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, browser: { ...session.browser, entries: [file] } }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
     const remotePane = screen.getByRole("heading", { name: "G11" }).closest(".sftp-file-pane") as HTMLElement
 
     fireEvent.click(within(remotePane).getByRole("button", { name: "Filter" }))
     expect(within(remotePane).getByRole("search")).toBeInTheDocument()
     fireEvent.click(within(remotePane).getByRole("button", { name: "Filter" }))
-    fireEvent.click(within(remotePane).getByRole("button", { name: "Actions" }))
-    expect(within(remotePane).getByRole("menu")).toBeInTheDocument()
-    expect(within(remotePane).getByRole("menuitem", { name: "Refresh directory" })).toBeInTheDocument()
+    expect(within(remotePane).queryByRole("button", { name: "Actions" })).not.toBeInTheDocument()
+    const row = await screen.findByRole("row", { name: /payload\.txt/ })
+    fireEvent.contextMenu(row, { clientX: 120, clientY: 80 })
+    const menu = screen.getByRole("menu", { name: "G11 Actions" })
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent?.trim())).toEqual([
+      "Refresh",
+      "New Folder",
+      "Rename",
+      "Delete",
+      "Upload",
+      "Download"
+    ])
+    fireEvent.keyDown(window, { key: "Escape" })
+    expect(screen.queryByRole("menu", { name: "G11 Actions" })).not.toBeInTheDocument()
+    expect(row).toHaveFocus()
+    fireEvent.keyDown(row, { key: "F10", shiftKey: true })
+    await waitFor(() => expect(screen.getByRole("menu", { name: "G11 Actions" })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Refresh" })).toHaveFocus())
+    fireEvent.keyDown(window, { key: "End" })
+    expect(screen.getByRole("menuitem", { name: "Download" })).toHaveFocus()
+    fireEvent.keyDown(window, { key: "Escape" })
+    expect(row).toHaveFocus()
     expect(container.querySelectorAll(".sftp-file-pane")).toHaveLength(2)
+  })
+
+  it("requires two confirmations before deleting a remote item", async () => {
+    const bridge = createBridge()
+    const file = { name: "payload.txt", path: "/payload.txt", type: "file" as const, size: 7 }
+    vi.mocked(bridge.sftp.list).mockResolvedValue({ path: "/", entries: [file] })
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(true).mockReturnValueOnce(false)
+    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, browser: { ...session.browser, entries: [file] } }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+
+    const row = await screen.findByRole("row", { name: /payload\.txt/ })
+    fireEvent.contextMenu(row)
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }))
+
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(confirm).toHaveBeenNthCalledWith(1, "Delete payload.txt?")
+    expect(confirm).toHaveBeenNthCalledWith(2, "This cannot be undone. Delete payload.txt permanently?")
+    expect(bridge.sftp.remove).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
+
+  it("deletes only after both confirmations are accepted", async () => {
+    const bridge = createBridge()
+    const file = { name: "payload.txt", path: "/payload.txt", type: "file" as const, size: 7 }
+    vi.mocked(bridge.sftp.list).mockResolvedValue({ path: "/", entries: [file] })
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true)
+    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, browser: { ...session.browser, entries: [file] } }} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+
+    fireEvent.contextMenu(await screen.findByRole("row", { name: /payload\.txt/ }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }))
+
+    await waitFor(() => expect(bridge.sftp.remove).toHaveBeenCalledWith(session.id, file.path, "file"))
+    expect(confirm).toHaveBeenCalledTimes(2)
+    confirm.mockRestore()
   })
 })
 

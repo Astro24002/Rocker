@@ -71,6 +71,7 @@ describe("SessionContentView SFTP", () => {
       }]
     }))
     const rename = vi.fn(async () => undefined)
+    const remove = vi.fn(async () => undefined)
     const chooseUpload = vi.fn(async (_workspaceId: string, _remoteDirectory: string, localPath?: string) => ({
       selectionId: localPath ? "dropped-selection" : "button-selection",
       workspaceId: session.id,
@@ -103,7 +104,7 @@ describe("SessionContentView SFTP", () => {
         list,
         mkdir: vi.fn(async () => undefined),
         rename,
-        remove: vi.fn(async () => undefined),
+        remove,
         chooseUpload,
         chooseDownload: vi.fn(async () => undefined),
         upload,
@@ -116,6 +117,7 @@ describe("SessionContentView SFTP", () => {
     } as unknown as RockerBridge
     const onPatch = vi.fn()
     const prompt = vi.spyOn(window, "prompt").mockReturnValue("renamed.txt")
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true)
     const file = new File(["payload"], "payload.txt")
     Object.defineProperty(file, "path", { value: "/tmp/payload.txt" })
 
@@ -128,6 +130,10 @@ describe("SessionContentView SFTP", () => {
     await waitFor(() => expect(chooseUpload).toHaveBeenCalledWith(session.id, "/", "/tmp/payload.txt"))
     expect(screen.getByText("0644")).toBeInTheDocument()
     expect(screen.getByText("1000:1000")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }))
+    await waitFor(() => expect(remove).toHaveBeenCalledWith(session.id, "/README.txt", "file"))
+    expect(confirm).toHaveBeenCalledTimes(2)
     prompt.mockRestore()
+    confirm.mockRestore()
   })
 })

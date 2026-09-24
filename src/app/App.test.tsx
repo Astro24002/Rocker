@@ -378,7 +378,7 @@ describe("desktop workspace shell", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "G11, SSH, root" })).toBeInTheDocument())
     await waitFor(() => expect(sessionLaunchListener).toBeTypeOf("function"))
     act(() => sessionLaunchListener!({ hostId: host.id, kind: "sftp", label: "G11 files", path: "/etc" }))
-    await waitFor(() => expect(screen.getByRole("heading", { name: "G11 files" })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole("heading", { name: "G11" })).toBeInTheDocument())
     expect(screen.getByRole("button", { name: "etc" })).toHaveAttribute("aria-current", "location")
     expect(bridge.sftp.list).toHaveBeenLastCalledWith(expect.any(String), "/etc")
 

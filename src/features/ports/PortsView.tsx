@@ -539,10 +539,9 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
       </header>
       <div className="ports-content">
         <div className="ports-host-context">
-          <Server size={16} />
+          <Server size={16} aria-hidden="true" />
           <div className="ports-host-context-copy">
-            <span>{t("ports.boundHost")}: <strong>{hostId ?? t("ports.hostUnavailable")}</strong></span>
-            {session && <span className="ports-session-strip"><span className="session-state-dot" data-state={session.state} />{t("ports.session")}: <strong>{session.label}</strong><span className="ports-session-state">{t(sessionStateKey(session.state))}</span></span>}
+            <strong>{hostName ?? session?.label ?? t("ports.hostWorkspace")}</strong>
           </div>
           {username && <small>{username}</small>}
         </div>
@@ -570,7 +569,7 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
             </div>
           })}
         </div> : !loading ? <div className="port-empty"><strong>{t("ports.hostEmptyTitle")}</strong><span>{t("ports.hostEmptyBody")}</span></div> : <div className="port-empty"><strong>{t("ports.loading")}</strong></div>}
-        {discoveredPorts.length > 0 && <div className="ports-discovery"><div className="ports-section-label">{t("ports.discoveredTitle")}</div>{discoveredPorts.map((port) => <div className="port-discovery-row" key={port.id}><span>{port.process ?? t("ports.unknown")}</span><code>{port.remoteAddress}:{port.remotePort}</code><button className="secondary-command compact-command" type="button" onClick={() => quickForward(port)}><Play size={14} />{t("ports.forwardPort")}</button></div>)}</div>}
+        {discoveredPorts.length > 0 && <div className="ports-discovery"><div className="ports-section-label">{t("ports.discoveredTitle")}</div>{discoveredPorts.map((port) => <div className="port-discovery-row" key={port.id}><div className="port-discovery-info"><strong title={port.process ?? t("ports.unknown")}>{port.process ?? t("ports.unknown")}</strong><code>{port.remoteAddress}:{port.remotePort}</code></div><button className="secondary-command compact-command" type="button" onClick={() => quickForward(port)}><Play size={14} />{t("ports.forwardPort")}</button></div>)}</div>}
       </div>
       {editorOpen && <div className="forwarding-editor-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditorOpen(false) }}>
         <div className="forwarding-editor" role="dialog" aria-modal="true" aria-labelledby="forwarding-editor-title">
@@ -628,8 +627,4 @@ function formatAddress(address: string, port: number): string {
 
 function statusKey(status: PortStatus): "ports.status.discovered" | "ports.status.starting" | "ports.status.forwarding" | "ports.status.suspended" | "ports.status.stopping" | "ports.status.stopped" | "ports.status.error" {
   return `ports.status.${status}`
-}
-
-function sessionStateKey(state: WorkspaceSession["state"]): "ports.sessionState.idle" | "ports.sessionState.connecting" | "ports.sessionState.connected" | "ports.sessionState.restoring" | "ports.sessionState.reconnecting" | "ports.sessionState.disconnected" | "ports.sessionState.error" | "ports.sessionState.closing" {
-  return `ports.sessionState.${state}`
 }

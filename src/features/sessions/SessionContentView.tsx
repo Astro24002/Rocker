@@ -44,7 +44,7 @@ function SftpSessionView({
   onPatch(sessionId: string, patch: WorkspaceSessionPatch): void
 }): ReactElement {
   const { t } = useI18n()
-  const path = session.browser.path
+  const path = session.browser.path || "."
   const [draft, setDraft] = useState(path)
   const [refreshNonce, setRefreshNonce] = useState(0)
   const [transfers, setTransfers] = useState<SftpTransferTask[]>([])
@@ -176,7 +176,9 @@ function SftpSessionView({
 
   const removeEntry = async (entry: SftpDirectoryEntry): Promise<void> => {
     if (entry.type !== "file" && entry.type !== "directory") return
-    if (!window.confirm(t("session.sftp.removePrompt"))) return
+    const firstConfirmation = t("session.sftp.removePrompt").replace("{name}", entry.name)
+    const secondConfirmation = t("session.sftp.removeConfirmAgain").replace("{name}", entry.name)
+    if (!window.confirm(firstConfirmation) || !window.confirm(secondConfirmation)) return
     try {
       await bridge.sftp.remove(session.id, entry.path, entry.type)
       setRefreshNonce((current) => current + 1)

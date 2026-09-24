@@ -1,8 +1,9 @@
 import {
   ArrowLeft,
   ArrowRightLeft,
-  ChevronDown,
+  Archive,
   ChevronRight,
+  Copy,
   Download,
   File,
   Folder,
@@ -14,8 +15,10 @@ import {
   Server,
   Square,
   Trash2,
-  Upload
+  Upload,
+  X
 } from "lucide-react"
+import { createPortal } from "react-dom"
 import {
   useCallback,
   useDeferredValue,
@@ -24,6 +27,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode
 } from "react"
@@ -39,14 +43,7 @@ interface SftpWorkspacePageProps {
   bridge: RockerBridge
   onOpen(host: HostProfile): void
   onPatch(sessionId: string, patch: WorkspaceSessionPatch): void
-}
-
-interface LocalFileEntry {
-  id: string
-  name: string
-  size: number
-  modifiedAt: string
-  path?: string
+  samplePreview?: boolean
 }
 
 interface FilePaneEntry {
@@ -61,6 +58,11 @@ interface FilePaneEntry {
 interface PaneBreadcrumbItem {
   id: string
   label: string
+}
+
+interface SftpContextMenuPosition {
+  x: number
+  y: number
 }
 
 interface PaneAction {
@@ -81,9 +83,48 @@ interface RemoteDragPayload {
   kind: "file" | "directory"
 }
 
+function SftpWorkspaceHeader({ hosts, selectedSession, samplePreview }: {
+  hosts: readonly HostProfile[]
+  selectedSession?: SftpWorkspaceSession
+  samplePreview: boolean
+}): ReactElement {
+  const { t } = useI18n()
+  const host = hosts.find((item) => item.id === selectedSession?.hostId)
+  const connectionState = selectedSession?.state === "connected"
+    ? t("workspace.sftp.state.connected")
+    : selectedSession?.state === "error"
+      ? t("workspace.sftp.state.error")
+      : selectedSession?.state === "disconnected"
+        ? t("workspace.sftp.state.disconnected")
+        : t("workspace.sftp.state.connecting")
+
+  return (
+    <header className="sftp-page-topbar">
+      <div className="sftp-page-heading">
+        <div aria-hidden="true" className="sftp-page-mark">R</div>
+        <div>
+          <p className="sftp-page-kicker">Rocker / SFTP</p>
+          <h1>{t("workspace.sftp.title")}</h1>
+        </div>
+      </div>
+      <div className="sftp-page-meta" aria-label={t("workspace.sftp.status")}>
+        <span aria-hidden="true" className="sftp-page-status-dot" data-state={samplePreview ? "connected" : selectedSession?.state ?? "idle"} />
+        {samplePreview ? <>
+          <span>{t("workspace.sftp.preview")}</span>
+          <span>{t("workspace.sftp.sampleData")}</span>
+        </> : selectedSession ? <>
+          <span>{`${host?.name ?? selectedSession.label} · ${host?.username ?? ""}`.trim()}</span>
+          <span>{connectionState}</span>
+        </> : <span>{t("workspace.sftp.selectHostSubtitle")}</span>}
+      </div>
+    </header>
+  )
+}
+
 interface FilePaneProps {
   id: string
   title: string
+  subtitle: string
   titleIcon: ReactNode
   breadcrumbs: readonly PaneBreadcrumbItem[]
   entries: readonly FilePaneEntry[]
@@ -97,6 +138,10 @@ interface FilePaneProps {
   onBreadcrumbSelect?(item: PaneBreadcrumbItem): void
   onEntrySelect(entry: FilePaneEntry): void
   onEntryOpen(entry: FilePaneEntry): void
+  onPaneContextMenu?(): void
+  contextMenuEnabled?: boolean
+  onBlankContextMenu?(event: ReactMouseEvent<HTMLDivElement>): void
+  onEntryContextMenu?(entry: FilePaneEntry, trigger: HTMLDivElement, point?: { x: number; y: number }): void
   onEntryDragStart?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
   onEntryDrop?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
   canDragFolders?: boolean
@@ -108,12 +153,10 @@ interface FilePaneProps {
   dropActive?: boolean
 }
 
-export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPatch }: SftpWorkspacePageProps): ReactElement {
+export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPatch, samplePreview = false }: SftpWorkspacePageProps): ReactElement {
   const { t } = useI18n()
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [localFiles, setLocalFiles] = useState<LocalFileEntry[]>([])
+  const localRootPath = useRef<string | undefined>(undefined)
   const [localDirectory, setLocalDirectory] = useState<{ path: string; entries: SftpDirectoryEntry[]; loading: boolean; error?: string }>({ path: "", entries: [], loading: true })
-  const [localError, setLocalError] = useState<string>()
   const [selectedLocalId, setSelectedLocalId] = useState<string>()
   const [selectedRemoteId, setSelectedRemoteId] = useState<string>()
   const [refreshNonce, setRefreshNonce] = useState(0)
@@ -122,19 +165,30 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
   const [dropActive, setDropActive] = useState(false)
   const [transfers, setTransfers] = useState<SftpTransferTask[]>([])
 
-  const remotePath = selectedSession?.browser.path ?? "/"
+  const remotePath = selectedSession?.browser.path || "."
+  const selectedHost = hosts.find((host) => host.id === selectedSession?.hostId)
+  const remoteTitle = selectedSession ? selectedHost?.name ?? selectedSession.label : t("workspace.sftp.hosts")
+  const remoteSubtitle = selectedSession
+    ? `${t("workspace.sftp.protocolSsh")} · ${selectedHost?.username ?? ""}`.trim()
+    : t("workspace.sftp.selectHostSubtitle")
   const selectedRemoteEntry = selectedSession?.browser.entries.find((entry) => entry.path === selectedRemoteId)
-  const selectedLocalEntry = [...localDirectory.entries, ...localFiles.map((file) => ({ name: file.name, path: file.path ?? file.name, type: "file" as const, size: file.size, modifiedAt: file.modifiedAt }))]
-    .find((entry) => entry.path === selectedLocalId)
-  const activeMoveTransfers = useMemo(
-    () => transfers.filter((task) => task.direction === "move" && (task.status === "queued" || task.status === "running")),
+  const selectedLocalEntry = localDirectory.entries.find((entry) => entry.path === selectedLocalId)
+  const activeTransfers = useMemo(
+    () => transfers.filter((task) => task.status === "queued" || task.status === "running"),
     [transfers]
   )
   const movingRemoteIds = useMemo(() => new Set(
-    activeMoveTransfers
+    activeTransfers
+      .filter((task) => task.direction === "move")
       .map((task) => task.sourcePath)
       .filter((path): path is string => path !== undefined)
-  ), [activeMoveTransfers])
+  ), [activeTransfers])
+  const copyingLocalIds = useMemo(() => new Set(
+    activeTransfers
+      .filter((task) => task.direction === "upload")
+      .map((task) => task.sourcePath)
+      .filter((path): path is string => path !== undefined)
+  ), [activeTransfers])
 
   const rememberTransfer = (task: SftpTransferTask): void => {
     setTransfers((current) => {
@@ -151,6 +205,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
     setLocalDirectory((current) => ({ ...current, loading: true, error: undefined }))
     void bridge.sftp.listLocal(localDirectory.path || undefined).then((directory) => {
       if (!active) return
+      if (!localRootPath.current) localRootPath.current = directory.path
       setLocalDirectory({ path: directory.path, entries: directory.entries, loading: false })
     }).catch((reason: unknown) => {
       if (!active) return
@@ -210,7 +265,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       }
       if (event.kind !== "transfer" || event.task.workspaceId !== selectedSession.id) return
       rememberTransfer(event.task)
-      if (event.task.direction === "move" && (event.task.status === "completed" || event.task.status === "failed" || event.task.status === "cancelled")) {
+      if ((event.task.direction === "move" || event.task.direction === "upload") && (event.task.status === "completed" || event.task.status === "failed" || event.task.status === "cancelled")) {
         setRefreshNonce((current) => current + 1)
       }
     })
@@ -221,22 +276,23 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
   }, [remotePath, selectedSession?.id])
 
   useEffect(() => {
+    const completedTransfers = transfers.filter((task) => task.status === "completed")
+    if (completedTransfers.length === 0) return
+    const nextExpiry = Math.min(...completedTransfers.map((task) => Date.parse(task.updatedAt) + 60_000))
+    const timeout = window.setTimeout(() => {
+      const now = Date.now()
+      setTransfers((current) => current.filter((task) => task.status !== "completed" || now - Date.parse(task.updatedAt) < 60_000))
+    }, Math.max(0, nextExpiry - Date.now()))
+    return () => window.clearTimeout(timeout)
+  }, [transfers])
+
+  useEffect(() => {
     if (selectedRemoteId && movingRemoteIds.has(selectedRemoteId)) setSelectedRemoteId(undefined)
   }, [movingRemoteIds, selectedRemoteId])
 
-  const selectLocalFiles = (files: FileList | null): void => {
-    if (!files) return
-    const nextFiles = Array.from(files).map((file, index) => ({
-      id: `${file.name}-${file.lastModified}-${index}`,
-      name: file.name,
-      size: file.size,
-      modifiedAt: new Date(file.lastModified).toISOString(),
-      path: localFilePath(file)
-    }))
-    setLocalFiles(nextFiles)
-    setSelectedLocalId(nextFiles[0]?.id)
-    setLocalError(undefined)
-  }
+  useEffect(() => {
+    if (selectedLocalId && copyingLocalIds.has(selectedLocalId)) setSelectedLocalId(undefined)
+  }, [copyingLocalIds, selectedLocalId])
 
   const uploadLocalPath = async (localPath: string): Promise<void> => {
     if (!selectedSession) return
@@ -247,17 +303,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       if (!window.confirm(t("session.sftp.overwritePrompt"))) return
       result = await bridge.sftp.upload(selection.selectionId, true)
     }
-    if (result.kind === "started") rememberTransfer(result.task)
-  }
-
-  const uploadLocalFile = async (file: { path?: string } | undefined): Promise<void> => {
-    if (!file?.path) return
-    try {
-      await uploadLocalPath(file.path)
-      setLocalError(undefined)
-    } catch (reason) {
-      setLocalError(reason instanceof Error ? reason.message : String(reason))
-    }
+    if (result.kind === "started") rememberTransfer({ ...result.task, sourcePath: result.task.sourcePath ?? localPath })
   }
 
   const startUpload = async (): Promise<void> => {
@@ -326,7 +372,9 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
 
   const removeEntry = async (entry: SftpDirectoryEntry | undefined): Promise<void> => {
     if (!selectedSession || !entry || (entry.type !== "file" && entry.type !== "directory")) return
-    if (!window.confirm(t("session.sftp.removePrompt"))) return
+    const firstConfirmation = t("session.sftp.removePrompt").replace("{name}", entry.name)
+    const secondConfirmation = t("session.sftp.removeConfirmAgain").replace("{name}", entry.name)
+    if (!window.confirm(firstConfirmation) || !window.confirm(secondConfirmation)) return
     try {
       await bridge.sftp.remove(selectedSession.id, entry.path, entry.type)
       setSelectedRemoteId(undefined)
@@ -433,11 +481,8 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       modifiedAt: entry.modifiedAt,
       size: entry.type === "directory" ? undefined : entry.size,
       kind: entry.type === "directory" ? "folder" as const : entry.type
-    })),
-    ...localFiles
-      .filter((file) => !localDirectory.entries.some((entry) => entry.path === file.path))
-      .map((file) => ({ id: file.id, name: file.name, path: file.path, modifiedAt: file.modifiedAt, size: file.size, kind: "file" as const }))
-  ], [localDirectory.entries, localFiles])
+    }))
+  ], [localDirectory.entries])
 
   const remoteEntries = useMemo<FilePaneEntry[]>(() => selectedSession
     ? selectedSession.browser.entries.map((entry) => ({
@@ -451,26 +496,23 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
     : hosts.map((host) => ({ id: host.id, name: host.name, kind: "host" as const })), [hosts, selectedSession])
 
   const localActions = useMemo<PaneAction[]>(() => [
+    ...(selectedSession && selectedLocalEntry ? [{
+      id: "copy-to-host",
+      label: t("workspace.sftp.copyToHost").replace("{host}", remoteTitle),
+      icon: <Copy aria-hidden="true" size={14} />,
+      disabled: !selectedSession || selectedLocalEntry.type !== "file" || copyingLocalIds.has(selectedLocalEntry.path),
+      onSelect: () => {
+        if (selectedLocalEntry.type !== "file") return
+        void uploadLocalPath(selectedLocalEntry.path).catch((reason: unknown) => setActionError(reason instanceof Error ? reason.message : String(reason)))
+      }
+    }] : []),
     {
       id: "refresh-local",
       label: t("session.sftp.refresh"),
       icon: <RefreshCw aria-hidden="true" size={14} />,
       onSelect: () => setLocalRefreshNonce((current) => current + 1)
-    },
-    {
-      id: "choose-files",
-      label: t("workspace.sftp.chooseLocalFiles"),
-      icon: <FolderPlus aria-hidden="true" size={14} />,
-      onSelect: () => fileInputRef.current?.click()
-    },
-    {
-      id: "upload-selected",
-      label: t("workspace.sftp.uploadSelected"),
-      icon: <Upload aria-hidden="true" size={14} />,
-      disabled: !selectedSession || selectedLocalEntry?.type !== "file" || !selectedLocalEntry.path,
-      onSelect: () => void uploadLocalFile(selectedLocalEntry)
     }
-  ], [selectedLocalEntry, selectedSession, t])
+  ], [copyingLocalIds, remoteTitle, selectedLocalEntry, selectedSession, t])
 
   const remoteActions = useMemo<PaneAction[]>(() => selectedSession ? [
     {
@@ -485,10 +527,24 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       icon: <FolderPlus aria-hidden="true" size={14} />,
       onSelect: () => void createDirectory()
     },
+    ...(selectedRemoteEntry ? [{
+      id: "rename",
+      label: t("session.sftp.rename"),
+      icon: <File aria-hidden="true" size={14} />,
+      disabled: !selectedRemoteEntry,
+      onSelect: () => void renameEntry(selectedRemoteEntry)
+    }, {
+      id: "remove",
+      label: t("session.sftp.remove"),
+      icon: <Trash2 aria-hidden="true" size={14} />,
+      disabled: !selectedRemoteEntry || (selectedRemoteEntry.type !== "file" && selectedRemoteEntry.type !== "directory"),
+      onSelect: () => void removeEntry(selectedRemoteEntry)
+    }] : []),
     {
       id: "upload",
       label: t("session.sftp.upload"),
       icon: <Upload aria-hidden="true" size={14} />,
+      separator: true,
       onSelect: () => void startUpload()
     },
     {
@@ -496,22 +552,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       label: t("session.sftp.download"),
       icon: <Download aria-hidden="true" size={14} />,
       disabled: selectedRemoteEntry?.type !== "file",
-      separator: true,
       onSelect: () => void downloadEntry(selectedRemoteEntry)
-    },
-    {
-      id: "rename",
-      label: t("session.sftp.rename"),
-      icon: <File aria-hidden="true" size={14} />,
-      disabled: !selectedRemoteEntry,
-      onSelect: () => void renameEntry(selectedRemoteEntry)
-    },
-    {
-      id: "remove",
-      label: t("session.sftp.remove"),
-      icon: <Trash2 aria-hidden="true" size={14} />,
-      disabled: !selectedRemoteEntry || (selectedRemoteEntry.type !== "file" && selectedRemoteEntry.type !== "directory"),
-      onSelect: () => void removeEntry(selectedRemoteEntry)
     }
   ] : [], [selectedRemoteEntry, selectedSession, t])
 
@@ -521,38 +562,37 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
 
   return (
     <section className="sftp-workspace-shell" aria-label={t("session.sftp.title")}>
-      <input
-        className="sftp-hidden-file-input"
-        multiple
-        onChange={(event) => selectLocalFiles(event.target.files)}
-        ref={fileInputRef}
-        tabIndex={-1}
-        type="file"
-      />
-      <div className="sftp-workspace-page">
+      <SftpWorkspaceHeader hosts={hosts} selectedSession={selectedSession} samplePreview={samplePreview} />
+      <div className="sftp-workspace-stage">
+        <div className="sftp-workspace-page">
       <FilePane
         id="local"
         title={t("workspace.sftp.local")}
+        subtitle={t("workspace.sftp.localSubtitle")}
         titleIcon={<span className="sftp-local-mark"><Laptop aria-hidden="true" size={15} /></span>}
-        breadcrumbs={localDirectory.path ? localPathBreadcrumbs(localDirectory.path) : [{ id: "local", label: t("workspace.sftp.local") }]}
+        breadcrumbs={localDirectory.path ? localPathBreadcrumbs(localDirectory.path, localRootPath.current, t("workspace.sftp.desktop")) : [{ id: "local", label: t("workspace.sftp.local") }]}
         entries={localEntries}
         selectedEntryId={selectedLocalId}
         actions={localActions}
         emptyMessage={t("workspace.sftp.noLocalFiles")}
         filterPlaceholder={t("workspace.sftp.filterPlaceholder")}
         loading={localDirectory.loading}
-        error={localDirectory.error ?? localError}
-        onBack={localDirectory.path && !isLocalRoot(localDirectory.path) ? () => navigateLocal(parentLocalPath(localDirectory.path)) : undefined}
+        error={localDirectory.error}
+        onBack={localDirectory.path && localRootPath.current && !sameLocalPath(localDirectory.path, localRootPath.current) ? () => navigateLocal(parentLocalPath(localDirectory.path)) : undefined}
         onBreadcrumbSelect={(item) => navigateLocal(item.id)}
         onEntrySelect={(entry) => setSelectedLocalId(entry.id)}
+        onPaneContextMenu={() => setSelectedLocalId(undefined)}
+        contextMenuEnabled
         onEntryDragStart={handleLocalDragStart}
+        movingEntryIds={copyingLocalIds}
         onEntryOpen={(entry) => {
           if (entry.kind === "folder" && entry.path) navigateLocal(entry.path)
         }}
       />
       <FilePane
         id="remote"
-        title={selectedSession?.label ?? t("workspace.sftp.hosts")}
+        title={remoteTitle}
+        subtitle={remoteSubtitle}
         titleIcon={<span className="sftp-remote-mark"><Server aria-hidden="true" size={14} /></span>}
         breadcrumbs={remoteBreadcrumbs}
         entries={remoteEntries}
@@ -565,6 +605,8 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
         onBack={selectedSession && remotePath !== "/" && remotePath !== "." ? () => navigateRemote(parentSftpPath(remotePath)) : undefined}
         onBreadcrumbSelect={(item) => { if (selectedSession) navigateRemote(item.id) }}
         onEntrySelect={(entry) => setSelectedRemoteId(entry.id)}
+        onPaneContextMenu={() => setSelectedRemoteId(undefined)}
+        contextMenuEnabled={Boolean(selectedSession)}
         onEntryOpen={(entry) => {
           if (!selectedSession) {
             const host = hosts.find((candidate) => candidate.id === entry.id)
@@ -584,8 +626,14 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
         onDrop={handleRemotePaneDrop}
         dropActive={dropActive}
       />
+        </div>
+        <SftpTransferFooter
+          transfers={transfers.filter(isTransferVisible)}
+          bridge={bridge}
+          remoteTitle={remoteTitle}
+          onDismiss={(taskId) => setTransfers((current) => current.filter((task) => task.id !== taskId))}
+        />
       </div>
-      <SftpTransferFooter transfers={activeMoveTransfers} bridge={bridge} />
     </section>
   )
 }
@@ -593,11 +641,14 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
 export function FilePane({
   id,
   title,
+  subtitle,
   titleIcon,
   breadcrumbs,
   entries,
   selectedEntryId,
   actions,
+  onPaneContextMenu,
+  contextMenuEnabled = true,
   loading = false,
   error,
   emptyMessage,
@@ -616,15 +667,74 @@ export function FilePane({
   onDrop,
   dropActive = false
 }: FilePaneProps): ReactElement {
+  const { t } = useI18n()
   const [filter, setFilter] = useState("")
+  const [contextMenu, setContextMenu] = useState<SftpContextMenuPosition>()
+  const contextMenuRef = useRef<HTMLDivElement>(null)
+  const contextMenuTriggerRef = useRef<HTMLElement | null>(null)
+  const closeContextMenu = useCallback((restoreFocus = true): void => {
+    setContextMenu(undefined)
+    if (restoreFocus) contextMenuTriggerRef.current?.focus()
+  }, [])
+  const openContextMenu = useCallback((trigger: HTMLElement, point?: { x: number; y: number }, entry?: FilePaneEntry): void => {
+    if (!contextMenuEnabled) return
+    if (entry) onEntrySelect(entry)
+    else onPaneContextMenu?.()
+    contextMenuTriggerRef.current = trigger
+    const width = 224
+    const height = Math.max(52, actions.length * 32 + 16)
+    const bounds = trigger.getBoundingClientRect()
+    const x = point?.x ?? bounds.left + 12
+    const y = point?.y ?? bounds.bottom
+    setContextMenu({
+      x: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - height - 8))
+    })
+  }, [actions.length, contextMenuEnabled, onEntrySelect, onPaneContextMenu])
   const deferredFilter = useDeferredValue(filter.trim().toLocaleLowerCase())
   const visibleEntries = deferredFilter
     ? entries.filter((entry) => entry.name.toLocaleLowerCase().includes(deferredFilter))
     : entries
 
+  useEffect(() => {
+    if (!contextMenu) return
+    const focusFrame = window.requestAnimationFrame(() => {
+      contextMenuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus()
+    })
+    const dismissOutside = (event: PointerEvent): void => {
+      if (event.target instanceof Node && contextMenuRef.current?.contains(event.target)) return
+      closeContextMenu(false)
+    }
+    const handleMenuKeys = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        closeContextMenu()
+        return
+      }
+      const items = Array.from(contextMenuRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])
+      if (items.length === 0) return
+      const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement)
+      let nextIndex: number | undefined
+      if (event.key === "ArrowDown") nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length
+      else if (event.key === "ArrowUp") nextIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length
+      else if (event.key === "Home") nextIndex = 0
+      else if (event.key === "End") nextIndex = items.length - 1
+      if (nextIndex === undefined) return
+      event.preventDefault()
+      items[nextIndex]?.focus()
+    }
+    window.addEventListener("pointerdown", dismissOutside)
+    window.addEventListener("keydown", handleMenuKeys)
+    return () => {
+      window.cancelAnimationFrame(focusFrame)
+      window.removeEventListener("pointerdown", dismissOutside)
+      window.removeEventListener("keydown", handleMenuKeys)
+    }
+  }, [closeContextMenu, contextMenu])
+
   return (
     <section className="sftp-file-pane" aria-labelledby={`sftp-${id}-title`} data-pane={id}>
-      <PaneHeader id={`sftp-${id}-title`} title={title} icon={titleIcon} filter={filter} filterPlaceholder={filterPlaceholder} actions={actions} onFilterChange={setFilter} />
+      <PaneHeader id={`sftp-${id}-title`} title={title} subtitle={subtitle} icon={titleIcon} filter={filter} filterPlaceholder={filterPlaceholder} onFilterChange={setFilter} />
       <PaneBreadcrumb items={breadcrumbs} onBack={onBack} onSelect={onBreadcrumbSelect} />
       <FileTableHeader />
       <FileTableBody
@@ -644,7 +754,37 @@ export function FilePane({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         dropActive={dropActive}
+        contextMenuEnabled={contextMenuEnabled}
+        onBlankContextMenu={(event) => openContextMenu(event.currentTarget, { x: event.clientX, y: event.clientY })}
+        onEntryContextMenu={(entry, trigger, point) => openContextMenu(trigger, point, entry)}
       />
+      {contextMenu ? createPortal(
+        <div
+          aria-label={`${title} ${t("workspace.sftp.actions")}`}
+          className="terminal-context-menu sftp-context-menu"
+          onContextMenu={(event) => event.preventDefault()}
+          onKeyDown={(event) => { if (event.key === "Tab") closeContextMenu() }}
+          ref={contextMenuRef}
+          role="menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          tabIndex={-1}
+        >
+          {actions.map((action) => (
+            <button
+              className={`${action.separator ? "has-separator " : ""}${action.id === "remove" ? "sftp-context-danger" : ""}`.trim() || undefined}
+              disabled={action.disabled}
+              key={action.id}
+              onClick={() => { closeContextMenu(false); action.onSelect() }}
+              role="menuitem"
+              tabIndex={-1}
+              type="button"
+            >
+              {action.icon}<span>{action.label}</span>
+            </button>
+          ))}
+        </div>,
+        document.body
+      ) : null}
     </section>
   )
 }
@@ -652,59 +792,52 @@ export function FilePane({
 function PaneHeader({
   id,
   title,
+  subtitle,
   icon,
   filter,
   filterPlaceholder,
-  actions,
   onFilterChange
 }: {
   id: string
   title: string
+  subtitle: string
   icon: ReactNode
   filter: string
   filterPlaceholder: string
-  actions: readonly PaneAction[]
   onFilterChange(value: string): void
 }): ReactElement {
   const { t } = useI18n()
   const headerRef = useRef<HTMLElement>(null)
-  const [openMenu, setOpenMenu] = useState<"filter" | "actions">()
+  const [filterOpen, setFilterOpen] = useState(false)
 
   useEffect(() => {
-    if (!openMenu) return
+    if (!filterOpen) return
     const close = (event: PointerEvent): void => {
-      if (!headerRef.current?.contains(event.target as Node)) setOpenMenu(undefined)
+      if (!headerRef.current?.contains(event.target as Node)) setFilterOpen(false)
     }
     window.addEventListener("pointerdown", close)
     return () => window.removeEventListener("pointerdown", close)
-  }, [openMenu])
+  }, [filterOpen])
 
   return (
     <header className="sftp-pane-titlebar" ref={headerRef}>
-      <div className="sftp-pane-title">{icon}<h2 id={id}>{title}</h2></div>
+      <div className="sftp-pane-title">
+        {icon}
+        <div className="sftp-pane-copy">
+          <h2 id={id}>{title}</h2>
+          <span>{subtitle}</span>
+        </div>
+      </div>
       <div className="sftp-pane-controls">
-        <button aria-expanded={openMenu === "filter"} className="sftp-pane-control" type="button" onClick={() => setOpenMenu((current) => current === "filter" ? undefined : "filter")}>
-          <ListFilter aria-hidden="true" size={13} />
+        <button aria-expanded={filterOpen} className="sftp-pane-control" type="button" onClick={() => setFilterOpen((current) => !current)}>
+          <ListFilter aria-hidden="true" size={15} />
           <span>{t("workspace.sftp.filter")}</span>
         </button>
-        <button aria-expanded={openMenu === "actions"} className="sftp-pane-control" type="button" onClick={() => setOpenMenu((current) => current === "actions" ? undefined : "actions")}>
-          <span>{t("workspace.sftp.actions")}</span>
-          <ChevronDown aria-hidden="true" size={13} />
-        </button>
       </div>
-      {openMenu === "filter" ? (
+      {filterOpen ? (
         <div className="sftp-pane-popover sftp-filter-popover" role="search">
           <Search aria-hidden="true" size={14} />
           <input autoFocus aria-label={t("workspace.sftp.filter")} value={filter} placeholder={filterPlaceholder} onChange={(event) => onFilterChange(event.target.value)} />
-        </div>
-      ) : null}
-      {openMenu === "actions" ? (
-        <div className="sftp-pane-popover sftp-actions-menu" role="menu">
-          {actions.length === 0 ? <span className="sftp-actions-empty">{t("workspace.sftp.noActions")}</span> : actions.map((action) => (
-            <button className={action.separator ? "has-separator" : undefined} disabled={action.disabled} key={action.id} role="menuitem" type="button" onClick={() => { action.onSelect(); setOpenMenu(undefined) }}>
-              {action.icon}<span>{action.label}</span>
-            </button>
-          ))}
         </div>
       ) : null}
     </header>
@@ -754,8 +887,11 @@ function FileTableBody({
   onDragOver,
   onDragLeave,
   onDrop,
-  dropActive
-}: Omit<FilePaneProps, "id" | "title" | "titleIcon" | "breadcrumbs" | "actions" | "filterPlaceholder" | "onBack" | "onBreadcrumbSelect">): ReactElement {
+  dropActive,
+  contextMenuEnabled,
+  onBlankContextMenu,
+  onEntryContextMenu
+}: Omit<FilePaneProps, "id" | "title" | "subtitle" | "titleIcon" | "breadcrumbs" | "actions" | "filterPlaceholder" | "onBack" | "onBreadcrumbSelect">): ReactElement {
   const { t } = useI18n()
   return (
     <div
@@ -766,6 +902,11 @@ function FileTableBody({
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
+      onContextMenu={(event) => {
+        if (!contextMenuEnabled) return
+        event.preventDefault()
+        onBlankContextMenu?.(event)
+      }}
     >
       {error ? <div className="sftp-pane-message" role="alert">{error}</div> : null}
       {loading ? <div className="sftp-pane-message" role="status">{t("session.sftp.loading")}</div> : null}
@@ -779,6 +920,7 @@ function FileTableBody({
           onOpen={() => onEntryOpen(entry)}
           onDragStart={onEntryDragStart}
           onDrop={onEntryDrop}
+          onContextMenuRequest={contextMenuEnabled ? onEntryContextMenu : undefined}
           canDragFolders={canDragFolders}
           moving={movingEntryIds?.has(entry.path ?? entry.id) ?? false}
         />
@@ -787,13 +929,14 @@ function FileTableBody({
   )
 }
 
-function FileRow({ entry, selected, onSelect, onOpen, onDragStart, onDrop, canDragFolders = false, moving = false }: {
+function FileRow({ entry, selected, onSelect, onOpen, onDragStart, onDrop, onContextMenuRequest, canDragFolders = false, moving = false }: {
   entry: FilePaneEntry
   selected: boolean
   onSelect(): void
   onOpen(): void
   onDragStart?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
   onDrop?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
+  onContextMenuRequest?(entry: FilePaneEntry, trigger: HTMLDivElement, point?: { x: number; y: number }): void
   canDragFolders?: boolean
   moving?: boolean
 }): ReactElement {
@@ -801,13 +944,14 @@ function FileRow({ entry, selected, onSelect, onOpen, onDragStart, onDrop, canDr
   const kindLabel = entry.kind === "folder"
     ? t("session.sftp.kind.folder")
     : entry.kind === "file"
-      ? t("session.sftp.kind.file")
+      ? fileKindLabel(entry.name, t("session.sftp.kind.file"))
       : entry.kind === "symlink"
         ? t("session.sftp.kind.symlink")
         : entry.kind === "host"
           ? t("session.sftp.kind.host")
           : t("session.sftp.kind.other")
   const isFolder = entry.kind === "folder" || entry.kind === "host"
+  const isArchive = entry.kind === "file" && kindLabel === "Archive"
   const canDrop = onDrop !== undefined && entry.kind === "folder"
   const canDrag = !moving && onDragStart !== undefined && entry.path !== undefined && (entry.kind === "file" || (canDragFolders && entry.kind === "folder"))
   return (
@@ -822,6 +966,14 @@ function FileRow({ entry, selected, onSelect, onOpen, onDragStart, onDrop, canDr
       draggable={canDrag}
       role="row"
       tabIndex={moving ? -1 : 0}
+      aria-haspopup={onContextMenuRequest ? "menu" : undefined}
+      onContextMenu={(event) => {
+        if (!onContextMenuRequest) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (moving) return
+        onContextMenuRequest(entry, event.currentTarget, { x: event.clientX, y: event.clientY })
+      }}
       onClick={() => { if (!moving) onSelect() }}
       onDoubleClick={() => { if (!moving) onOpen() }}
       onDragStart={(event) => { if (moving) event.preventDefault(); else onDragStart?.(entry, event) }}
@@ -837,49 +989,82 @@ function FileRow({ entry, selected, onSelect, onOpen, onDragStart, onDrop, canDr
         onDrop?.(entry, event)
       }}
       onKeyDown={(event) => {
-        if (moving || event.key !== "Enter") return
-        event.preventDefault()
-        onOpen()
+        if (moving) return
+        const opensContextMenu = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)
+        if (opensContextMenu && onContextMenuRequest) {
+          event.preventDefault()
+          onContextMenuRequest(entry, event.currentTarget)
+          return
+        }
+        if (event.key === "Enter") {
+          event.preventDefault()
+          onOpen()
+        }
       }}
     >
-      <span className="sftp-file-name" role="cell">{isFolder ? <Folder aria-hidden="true" size={16} /> : <File aria-hidden="true" size={16} />}<span>{entry.name}</span></span>
-      <span className="sftp-file-meta" role="cell">{formatModifiedAt(entry.modifiedAt)}</span>
+      <span className="sftp-file-name" role="cell">{isFolder ? <Folder aria-hidden="true" size={17} /> : isArchive ? <Archive aria-hidden="true" size={16} /> : <File aria-hidden="true" size={16} />}<span>{entry.name}</span></span>
+      <span className="sftp-file-meta" role="cell">{formatModifiedAt(entry.modifiedAt, t("workspace.sftp.today"), t("workspace.sftp.yesterday"))}</span>
       <span className="sftp-file-meta" role="cell">{isFolder ? "-" : formatFileSize(entry.size)}</span>
       <span className="sftp-file-meta" role="cell">{kindLabel}</span>
     </div>
   )
 }
 
-function SftpTransferFooter({ transfers, bridge }: {
+function SftpTransferFooter({ transfers, bridge, remoteTitle, onDismiss }: {
   transfers: readonly SftpTransferTask[]
   bridge: RockerBridge
+  remoteTitle: string
+  onDismiss(taskId: string): void
 }): ReactElement | null {
   const { t } = useI18n()
   if (transfers.length === 0) return null
   const orderedTransfers = [...transfers].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
   const primaryTask = orderedTransfers[0]
-  const statusLabel = primaryTask.status === "queued" ? t("session.sftp.transferStatus.queued") : t("session.sftp.transferStatus.moving")
-  const taskSummary = orderedTransfers.length === 1 ? primaryTask.name : `${primaryTask.name} +${orderedTransfers.length - 1}`
+  const statusLabel = primaryTask.status === "queued"
+    ? t("session.sftp.transferStatus.queued")
+    : primaryTask.status === "completed"
+      ? t("session.sftp.transferStatus.completed")
+      : primaryTask.status === "failed"
+        ? t("session.sftp.transferStatus.failed")
+        : primaryTask.status === "cancelled"
+          ? t("session.sftp.transferStatus.cancelled")
+          : primaryTask.direction === "move"
+            ? t("session.sftp.transferStatus.moving")
+            : t("session.sftp.transferStatus.running")
+  const operationLabel = primaryTask.direction === "upload"
+    ? t("session.sftp.copy")
+    : primaryTask.direction === "move"
+      ? t("session.sftp.move")
+      : t("session.sftp.download")
+  const itemKind = primaryTask.entryType === "directory" ? t("session.sftp.kind.folder") : t("session.sftp.kind.file")
   const progress = primaryTask.totalBytes && primaryTask.totalBytes > 0 ? Math.min(100, Math.round(primaryTask.bytesTransferred / primaryTask.totalBytes * 100)) : undefined
+  const terminal = primaryTask.status === "completed" || primaryTask.status === "failed" || primaryTask.status === "cancelled"
+  const description = primaryTask.direction === "download"
+    ? `${itemKind}: ${primaryTask.name} · ${remoteTitle}:${primaryTask.remotePath}`
+    : `${itemKind}: ${primaryTask.name} → ${remoteTitle}:${primaryTask.remotePath}`
   return (
     <footer className="sftp-transfer-footer" aria-label={t("session.sftp.transfers")}>
-      <div className="sftp-transfer-task" data-direction="move" data-status={primaryTask.status}>
-        <span className="sftp-transfer-task-name" title={primaryTask.sourcePath ? `${primaryTask.sourcePath} -> ${primaryTask.remotePath}` : primaryTask.name}>
-          <ArrowRightLeft aria-hidden="true" size={15} />
-          <strong>{t("session.sftp.move")}</strong>
-          <span>{taskSummary}</span>
-          {primaryTask.sourcePath ? <code>{primaryTask.sourcePath} -&gt; {primaryTask.remotePath}</code> : null}
-        </span>
+      <div className="sftp-transfer-task" data-direction={primaryTask.direction} data-status={primaryTask.status}>
+        <span aria-hidden="true" className="sftp-transfer-status-dot" />
+        {primaryTask.direction === "upload" ? <Copy aria-hidden="true" size={15} /> : primaryTask.direction === "move" ? <ArrowRightLeft aria-hidden="true" size={15} /> : <Download aria-hidden="true" size={15} />}
+        <strong>{operationLabel}</strong>
+        <span className="sftp-transfer-description" title={primaryTask.sourcePath ? `${primaryTask.sourcePath} → ${primaryTask.remotePath}` : description}>{description}</span>
         <span className="sftp-transfer-progress-track" role="progressbar" aria-label={`${primaryTask.name} ${statusLabel}`} aria-valuemin={0} aria-valuemax={100} {...(progress === undefined ? {} : { "aria-valuenow": progress })}>
-          <span className={progress === undefined ? "is-indeterminate" : undefined} style={progress === undefined ? undefined : { width: `${progress}%` }} />
+          <span className={terminal ? undefined : progress === undefined ? "is-indeterminate" : undefined} style={terminal ? { width: "100%" } : progress === undefined ? undefined : { width: `${progress}%` }} />
         </span>
-        <span className="sftp-transfer-task-status">{orderedTransfers.length > 1 ? `${orderedTransfers.length} ${t("session.sftp.active")}` : progress === undefined ? statusLabel : `${progress}%`}</span>
-        <button aria-label={t("session.sftp.cancelTransfer")} className="sftp-transfer-task-action" title={t("session.sftp.cancelTransfer")} type="button" onClick={() => { for (const task of transfers) void bridge.sftp.cancelTransfer(task.id) }}>
-          <Square aria-hidden="true" size={13} />
+        <span className="sftp-transfer-task-status">{orderedTransfers.length > 1 ? `${orderedTransfers.length} ${t("session.sftp.active")}` : terminal ? statusLabel : progress === undefined ? statusLabel : `${progress}%`}</span>
+        <button aria-label={terminal ? t("session.sftp.dismissTransfer") : t("session.sftp.cancelTransfer")} className="sftp-transfer-task-action" title={terminal ? t("session.sftp.dismissTransfer") : t("session.sftp.cancelTransfer")} type="button" onClick={() => terminal ? onDismiss(primaryTask.id) : void bridge.sftp.cancelTransfer(primaryTask.id)}>
+          {terminal ? <X aria-hidden="true" size={15} /> : <Square aria-hidden="true" size={13} />}
         </button>
       </div>
     </footer>
   )
+}
+
+function isTransferVisible(task: SftpTransferTask): boolean {
+  if (task.status === "queued" || task.status === "running" || task.status === "failed") return true
+  if (task.status !== "completed") return false
+  return Date.now() - Date.parse(task.updatedAt) < 60_000
 }
 
 function readRemoteDragPayload(event: DragEvent<HTMLDivElement>): RemoteDragPayload | undefined {
@@ -903,7 +1088,8 @@ function isRemoteDragPayload(value: unknown): value is RemoteDragPayload {
 function pathBreadcrumbs(path: string): PaneBreadcrumbItem[] {
   const normalized = normalizeSftpPath(path)
   const parts = normalized.split("/").filter(Boolean)
-  const breadcrumbs: PaneBreadcrumbItem[] = [{ id: "/", label: "/" }]
+  if (parts.length === 0) return [{ id: "/", label: "/" }]
+  const breadcrumbs: PaneBreadcrumbItem[] = []
   let current = ""
   for (const part of parts) {
     current += `/${part}`
@@ -912,7 +1098,26 @@ function pathBreadcrumbs(path: string): PaneBreadcrumbItem[] {
   return breadcrumbs
 }
 
-function localPathBreadcrumbs(path: string): PaneBreadcrumbItem[] {
+function localPathBreadcrumbs(path: string, rootPath: string | undefined, rootLabel: string): PaneBreadcrumbItem[] {
+  if (rootPath && !sameLocalPath(path, rootPath)) {
+    const separator = path.includes("\\") ? "\\" : "/"
+    const normalizedRoot = rootPath.replace(/[\\/]+$/, "")
+    const normalizedPath = path.replace(/[\\/]+$/, "")
+    const prefix = `${normalizedRoot}${separator}`
+    const comparablePath = separator === "\\" ? normalizedPath.toLowerCase() : normalizedPath
+    const comparablePrefix = separator === "\\" ? prefix.toLowerCase() : prefix
+    if (comparablePath.startsWith(comparablePrefix)) {
+      const tail = normalizedPath.slice(normalizedRoot.length + 1).split(/[\\/]+/).filter(Boolean)
+      const breadcrumbs: PaneBreadcrumbItem[] = [{ id: rootPath, label: rootLabel }]
+      let current = rootPath
+      for (const part of tail) {
+        current = `${current.replace(/[\\/]+$/, "")}${separator}${part}`
+        breadcrumbs.push({ id: current, label: part })
+      }
+      return breadcrumbs
+    }
+  }
+  if (rootPath && sameLocalPath(path, rootPath)) return [{ id: rootPath, label: rootLabel }]
   if (!path.includes("\\")) return pathBreadcrumbs(path)
   const normalized = path.replace(/[\\/]+$/, "")
   const drive = normalized.match(/^[A-Za-z]:/)?.[0]
@@ -928,8 +1133,9 @@ function localPathBreadcrumbs(path: string): PaneBreadcrumbItem[] {
   return breadcrumbs
 }
 
-function isLocalRoot(path: string): boolean {
-  return path === "/" || /^[A-Za-z]:[\\/]?$/.test(path)
+function sameLocalPath(left: string, right: string): boolean {
+  const normalize = (path: string): string => path.replace(/[\\/]+$/, "").toLowerCase()
+  return normalize(left) === normalize(right)
 }
 
 function parentLocalPath(path: string): string {
@@ -963,16 +1169,43 @@ function localFilePath(file: File): string | undefined {
   return typeof candidate.path === "string" && candidate.path.trim().length > 0 ? candidate.path : undefined
 }
 
-function formatModifiedAt(value: string | undefined): string {
+function formatModifiedAt(value: string | undefined, todayLabel: string, yesterdayLabel: string): string {
   if (!value) return "-"
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })
+  if (Number.isNaN(date.getTime())) return "-"
+  const now = new Date()
+  const dateKey = (candidate: Date): string => `${candidate.getFullYear()}-${candidate.getMonth()}-${candidate.getDate()}`
+  const dayOffset = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()) / 86_400_000)
+  const relativeDay = dateKey(date) === dateKey(now)
+    ? todayLabel
+    : dayOffset === 1
+      ? yesterdayLabel
+      : date.toLocaleDateString("en-GB", { weekday: "short" })
+  const time = date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+  return `${relativeDay}${todayLabel === "Today" ? ", " : " "}${time}`
 }
 
 function formatFileSize(size: number | undefined): string {
   if (size === undefined) return "-"
   if (size < 1_024) return `${size} B`
-  if (size < 1_024 * 1_024) return `${Math.round(size / 1_024)} KB`
+  if (size < 1_024 * 1_024) return `${(size / 1_024).toFixed(1)} KB`
   if (size < 1_024 * 1_024 * 1_024) return `${(size / (1_024 * 1_024)).toFixed(1)} MB`
   return `${(size / (1_024 * 1_024 * 1_024)).toFixed(1)} GB`
+}
+
+function fileKindLabel(name: string, fallback: string): string {
+  const normalized = name.toLowerCase()
+  if (normalized.startsWith(".")) return "Document"
+  if (/\.(zip|tar|gz|tgz|7z|rar)$/.test(normalized) || normalized.endsWith(".tar.gz")) return "Archive"
+  if (/\.(md|markdown)$/.test(normalized)) return "Markdown"
+  if (/\.(ya?ml)$/.test(normalized)) return "YAML"
+  if (/\.json$/.test(normalized)) return "JSON"
+  if (/\.html?$/.test(normalized)) return "HTML"
+  if (/\.(m?js|cjs)$/.test(normalized)) return "JavaScript"
+  if (/\.css$/.test(normalized)) return "CSS"
+  if (/\.(png|jpe?g|gif|svg|webp|bmp)$/.test(normalized)) return "Image"
+  if (/\.log$/.test(normalized)) return "Log"
+  if (/\.(conf|ini|toml)$/.test(normalized)) return "Configuration"
+  if (/\.txt$/.test(normalized)) return "Text"
+  return fallback
 }

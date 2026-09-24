@@ -95,6 +95,7 @@ describe("SftpManager", () => {
     const uploadSelection = await manager.selectUpload(workspace.workspaceId, "/", sourcePath, owner)
     const upload = await manager.upload(uploadSelection.selectionId, false, owner)
     expect(upload.kind).toBe("started")
+    expect(upload).toMatchObject({ kind: "started", task: { sourcePath, entryType: "file" } })
     await waitFor(() => manager.listTransfers(owner).some((task) => task.id === (upload.kind === "started" ? upload.task.id : "") && task.status === "completed"))
 
     const duplicateSelection = await manager.selectUpload(workspace.workspaceId, "/", sourcePath, owner)
