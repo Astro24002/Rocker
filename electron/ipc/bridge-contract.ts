@@ -185,7 +185,7 @@ export interface RockerBridge {
     move(workspaceId: string, path: string, nextPath: string, kind: "file" | "directory"): Promise<SftpTransferStartResult>
     remove(workspaceId: string, path: string, kind: "file" | "directory"): Promise<void>
     chooseUpload(workspaceId: string, remoteDirectory: string, localPath?: string): Promise<SftpUploadSelection | undefined>
-    chooseDownload(workspaceId: string, remotePath: string, suggestedName: string): Promise<SftpDownloadSelection | undefined>
+    chooseDownload(workspaceId: string, remotePath: string, suggestedName: string, localDirectory?: string): Promise<SftpDownloadSelection | undefined>
     upload(selectionId: string, overwrite?: boolean): Promise<SftpTransferStartResult>
     download(selectionId: string, overwrite?: boolean): Promise<SftpTransferStartResult>
     listTransfers(workspaceId?: string): Promise<SftpTransferTask[]>

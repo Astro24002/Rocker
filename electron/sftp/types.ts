@@ -31,7 +31,8 @@ export interface SftpUploadSelection {
   selectionId: string
   workspaceId: string
   name: string
-  size: number
+  size?: number
+  entryType: "file" | "directory"
   remotePath: string
 }
 
@@ -39,6 +40,7 @@ export interface SftpDownloadSelection {
   selectionId: string
   workspaceId: string
   name: string
+  entryType: "file" | "directory"
   remotePath: string
 }
 

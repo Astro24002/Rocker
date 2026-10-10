@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -109,6 +109,46 @@ describe("SftpManager", () => {
     expect(download.kind).toBe("started")
     await waitFor(() => manager.listTransfers(owner).some((task) => task.id === (download.kind === "started" ? download.task.id : "") && task.status === "completed"))
     await expect(readFile(targetPath, "utf8")).resolves.toBe("payload from Rocker\n")
+  })
+
+  it("uploads and downloads folder trees, including nested and empty folders", async () => {
+    const fixture = await createSshTestServer()
+    fixtures.push(fixture)
+    const { manager } = createManager(fixture.port)
+    const workspace = await manager.open("00000000-0000-4000-8000-000000000109", "fixture", owner)
+    const localRoot = await mkdtemp(join(tmpdir(), "rocker-sftp-folder-test-"))
+    temporaryDirectories.push(localRoot)
+    const sourceFolder = join(localRoot, "project")
+    await mkdir(join(sourceFolder, "nested"), { recursive: true })
+    await mkdir(join(sourceFolder, "empty"))
+    await writeFile(join(sourceFolder, "readme.txt"), "project root", "utf8")
+    await writeFile(join(sourceFolder, "nested", "build.txt"), "nested output", "utf8")
+
+    const uploadSelection = await manager.selectUpload(workspace.workspaceId, "/", sourceFolder, owner)
+    expect(uploadSelection).toMatchObject({ name: "project", entryType: "directory", remotePath: "/project" })
+    const upload = await manager.upload(uploadSelection.selectionId, false, owner)
+    if (upload.kind !== "started") throw new Error("Expected folder upload task")
+    expect(upload.task).toMatchObject({ entryType: "directory", sourcePath: sourceFolder, direction: "upload" })
+    await waitFor(() => manager.listTransfers(owner).some((task) => task.id === upload.task.id && task.status === "completed"))
+
+    const remoteRoot = await manager.list(workspace.workspaceId, "/project", owner)
+    expect(remoteRoot.entries.map((entry) => entry.name)).toEqual(expect.arrayContaining(["empty", "nested", "readme.txt"]))
+    expect((await manager.list(workspace.workspaceId, "/project/nested", owner)).entries.map((entry) => entry.name)).toContain("build.txt")
+
+    const downloadParent = join(localRoot, "downloads")
+    await mkdir(downloadParent)
+    const downloadPath = join(downloadParent, "project-copy")
+    const downloadSelection = await manager.selectDownload(workspace.workspaceId, "/project", downloadPath, owner)
+    expect(downloadSelection).toMatchObject({ name: "project", entryType: "directory", remotePath: "/project" })
+    const download = await manager.download(downloadSelection.selectionId, false, owner)
+    if (download.kind !== "started") throw new Error("Expected folder download task")
+    expect(download.task).toMatchObject({ entryType: "directory", localPath: downloadPath, direction: "download" })
+    await waitFor(() => manager.listTransfers(owner).some((task) => task.id === download.task.id && task.status === "completed"))
+
+    await expect(readFile(join(downloadPath, "readme.txt"), "utf8")).resolves.toBe("project root")
+    await expect(readFile(join(downloadPath, "nested", "build.txt"), "utf8")).resolves.toBe("nested output")
+    expect((await readdir(downloadPath)).sort()).toEqual(["empty", "nested", "readme.txt"])
+    expect((await stat(join(downloadPath, "empty"))).isDirectory()).toBe(true)
   })
 
   it("retries a failed download and releases its lease after completion", async () => {

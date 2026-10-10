@@ -315,6 +315,7 @@ describe("registerIpcHandlers", () => {
 
   it("keeps SFTP rename, move, and dropped-upload requests owner scoped", async () => {
     const harness = createHarness()
+    electron.BrowserWindow.fromWebContents.mockReturnValue(harness.owner)
     harness.sftp.selectUpload.mockResolvedValue({ selectionId: "selection-1", workspaceId: "workspace-1", name: "drop.txt", size: 4, remotePath: "/drop.txt" })
     registerIpcHandlers(harness.dependencies)
 
@@ -329,6 +330,18 @@ describe("registerIpcHandlers", () => {
       .resolves.toMatchObject({ selectionId: "selection-1", remotePath: "/drop.txt" })
     expect(harness.sftp.selectUpload).toHaveBeenCalledWith("workspace-1", "/", "/tmp/drop.txt", owner21)
     expect(electron.dialog.showOpenDialog).not.toHaveBeenCalled()
+
+    electron.dialog.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/tmp/drop-folder"] })
+    await expect(invokeFrom(21, ipcChannels.sftpChooseUpload, "workspace-1", "/"))
+      .resolves.toMatchObject({ selectionId: "selection-1" })
+    expect(electron.dialog.showOpenDialog).toHaveBeenCalledWith(harness.owner, { title: "Upload file or folder", properties: ["openFile", "openDirectory"] })
+    expect(harness.sftp.selectUpload).toHaveBeenLastCalledWith("workspace-1", "/", "/tmp/drop-folder", owner21)
+
+    harness.sftp.selectDownload.mockResolvedValue({ selectionId: "selection-2", workspaceId: "workspace-1", name: "guide folder", entryType: "directory", remotePath: "/docs" })
+    await expect(invokeFrom(21, ipcChannels.sftpChooseDownload, "workspace-1", "/docs", "guide folder", "/tmp/local target"))
+      .resolves.toMatchObject({ selectionId: "selection-2", entryType: "directory" })
+    expect(harness.sftp.selectDownload).toHaveBeenCalledWith("workspace-1", "/docs", join("/tmp/local target", "guide folder"), owner21)
+    expect(electron.dialog.showSaveDialog).not.toHaveBeenCalled()
 
     await expect(invokeFrom(21, ipcChannels.sftpRename, "workspace-1", 42, "/new.txt"))
       .rejects.toThrow("Invalid SFTP rename request")
@@ -1116,6 +1129,7 @@ function createHarness() {
     rename: vi.fn(),
     move: vi.fn(),
     selectUpload: vi.fn(),
+    selectDownload: vi.fn(),
     onEvent: vi.fn(() => vi.fn())
   }
   const dependencies = {

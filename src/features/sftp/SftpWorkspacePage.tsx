@@ -143,7 +143,10 @@ interface FilePaneProps {
   onBlankContextMenu?(event: ReactMouseEvent<HTMLDivElement>): void
   onEntryContextMenu?(entry: FilePaneEntry, trigger: HTMLDivElement, point?: { x: number; y: number }): void
   onEntryDragStart?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
+  onEntryDragOver?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
   onEntryDrop?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
+  showHiddenFiles?: boolean
+  onShowHiddenFilesChange?(value: boolean): void
   canDragFolders?: boolean
   movingEntryIds?: ReadonlySet<string>
   onDragEnter?(event: DragEvent<HTMLDivElement>): void
@@ -159,10 +162,12 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
   const [localDirectory, setLocalDirectory] = useState<{ path: string; entries: SftpDirectoryEntry[]; loading: boolean; error?: string }>({ path: "", entries: [], loading: true })
   const [selectedLocalId, setSelectedLocalId] = useState<string>()
   const [selectedRemoteId, setSelectedRemoteId] = useState<string>()
+  const [localShowHiddenFiles, setLocalShowHiddenFiles] = useState(false)
+  const [remoteShowHiddenFiles, setRemoteShowHiddenFiles] = useState(false)
   const [refreshNonce, setRefreshNonce] = useState(0)
   const [localRefreshNonce, setLocalRefreshNonce] = useState(0)
   const [actionError, setActionError] = useState<string>()
-  const [dropActive, setDropActive] = useState(false)
+  const [dropActivePane, setDropActivePane] = useState<"local" | "remote">()
   const [transfers, setTransfers] = useState<SftpTransferTask[]>([])
   const [propertiesEntry, setPropertiesEntry] = useState<SftpDirectoryEntry>()
   const closeProperties = useCallback((): void => setPropertiesEntry(undefined), [])
@@ -188,14 +193,14 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
   )
   const movingRemoteIds = useMemo(() => new Set(
     activeTransfers
-      .filter((task) => task.direction === "move")
-      .map((task) => task.sourcePath)
+      .filter((task) => task.direction === "move" || task.direction === "download")
+      .map((task) => task.direction === "move" ? task.sourcePath : task.remotePath)
       .filter((path): path is string => path !== undefined)
   ), [activeTransfers])
-  const copyingLocalIds = useMemo(() => new Set(
+  const busyLocalIds = useMemo(() => new Set(
     activeTransfers
-      .filter((task) => task.direction === "upload")
-      .map((task) => task.sourcePath)
+      .filter((task) => task.direction === "upload" || task.direction === "download")
+      .map((task) => task.direction === "upload" ? task.sourcePath : task.localPath)
       .filter((path): path is string => path !== undefined)
   ), [activeTransfers])
 
@@ -274,8 +279,11 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       }
       if (event.kind !== "transfer" || event.task.workspaceId !== selectedSession.id) return
       rememberTransfer(event.task)
-      if ((event.task.direction === "move" || event.task.direction === "upload") && (event.task.status === "completed" || event.task.status === "failed" || event.task.status === "cancelled")) {
+      if (event.task.status !== "completed" && event.task.status !== "failed" && event.task.status !== "cancelled") return
+      if (event.task.direction === "move" || event.task.direction === "upload") {
         setRefreshNonce((current) => current + 1)
+      } else if (event.task.direction === "download") {
+        setLocalRefreshNonce((current) => current + 1)
       }
     })
   }, [bridge, onPatch, selectedSession?.id])
@@ -283,6 +291,11 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
   useEffect(() => {
     setSelectedRemoteId(undefined)
   }, [remotePath, selectedSession?.id])
+
+  useEffect(() => {
+    setLocalShowHiddenFiles(false)
+    setRemoteShowHiddenFiles(false)
+  }, [selectedSession?.id])
 
   useEffect(() => {
     const completedTransfers = transfers.filter((task) => task.status === "completed")
@@ -300,12 +313,12 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
   }, [movingRemoteIds, selectedRemoteId])
 
   useEffect(() => {
-    if (selectedLocalId && copyingLocalIds.has(selectedLocalId)) setSelectedLocalId(undefined)
-  }, [copyingLocalIds, selectedLocalId])
+    if (selectedLocalId && busyLocalIds.has(selectedLocalId)) setSelectedLocalId(undefined)
+  }, [busyLocalIds, selectedLocalId])
 
-  const uploadLocalPath = async (localPath: string): Promise<void> => {
+  const uploadLocalPath = async (localPath: string, targetDirectory = remotePath): Promise<void> => {
     if (!selectedSession) return
-    const selection = await bridge.sftp.chooseUpload(selectedSession.id, remotePath, localPath)
+    const selection = await bridge.sftp.chooseUpload(selectedSession.id, targetDirectory, localPath)
     if (!selection) return
     let result = await bridge.sftp.upload(selection.selectionId)
     if (result.kind === "overwrite-required") {
@@ -345,17 +358,20 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
     }
   }
 
-  const downloadEntry = async (entry: SftpDirectoryEntry | undefined): Promise<void> => {
-    if (!selectedSession || !entry || entry.type !== "file") return
+  const downloadEntry = async (entry: SftpDirectoryEntry | undefined, localTargetDirectory?: string): Promise<void> => {
+    if (!selectedSession || !entry || (entry.type !== "file" && entry.type !== "directory")) return
     try {
-      const selection = await bridge.sftp.chooseDownload(selectedSession.id, entry.path, entry.name)
+      const selection = await bridge.sftp.chooseDownload(selectedSession.id, entry.path, entry.name, localTargetDirectory)
       if (!selection) return
       let result = await bridge.sftp.download(selection.selectionId)
       if (result.kind === "overwrite-required") {
         if (!window.confirm(t("session.sftp.overwritePrompt"))) return
         result = await bridge.sftp.download(selection.selectionId, true)
       }
-      if (result.kind === "started") rememberTransfer(result.task)
+      if (result.kind === "started") rememberTransfer({
+        ...result.task,
+        localPath: result.task.localPath ?? (localTargetDirectory ? joinLocalPath(localTargetDirectory, entry.name) : undefined)
+      })
       setActionError(undefined)
     } catch (reason) {
       setActionError(reason instanceof Error ? reason.message : String(reason))
@@ -404,9 +420,9 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
     setLocalDirectory((current) => ({ ...current, path, entries: [], loading: true, error: undefined }))
   }
 
-  const handleDrop = (event: DragEvent<HTMLDivElement>, targetDirectory = remotePath): void => {
+  const handleRemoteDrop = (event: DragEvent<HTMLDivElement>, targetDirectory = remotePath): void => {
     event.preventDefault()
-    setDropActive(false)
+    setDropActivePane(undefined)
     const remotePayload = readRemoteDragPayload(event)
     if (remotePayload) {
       if (!selectedSession) {
@@ -438,13 +454,43 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       return
     }
     void (async (): Promise<void> => {
-      for (const path of paths) await uploadLocalPath(path)
+      for (const path of paths) await uploadLocalPath(path, targetDirectory)
       setActionError(undefined)
     })().catch((reason: unknown) => setActionError(reason instanceof Error ? reason.message : String(reason)))
   }
 
+  const handleLocalDrop = (event: DragEvent<HTMLDivElement>, targetDirectory = localDirectory.path): void => {
+    event.preventDefault()
+    setDropActivePane(undefined)
+    const remotePayload = readRemoteDragPayload(event)
+    if (!selectedSession || !remotePayload) {
+      setActionError(t("session.sftp.dropUnsupported"))
+      return
+    }
+    void downloadEntry({
+      name: remotePayload.name,
+      path: remotePayload.path,
+      type: remotePayload.kind
+    }, targetDirectory)
+  }
+
+  const handleLocalDragOver = (event: DragEvent<HTMLDivElement>): void => {
+    if (!selectedSession || !hasDataTransferType(event, remoteFileDragType)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "copy"
+  }
+
+  const handleRemoteDragOver = (event: DragEvent<HTMLDivElement>): void => {
+    if (!selectedSession) return
+    const hasRemoteEntry = hasDataTransferType(event, remoteFileDragType)
+    const hasLocalEntry = hasDataTransferType(event, localFileDragType) || hasDataTransferType(event, "Files")
+    if (!hasRemoteEntry && !hasLocalEntry) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = hasRemoteEntry ? "move" : "copy"
+  }
+
   const handleLocalDragStart = (entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void => {
-    if (entry.kind !== "file" || !entry.path) {
+    if ((entry.kind !== "file" && entry.kind !== "folder") || !entry.path || busyLocalIds.has(entry.path)) {
       event.preventDefault()
       return
     }
@@ -458,7 +504,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       event.preventDefault()
       return
     }
-    event.dataTransfer.effectAllowed = "move"
+    event.dataTransfer.effectAllowed = "copyMove"
     event.dataTransfer.setData(remoteFileDragType, JSON.stringify({
       path: entry.path,
       name: entry.name,
@@ -467,19 +513,53 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
     event.dataTransfer.setData("text/plain", entry.name)
   }
 
+  const handleRemoteEntryDragOver = (_entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void => {
+    handleRemoteDragOver(event)
+  }
+
   const handleRemoteEntryDrop = (entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void => {
     if (entry.kind !== "folder" || !entry.path) {
       event.preventDefault()
-      setActionError(t("session.sftp.moveFolderTarget"))
       return
     }
-    handleDrop(event, entry.path)
+    handleRemoteDrop(event, entry.path)
+  }
+
+  const handleLocalEntryDragOver = (_entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void => {
+    handleLocalDragOver(event)
+  }
+
+  const handleLocalEntryDrop = (entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void => {
+    if (entry.kind !== "folder" || !entry.path) {
+      event.preventDefault()
+      return
+    }
+    event.stopPropagation()
+    handleLocalDrop(event, entry.path)
   }
 
   const handleRemotePaneDrop = (event: DragEvent<HTMLDivElement>): void => {
     const target = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-entry-kind]") : null
     const targetDirectory = target?.dataset.entryKind === "folder" && target.dataset.entryPath ? target.dataset.entryPath : remotePath
-    handleDrop(event, targetDirectory)
+    if (targetDirectory !== remotePath && movingRemoteIds.has(targetDirectory)) {
+      event.preventDefault()
+      setDropActivePane(undefined)
+      setActionError(t("session.sftp.busyTransferTarget"))
+      return
+    }
+    handleRemoteDrop(event, targetDirectory)
+  }
+
+  const handleLocalPaneDrop = (event: DragEvent<HTMLDivElement>): void => {
+    const target = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-entry-kind]") : null
+    const targetDirectory = target?.dataset.entryKind === "folder" && target.dataset.entryPath ? target.dataset.entryPath : localDirectory.path
+    if (targetDirectory !== localDirectory.path && busyLocalIds.has(targetDirectory)) {
+      event.preventDefault()
+      setDropActivePane(undefined)
+      setActionError(t("session.sftp.busyTransferTarget"))
+      return
+    }
+    handleLocalDrop(event, targetDirectory)
   }
 
   const localEntries = useMemo<FilePaneEntry[]>(() => [
@@ -509,9 +589,9 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       id: "copy-to-host",
       label: t("workspace.sftp.copyToHost").replace("{host}", remoteTitle),
       icon: <Copy aria-hidden="true" size={14} />,
-      disabled: !selectedSession || selectedLocalEntry.type !== "file" || copyingLocalIds.has(selectedLocalEntry.path),
+      disabled: selectedLocalEntry.type !== "file" && selectedLocalEntry.type !== "directory" || busyLocalIds.has(selectedLocalEntry.path),
       onSelect: () => {
-        if (selectedLocalEntry.type !== "file") return
+        if (selectedLocalEntry.type !== "file" && selectedLocalEntry.type !== "directory") return
         void uploadLocalPath(selectedLocalEntry.path).catch((reason: unknown) => setActionError(reason instanceof Error ? reason.message : String(reason)))
       }
     }] : []),
@@ -521,7 +601,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       icon: <RefreshCw aria-hidden="true" size={14} />,
       onSelect: () => setLocalRefreshNonce((current) => current + 1)
     }
-  ], [copyingLocalIds, remoteTitle, selectedLocalEntry, selectedSession, t])
+  ], [busyLocalIds, remoteTitle, selectedLocalEntry, selectedSession, t])
 
   const remoteActions = useMemo<PaneAction[]>(() => selectedSession ? [
     {
@@ -560,8 +640,8 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       id: "download",
       label: t("session.sftp.download"),
       icon: <Download aria-hidden="true" size={14} />,
-      disabled: selectedRemoteEntry?.type !== "file",
-      onSelect: () => void downloadEntry(selectedRemoteEntry)
+      disabled: selectedRemoteEntry?.type !== "file" && selectedRemoteEntry?.type !== "directory",
+      onSelect: () => void downloadEntry(selectedRemoteEntry, selectedRemoteEntry?.type === "directory" ? localDirectory.path : undefined)
     },
     ...(selectedRemoteEntry ? [{
       id: "properties",
@@ -569,7 +649,7 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       icon: <Info aria-hidden="true" size={14} />,
       onSelect: () => setPropertiesEntry(selectedRemoteEntry)
     }] : [])
-  ] : [], [selectedRemoteEntry, selectedSession, t])
+  ] : [], [localDirectory.path, selectedRemoteEntry, selectedSession, t])
 
   const remoteBreadcrumbs = selectedSession
     ? remotePath === "." ? [{ id: ".", label: "~" }] : pathBreadcrumbs(remotePath)
@@ -591,6 +671,8 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
         selectedEntryId={selectedLocalId}
         actions={localActions}
         supportsHiddenFileFilter
+        showHiddenFiles={localShowHiddenFiles}
+        onShowHiddenFilesChange={setLocalShowHiddenFiles}
         emptyMessage={t("workspace.sftp.noLocalFiles")}
         filterPlaceholder={t("workspace.sftp.filterPlaceholder")}
         loading={localDirectory.loading}
@@ -601,7 +683,19 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
         onPaneContextMenu={() => setSelectedLocalId(undefined)}
         contextMenuEnabled
         onEntryDragStart={handleLocalDragStart}
-        movingEntryIds={copyingLocalIds}
+        canDragFolders
+        onEntryDragOver={selectedSession ? handleLocalEntryDragOver : undefined}
+        onEntryDrop={selectedSession ? handleLocalEntryDrop : undefined}
+        movingEntryIds={busyLocalIds}
+        onDragEnter={selectedSession ? (event) => {
+          if (!hasDataTransferType(event, remoteFileDragType)) return
+          event.preventDefault()
+          setDropActivePane("local")
+        } : undefined}
+        onDragOver={selectedSession ? handleLocalDragOver : undefined}
+        onDragLeave={(event) => { if (event.currentTarget === event.target) setDropActivePane(undefined) }}
+        onDrop={selectedSession ? handleLocalPaneDrop : undefined}
+        dropActive={dropActivePane === "local"}
         onEntryOpen={(entry) => {
           if (entry.kind === "folder" && entry.path) navigateLocal(entry.path)
         }}
@@ -617,6 +711,8 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
         selectedEntryId={selectedRemoteId}
         actions={remoteActions}
         supportsHiddenFileFilter={Boolean(selectedSession)}
+        showHiddenFiles={remoteShowHiddenFiles}
+        onShowHiddenFilesChange={setRemoteShowHiddenFiles}
         loading={selectedSession?.browser.loading}
         error={selectedSession?.browser.error ?? actionError}
         emptyMessage={selectedSession ? t("session.sftp.emptyTitle") : t("workspace.sftp.selectHost")}
@@ -636,14 +732,19 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
           if (directory?.type === "directory") navigateRemote(directory.path)
         }}
         onEntryDragStart={selectedSession ? handleRemoteDragStart : undefined}
+        onEntryDragOver={selectedSession ? handleRemoteEntryDragOver : undefined}
         onEntryDrop={selectedSession ? handleRemoteEntryDrop : undefined}
         canDragFolders={Boolean(selectedSession)}
         movingEntryIds={movingRemoteIds}
-        onDragEnter={(event) => { event.preventDefault(); setDropActive(true) }}
-        onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = readRemoteDragPayload(event) ? "move" : "copy" }}
-        onDragLeave={(event) => { if (event.currentTarget === event.target) setDropActive(false) }}
-        onDrop={handleRemotePaneDrop}
-        dropActive={dropActive}
+        onDragEnter={selectedSession ? (event) => {
+          if (!hasDataTransferType(event, remoteFileDragType) && !hasDataTransferType(event, localFileDragType) && !hasDataTransferType(event, "Files")) return
+          event.preventDefault()
+          setDropActivePane("remote")
+        } : undefined}
+        onDragOver={selectedSession ? handleRemoteDragOver : undefined}
+        onDragLeave={(event) => { if (event.currentTarget === event.target) setDropActivePane(undefined) }}
+        onDrop={selectedSession ? handleRemotePaneDrop : undefined}
+        dropActive={dropActivePane === "remote"}
       />
         </div>
         <SftpTransferFooter
@@ -680,7 +781,10 @@ export function FilePane({
   onBreadcrumbSelect,
   onEntrySelect,
   onEntryOpen,
+  showHiddenFiles,
+  onShowHiddenFilesChange,
   onEntryDragStart,
+  onEntryDragOver,
   onEntryDrop,
   canDragFolders,
   movingEntryIds,
@@ -692,7 +796,9 @@ export function FilePane({
 }: FilePaneProps): ReactElement {
   const { t } = useI18n()
   const [filter, setFilter] = useState("")
-  const [showHiddenFiles, setShowHiddenFiles] = useState(false)
+  const [uncontrolledShowHiddenFiles, setUncontrolledShowHiddenFiles] = useState(false)
+  const showHiddenFilesValue = showHiddenFiles ?? uncontrolledShowHiddenFiles
+  const setShowHiddenFiles = onShowHiddenFilesChange ?? setUncontrolledShowHiddenFiles
   const [sort, setSort] = useState<FileSortState>({ column: "name", direction: "ascending" })
   const [contextMenu, setContextMenu] = useState<SftpContextMenuPosition>()
   const contextMenuRef = useRef<HTMLDivElement>(null)
@@ -719,12 +825,12 @@ export function FilePane({
   const deferredFilter = useDeferredValue(filter.trim().toLocaleLowerCase())
   const visibleEntries = useMemo(() => entries
     .filter((entry) => {
-      if (supportsHiddenFileFilter && !showHiddenFiles && entry.name.startsWith(".")) return false
+      if (supportsHiddenFileFilter && !showHiddenFilesValue && entry.name.startsWith(".")) return false
       return !deferredFilter || entry.name.toLocaleLowerCase().includes(deferredFilter)
     })
     .map((entry, index) => ({ entry, index }))
     .sort((left, right) => compareFileEntries(left.entry, right.entry, sort, t) || left.index - right.index)
-    .map(({ entry }) => entry), [deferredFilter, entries, showHiddenFiles, sort, supportsHiddenFileFilter, t])
+    .map(({ entry }) => entry), [deferredFilter, entries, showHiddenFilesValue, sort, supportsHiddenFileFilter, t])
 
   const selectSortColumn = (column: FileSortColumn): void => {
     setSort((current) => ({
@@ -779,7 +885,7 @@ export function FilePane({
         filter={filter}
         filterPlaceholder={filterPlaceholder}
         onFilterChange={setFilter}
-        showHiddenFiles={showHiddenFiles}
+        showHiddenFiles={showHiddenFilesValue}
         onShowHiddenFilesChange={setShowHiddenFiles}
         showHiddenFilesControl={supportsHiddenFileFilter}
       />
@@ -794,6 +900,7 @@ export function FilePane({
         onEntrySelect={onEntrySelect}
         onEntryOpen={onEntryOpen}
         onEntryDragStart={onEntryDragStart}
+        onEntryDragOver={onEntryDragOver}
         onEntryDrop={onEntryDrop}
         canDragFolders={canDragFolders}
         movingEntryIds={movingEntryIds}
@@ -958,6 +1065,7 @@ function FileTableBody({
   onEntrySelect,
   onEntryOpen,
   onEntryDragStart,
+  onEntryDragOver,
   onEntryDrop,
   canDragFolders,
   movingEntryIds,
@@ -969,7 +1077,7 @@ function FileTableBody({
   contextMenuEnabled,
   onBlankContextMenu,
   onEntryContextMenu
-}: Omit<FilePaneProps, "id" | "title" | "subtitle" | "titleIcon" | "breadcrumbs" | "actions" | "filterPlaceholder" | "onBack" | "onBreadcrumbSelect">): ReactElement {
+}: Omit<FilePaneProps, "id" | "title" | "subtitle" | "titleIcon" | "breadcrumbs" | "actions" | "filterPlaceholder" | "onBack" | "onBreadcrumbSelect" | "showHiddenFiles" | "onShowHiddenFilesChange">): ReactElement {
   const { t } = useI18n()
   return (
     <div
@@ -997,6 +1105,7 @@ function FileTableBody({
           onSelect={() => onEntrySelect(entry)}
           onOpen={() => onEntryOpen(entry)}
           onDragStart={onEntryDragStart}
+          onDragOver={onEntryDragOver}
           onDrop={onEntryDrop}
           onContextMenuRequest={contextMenuEnabled ? onEntryContextMenu : undefined}
           canDragFolders={canDragFolders}
@@ -1007,12 +1116,13 @@ function FileTableBody({
   )
 }
 
-function FileRow({ entry, selected, onSelect, onOpen, onDragStart, onDrop, onContextMenuRequest, canDragFolders = false, moving = false }: {
+function FileRow({ entry, selected, onSelect, onOpen, onDragStart, onDragOver, onDrop, onContextMenuRequest, canDragFolders = false, moving = false }: {
   entry: FilePaneEntry
   selected: boolean
   onSelect(): void
   onOpen(): void
   onDragStart?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
+  onDragOver?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
   onDrop?(entry: FilePaneEntry, event: DragEvent<HTMLDivElement>): void
   onContextMenuRequest?(entry: FilePaneEntry, trigger: HTMLDivElement, point?: { x: number; y: number }): void
   canDragFolders?: boolean
@@ -1048,9 +1158,8 @@ function FileRow({ entry, selected, onSelect, onOpen, onDragStart, onDrop, onCon
       onDoubleClick={() => { if (!moving) onOpen() }}
       onDragStart={(event) => { if (moving) event.preventDefault(); else onDragStart?.(entry, event) }}
       onDragOver={(event) => {
-        if (!canDrop || moving || !event.dataTransfer.types.includes(remoteFileDragType)) return
-        event.preventDefault()
-        event.dataTransfer.dropEffect = "move"
+        if (!canDrop || moving) return
+        onDragOver?.(entry, event)
       }}
       onDrop={(event) => {
         if (!canDrop || moving) return
@@ -1226,9 +1335,9 @@ function isTransferVisible(task: SftpTransferTask): boolean {
 }
 
 function getTransferOperationLabel(task: SftpTransferTask, t: ReturnType<typeof useI18n>["t"]): string {
-  if (task.direction === "upload") return t("session.sftp.copy")
-  if (task.direction === "move") return t("session.sftp.move")
-  return t("session.sftp.download")
+  if (task.direction === "upload") return task.entryType === "directory" ? t("session.sftp.copyFolder") : t("session.sftp.copy")
+  if (task.direction === "move") return task.entryType === "directory" ? t("session.sftp.moveFolder") : t("session.sftp.move")
+  return task.entryType === "directory" ? t("session.sftp.downloadFolder") : t("session.sftp.download")
 }
 
 function getTransferStatusLabel(task: SftpTransferTask, t: ReturnType<typeof useI18n>["t"]): string {
@@ -1309,6 +1418,15 @@ function readRemoteDragPayload(event: DragEvent<HTMLDivElement>): RemoteDragPayl
   } catch {
     return undefined
   }
+}
+
+function hasDataTransferType(event: DragEvent<HTMLDivElement>, type: string): boolean {
+  return Array.from(event.dataTransfer.types).includes(type)
+}
+
+function joinLocalPath(directory: string, name: string): string {
+  const separator = directory.includes("\\") ? "\\" : "/"
+  return `${directory.replace(/[\\/]+$/, "")}${separator}${name}`
 }
 
 function isRemoteDragPayload(value: unknown): value is RemoteDragPayload {

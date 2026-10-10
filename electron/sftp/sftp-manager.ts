@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
-import { stat as statLocal } from "node:fs/promises"
-import { basename, posix } from "node:path"
+import { lstat as lstatLocal, mkdir as mkdirLocal, readdir as readdirLocal, stat as statLocal } from "node:fs/promises"
+import { basename, dirname as dirnameLocal, join as joinLocal, posix } from "node:path"
 import type { Client, FileEntryWithStats, SFTPWrapper } from "ssh2"
 import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import type {
@@ -49,6 +49,7 @@ interface SftpSelectionRecord {
   localPath: string
   remotePath: string
   name: string
+  entryType: "file" | "directory"
   size?: number
 }
 
@@ -60,6 +61,18 @@ interface SftpTransferRecord {
   lease?: ConnectionLease
   channel?: SFTPWrapper
   runPromise?: Promise<void>
+}
+
+interface TransferManifestFile {
+  pathSegments: string[]
+  size: number
+  sourcePath: string
+}
+
+interface TransferManifest {
+  directories: string[][]
+  files: TransferManifestFile[]
+  totalBytes: number
 }
 
 const MAX_REMOTE_PATH_BYTES = 4_096
@@ -236,9 +249,11 @@ export class SftpManager {
   ): Promise<SftpUploadSelection> {
     this.requireWorkspace(workspaceId, owner)
     const normalizedLocalPath = normalizeLocalPath(localPath)
-    const local = await statLocal(normalizedLocalPath)
-    if (!local.isFile()) throw new Error("The selected upload source is not a file")
+    const local = await lstatLocal(normalizedLocalPath)
+    const entryType = local.isFile() ? "file" : local.isDirectory() ? "directory" : undefined
+    if (!entryType) throw new Error("The selected upload source is not a file or directory")
     const name = basename(normalizedLocalPath)
+    if (!name) throw new Error("The local filesystem root cannot be uploaded")
     const remotePath = posix.join(normalizeRemotePath(remoteDirectory), name)
     const selectionId = randomUUID()
     this.selections.set(selectionId, {
@@ -249,9 +264,10 @@ export class SftpManager {
       localPath: normalizedLocalPath,
       remotePath,
       name,
-      size: local.size
+      entryType,
+      ...(entryType === "file" ? { size: local.size } : {})
     })
-    return { selectionId, workspaceId, name, size: local.size, remotePath }
+    return { selectionId, workspaceId, name, entryType, ...(entryType === "file" ? { size: local.size } : {}), remotePath }
   }
 
   public async selectDownload(
@@ -262,15 +278,17 @@ export class SftpManager {
   ): Promise<SftpDownloadSelection> {
     const record = this.requireWorkspace(workspaceId, owner)
     const normalizedRemotePath = normalizeRemotePath(remotePath)
+    if (normalizedRemotePath === "/") throw new Error("The remote filesystem root cannot be downloaded")
     const normalizedLocalPath = normalizeLocalPath(localPath)
-    await this.withSftp(record, (sftp) => new Promise<void>((resolve, reject) => {
-      sftp.stat(normalizedRemotePath, (error, stats) => {
+    const entryType = await this.withSftp(record, (sftp) => new Promise<"file" | "directory">((resolve, reject) => {
+      sftp.lstat(normalizedRemotePath, (error, stats) => {
         if (error) {
           reject(error)
           return
         }
-        if (!stats.isFile()) reject(new Error("Only files can be downloaded"))
-        else resolve()
+        if (stats.isFile()) resolve("file")
+        else if (stats.isDirectory()) resolve("directory")
+        else reject(new Error("Only files and directories can be downloaded"))
       })
     }))
     const selectionId = randomUUID()
@@ -282,9 +300,10 @@ export class SftpManager {
       direction: "download",
       localPath: normalizedLocalPath,
       remotePath: normalizedRemotePath,
-      name
+      name,
+      entryType
     })
-    return { selectionId, workspaceId, name, remotePath: normalizedRemotePath }
+    return { selectionId, workspaceId, name, entryType, remotePath: normalizedRemotePath }
   }
 
   public async upload(selectionId: string, overwrite: boolean, owner: RuntimeOwner): Promise<SftpTransferStartResult> {
@@ -423,8 +442,9 @@ export class SftpManager {
       direction: selection.direction,
       name: selection.name,
       remotePath: selection.remotePath,
-      ...(selection.direction === "upload" ? { sourcePath: selection.localPath, entryType: "file" as const } : {}),
+      ...(selection.direction === "upload" ? { sourcePath: selection.localPath } : {}),
       ...(selection.direction === "download" ? { localPath: selection.localPath } : {}),
+      entryType: selection.entryType,
       status: "queued",
       bytesTransferred: 0,
       ...(selection.size === undefined ? {} : { totalBytes: selection.size }),
@@ -493,17 +513,21 @@ export class SftpManager {
           await moveRemoteEntry(sftp, record.task.sourcePath, record.task.remotePath)
           return
         }
-        if (record.task.direction === "download") {
+        if (!record.localPath) throw new Error("The local transfer path is missing")
+        if (record.task.direction === "upload") {
+          if (record.task.entryType === "directory") await this.uploadDirectory(sftp, record)
+          else {
+            const local = await statLocal(record.localPath)
+            this.updateTask(record, { totalBytes: local.size })
+            await this.transferFile(sftp, record, "upload", record.localPath, record.task.remotePath, 0, local.size, local.size)
+          }
+        } else if (record.task.entryType === "directory") {
+          await this.downloadDirectory(sftp, record)
+        } else {
           const totalBytes = await this.remoteFileSize(sftp, record.task.remotePath)
           this.updateTask(record, { totalBytes })
-        } else if (record.task.totalBytes === undefined) {
-          if (!record.localPath) throw new Error("The local transfer source is missing")
-          const local = await statLocal(record.localPath)
-          this.updateTask(record, { totalBytes: local.size })
+          await this.transferFile(sftp, record, "download", record.localPath, record.task.remotePath, 0, totalBytes, totalBytes)
         }
-        await runFastTransfer(sftp, record, (bytesTransferred, totalBytes) => {
-          this.updateTask(record, { bytesTransferred, ...(totalBytes > 0 ? { totalBytes } : {}) })
-        })
       })
       if (!record.controller.signal.aborted && !isTransferCancelled(record)) {
         this.updateTask(record, { status: "completed", error: undefined })
@@ -532,6 +556,61 @@ export class SftpManager {
         else resolve(stats.size)
       })
     })
+  }
+
+  private async uploadDirectory(sftp: SFTPWrapper, record: SftpTransferRecord): Promise<void> {
+    const sourcePath = record.localPath
+    if (!sourcePath) throw new Error("The local upload source is missing")
+    const manifest = await collectLocalDirectory(sourcePath, record.controller.signal)
+    this.updateTask(record, { totalBytes: manifest.totalBytes })
+    await ensureRemoteDirectory(sftp, record.task.remotePath)
+    for (const segments of manifest.directories.slice(1)) {
+      assertTransferActive(record.controller.signal)
+      await ensureRemoteDirectory(sftp, joinRemotePath(record.task.remotePath, segments))
+    }
+    let completedBytes = 0
+    for (const file of manifest.files) {
+      assertTransferActive(record.controller.signal)
+      const destination = joinRemotePath(record.task.remotePath, file.pathSegments)
+      completedBytes = await this.transferFile(sftp, record, "upload", file.sourcePath, destination, completedBytes, manifest.totalBytes, file.size)
+    }
+  }
+
+  private async downloadDirectory(sftp: SFTPWrapper, record: SftpTransferRecord): Promise<void> {
+    const destinationPath = record.localPath
+    if (!destinationPath) throw new Error("The local download destination is missing")
+    const manifest = await collectRemoteDirectory(sftp, record.task.remotePath, record.controller.signal)
+    this.updateTask(record, { totalBytes: manifest.totalBytes })
+    await ensureLocalDirectory(destinationPath)
+    for (const segments of manifest.directories.slice(1)) {
+      assertTransferActive(record.controller.signal)
+      await ensureLocalDirectory(joinLocal(destinationPath, ...segments))
+    }
+    let completedBytes = 0
+    for (const file of manifest.files) {
+      assertTransferActive(record.controller.signal)
+      const localPath = joinLocal(destinationPath, ...file.pathSegments)
+      await ensureLocalDirectory(dirnameLocal(localPath))
+      completedBytes = await this.transferFile(sftp, record, "download", localPath, file.sourcePath, completedBytes, manifest.totalBytes, file.size)
+    }
+  }
+
+  private async transferFile(
+    sftp: SFTPWrapper,
+    record: SftpTransferRecord,
+    direction: "upload" | "download",
+    localPath: string,
+    remotePath: string,
+    completedBytes: number,
+    totalBytes: number,
+    fileSize: number
+  ): Promise<number> {
+    await runFastTransfer(sftp, direction, localPath, remotePath, (bytesTransferred) => {
+      this.updateTask(record, { bytesTransferred: completedBytes + bytesTransferred, totalBytes })
+    })
+    const nextCompletedBytes = completedBytes + fileSize
+    this.updateTask(record, { bytesTransferred: nextCompletedBytes, totalBytes })
+    return nextCompletedBytes
   }
 
   private async withSftp<T>(record: SftpWorkspaceRecord, operation: (sftp: SFTPWrapper) => Promise<T>): Promise<T> {
@@ -599,26 +678,134 @@ function openSftp(client: Client): Promise<SFTPWrapper> {
 
 function runFastTransfer(
   sftp: SFTPWrapper,
-  record: SftpTransferRecord,
+  direction: "upload" | "download",
+  localPath: string,
+  remotePath: string,
   onProgress: (bytesTransferred: number, totalBytes: number) => void
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const step = (total: number, _chunk: number, fileSize: number): void => onProgress(total, fileSize)
     const done = (error?: Error | null): void => error ? reject(error) : resolve()
-    if (record.task.direction === "upload") {
-      if (!record.localPath) {
-        reject(new Error("The local upload source is missing"))
-        return
-      }
-      sftp.fastPut(record.localPath, record.task.remotePath, { step }, done)
-    } else {
-      if (!record.localPath) {
-        reject(new Error("The local download destination is missing"))
-        return
-      }
-      sftp.fastGet(record.task.remotePath, record.localPath, { step }, done)
-    }
+    if (direction === "upload") sftp.fastPut(localPath, remotePath, { step }, done)
+    else sftp.fastGet(remotePath, localPath, { step }, done)
   })
+}
+
+async function collectLocalDirectory(rootPath: string, signal: AbortSignal): Promise<TransferManifest> {
+  const manifest: TransferManifest = { directories: [[]], files: [], totalBytes: 0 }
+  const visit = async (directoryPath: string, pathSegments: string[]): Promise<void> => {
+    assertTransferActive(signal)
+    const entries = await readdirLocal(directoryPath, { withFileTypes: true })
+    for (const entry of entries) {
+      assertTransferActive(signal)
+      assertSafeTransferName(entry.name)
+      const sourcePath = joinLocal(directoryPath, entry.name)
+      const metadata = await lstatLocal(sourcePath)
+      const nextSegments = [...pathSegments, entry.name]
+      if (metadata.isDirectory()) {
+        manifest.directories.push(nextSegments)
+        await visit(sourcePath, nextSegments)
+      } else if (metadata.isFile()) {
+        manifest.files.push({ pathSegments: nextSegments, size: metadata.size, sourcePath })
+        manifest.totalBytes += metadata.size
+      } else {
+        throw new Error(`Unsupported entry in folder: ${entry.name}`)
+      }
+    }
+  }
+  const root = await lstatLocal(rootPath)
+  if (!root.isDirectory()) throw new Error("The upload source is no longer a directory")
+  await visit(rootPath, [])
+  return manifest
+}
+
+async function collectRemoteDirectory(sftp: SFTPWrapper, rootPath: string, signal: AbortSignal): Promise<TransferManifest> {
+  const manifest: TransferManifest = { directories: [[]], files: [], totalBytes: 0 }
+  const visit = async (directoryPath: string, pathSegments: string[]): Promise<void> => {
+    assertTransferActive(signal)
+    const entries = await readRemoteDirectory(sftp, directoryPath)
+    for (const entry of entries) {
+      assertTransferActive(signal)
+      if (entry.filename === "." || entry.filename === "..") continue
+      assertSafeTransferName(entry.filename)
+      const nextSegments = [...pathSegments, entry.filename]
+      const sourcePath = joinRemotePath(directoryPath, [entry.filename])
+      if (entry.attrs.isDirectory()) {
+        manifest.directories.push(nextSegments)
+        await visit(sourcePath, nextSegments)
+      } else if (entry.attrs.isFile()) {
+        manifest.files.push({ pathSegments: nextSegments, size: entry.attrs.size, sourcePath })
+        manifest.totalBytes += entry.attrs.size
+      } else {
+        throw new Error(`Unsupported remote entry in folder: ${entry.filename}`)
+      }
+    }
+  }
+  await visit(rootPath, [])
+  return manifest
+}
+
+function readRemoteDirectory(sftp: SFTPWrapper, path: string): Promise<FileEntryWithStats[]> {
+  return new Promise<FileEntryWithStats[]>((resolve, reject) => {
+    sftp.readdir(path, (error, entries) => error ? reject(error) : resolve(entries))
+  })
+}
+
+function ensureRemoteDirectory(sftp: SFTPWrapper, path: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    sftp.stat(path, (error, stats) => {
+      if (!error) {
+        if (stats.isDirectory()) resolve()
+        else reject(new Error(`Remote destination is not a directory: ${path}`))
+        return
+      }
+      if (!isMissingRemote(error)) {
+        reject(error)
+        return
+      }
+      sftp.mkdir(path, { mode: 0o755 }, (mkdirError) => {
+        if (!mkdirError) {
+          resolve()
+          return
+        }
+        sftp.stat(path, (statError, nextStats) => {
+          if (!statError && nextStats.isDirectory()) resolve()
+          else reject(mkdirError)
+        })
+      })
+    })
+  })
+}
+
+async function ensureLocalDirectory(path: string): Promise<void> {
+  try {
+    const stats = await lstatLocal(path)
+    if (!stats.isDirectory()) throw new Error(`Local destination is not a directory: ${path}`)
+    return
+  } catch (error) {
+    if (!isMissingLocal(error)) throw error
+  }
+  try {
+    await mkdirLocal(path)
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "EEXIST") throw error
+    const stats = await lstatLocal(path)
+    if (!stats.isDirectory()) throw new Error(`Local destination is not a directory: ${path}`)
+  }
+}
+
+function joinRemotePath(rootPath: string, pathSegments: readonly string[]): string {
+  return normalizeRemotePath(posix.join(rootPath, ...pathSegments))
+}
+
+function assertSafeTransferName(name: string): void {
+  if (!name || name === "." || name === ".." || name.includes("/") || name.includes("\u0000") || (process.platform === "win32" && name.includes("\\"))) {
+    throw new Error("A folder contains an entry name that cannot be transferred safely")
+  }
+}
+
+function assertTransferActive(signal: AbortSignal): void {
+  if (signal.aborted) throw new Error("SFTP transfer was cancelled")
 }
 
 function moveRemoteEntry(sftp: SFTPWrapper, sourcePath: string | undefined, destinationPath: string): Promise<void> {

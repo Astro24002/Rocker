@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
+import type { SftpTransferTask } from "../../../electron/sftp/types"
 import { I18nProvider } from "../../i18n"
 import type { HostProfile } from "../../app/types"
 import type { SftpWorkspaceSession } from "../terminal/session-state"
@@ -229,7 +230,7 @@ describe("SftpWorkspaceView", () => {
   it("copies a real Local file through the SFTP bridge and locks it while copying", async () => {
     const bridge = createBridge()
     const localFile = { name: "payload.txt", path: "/home/test/Desktop/payload.txt", type: "file" as const, size: 7 }
-    const task = {
+    const task: SftpTransferTask = {
       id: "copy-a",
       workspaceId: session.id,
       hostId: host.id,
@@ -251,6 +252,7 @@ describe("SftpWorkspaceView", () => {
       workspaceId: session.id,
       name: localFile.name,
       size: localFile.size,
+      entryType: "file",
       remotePath: "/payload.txt"
     })
     vi.mocked(bridge.sftp.upload).mockResolvedValue({ kind: "started", task })
@@ -272,7 +274,7 @@ describe("SftpWorkspaceView", () => {
     const bridge = createBridge()
     const localFile = { name: "payload.txt", path: "/home/test/Desktop/payload.txt", type: "file" as const, size: 7, modifiedAt: "2026-09-18T00:00:00.000Z" }
     vi.mocked(bridge.sftp.listLocal).mockResolvedValue({ path: "/home/test/Desktop", entries: [localFile] })
-    vi.mocked(bridge.sftp.chooseUpload).mockResolvedValue({ selectionId: "selection-a", workspaceId: session.id, name: localFile.name, size: localFile.size, remotePath: "/payload.txt" })
+    vi.mocked(bridge.sftp.chooseUpload).mockResolvedValue({ selectionId: "selection-a", workspaceId: session.id, name: localFile.name, size: localFile.size, entryType: "file", remotePath: "/payload.txt" })
     vi.mocked(bridge.sftp.upload).mockResolvedValue({ kind: "started", task: {
       id: "transfer-a",
       workspaceId: session.id,
@@ -304,6 +306,128 @@ describe("SftpWorkspaceView", () => {
     expect(await screen.findByRole("contentinfo", { name: "Transfers" })).toBeInTheDocument()
     expect(screen.getByRole("progressbar", { name: /payload\.txt Queued/ })).toBeInTheDocument()
     expect(await screen.findByRole("row", { name: /payload\.txt/ })).toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("copies a local folder to a remote folder as one transfer task", async () => {
+    const bridge = createBridge()
+    const localFolder = { name: "project", path: "/home/test/Desktop/project", type: "directory" as const }
+    const remoteFolder = { name: "uploads", path: "/uploads", type: "directory" as const }
+    vi.mocked(bridge.sftp.listLocal).mockResolvedValue({ path: "/home/test/Desktop", entries: [localFolder] })
+    vi.mocked(bridge.sftp.chooseUpload).mockResolvedValue({ selectionId: "folder-upload", workspaceId: session.id, name: "project", entryType: "directory", remotePath: "/uploads/project" })
+    vi.mocked(bridge.sftp.upload).mockResolvedValue({ kind: "started", task: {
+      id: "folder-upload-task",
+      workspaceId: session.id,
+      hostId: host.id,
+      direction: "upload",
+      name: "project",
+      remotePath: "/uploads/project",
+      sourcePath: localFolder.path,
+      entryType: "directory",
+      status: "running",
+      bytesTransferred: 0,
+      totalBytes: 0,
+      attempt: 1,
+      createdAt: "2026-09-18T00:00:00.000Z",
+      updatedAt: "2026-09-18T00:00:00.000Z"
+    } })
+    const selectedSession = { ...session, browser: { ...session.browser, entries: [remoteFolder] } }
+    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={selectedSession} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+
+    const sourceRow = await screen.findByRole("row", { name: /project/ })
+    expect(sourceRow).toHaveAttribute("draggable", "true")
+    const dataTransfer = createDataTransfer()
+    fireEvent.dragStart(sourceRow, { dataTransfer })
+    expect((dataTransfer as typeof dataTransfer & { types: string[] }).types).toContain("application/x-rocker-sftp-local-path")
+    const targetRow = await screen.findByRole("row", { name: /uploads/ })
+    fireEvent.dragOver(targetRow, { dataTransfer })
+    expect(dataTransfer.dropEffect).toBe("copy")
+    fireEvent.drop(targetRow, { dataTransfer })
+
+    await waitFor(() => expect(bridge.sftp.chooseUpload).toHaveBeenCalledWith(session.id, "/uploads", localFolder.path))
+    expect(bridge.sftp.upload).toHaveBeenCalledWith("folder-upload")
+    expect(bridge.sftp.move).not.toHaveBeenCalled()
+    expect(await screen.findByText("Copy folder")).toBeInTheDocument()
+    expect(sourceRow).toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("copies a remote folder to a local folder and locks the remote source", async () => {
+    const bridge = createBridge()
+    const remoteFolder = { name: "release", path: "/release", type: "directory" as const }
+    const localFolder = { name: "Downloads", path: "/home/test/Desktop/Downloads", type: "directory" as const }
+    vi.mocked(bridge.sftp.listLocal).mockResolvedValue({ path: "/home/test/Desktop", entries: [localFolder] })
+    vi.mocked(bridge.sftp.chooseDownload).mockResolvedValue({ selectionId: "folder-download", workspaceId: session.id, name: "release", entryType: "directory", remotePath: remoteFolder.path })
+    const task: SftpTransferTask = {
+      id: "folder-download-task",
+      workspaceId: session.id,
+      hostId: host.id,
+      direction: "download",
+      name: "release",
+      remotePath: remoteFolder.path,
+      localPath: "/home/test/Desktop/Downloads/release",
+      entryType: "directory",
+      status: "running",
+      bytesTransferred: 0,
+      totalBytes: 0,
+      attempt: 1,
+      createdAt: "2026-09-18T00:00:00.000Z",
+      updatedAt: "2026-09-18T00:00:00.000Z"
+    }
+    vi.mocked(bridge.sftp.download).mockResolvedValue({ kind: "started", task })
+    const selectedSession = { ...session, browser: { ...session.browser, entries: [remoteFolder] } }
+    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={selectedSession} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+
+    const sourceRow = await screen.findByRole("row", { name: /release/ })
+    const dataTransfer = createDataTransfer()
+    fireEvent.dragStart(sourceRow, { dataTransfer })
+    const targetRow = await screen.findByRole("row", { name: /Downloads/ })
+    fireEvent.dragOver(targetRow, { dataTransfer })
+    expect(dataTransfer.dropEffect).toBe("copy")
+    fireEvent.drop(targetRow, { dataTransfer })
+
+    await waitFor(() => expect(bridge.sftp.chooseDownload).toHaveBeenCalledWith(session.id, remoteFolder.path, "release", localFolder.path))
+    expect(bridge.sftp.download).toHaveBeenCalledWith("folder-download")
+    expect(bridge.sftp.move).not.toHaveBeenCalled()
+    expect(await screen.findByText("Download folder")).toBeInTheDocument()
+    expect(sourceRow).toHaveAttribute("aria-disabled", "true")
+
+    const eventListener = vi.mocked(bridge.events.onSftpEvent).mock.calls[0]?.[0]
+    expect(eventListener).toBeDefined()
+    if (!eventListener) throw new Error("Expected SFTP transfer event listener")
+    const localListCallsBeforeCompletion = vi.mocked(bridge.sftp.listLocal).mock.calls.length
+    act(() => eventListener({ kind: "transfer", task: { ...task, status: "completed", bytesTransferred: 0, updatedAt: new Date().toISOString() } }))
+    await waitFor(() => expect(bridge.sftp.listLocal).toHaveBeenCalledTimes(localListCallsBeforeCompletion + 1))
+    expect(sourceRow).not.toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("keeps Show hidden files enabled when a remote item is deleted and the listing refreshes", async () => {
+    const bridge = createBridge()
+    const hiddenEntry = { name: ".deploy-key", path: "/.deploy-key", type: "file" as const, size: 8 }
+    const visibleEntry = { name: "notes.txt", path: "/notes.txt", type: "file" as const, size: 4 }
+    vi.mocked(bridge.sftp.list).mockResolvedValue({ path: "/", entries: [visibleEntry] })
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true)
+    render(<I18nProvider><SftpWorkspaceView
+      hosts={[host]}
+      selectedSession={{ ...session, browser: { ...session.browser, entries: [hiddenEntry, visibleEntry] } }}
+      bridge={bridge}
+      onOpen={vi.fn()}
+      onPatch={vi.fn()}
+    /></I18nProvider>)
+
+    try {
+      const pane = screen.getByRole("heading", { name: "G11" }).closest(".sftp-file-pane") as HTMLElement
+      fireEvent.click(within(pane).getByRole("checkbox", { name: "Show hidden files" }))
+      expect(within(pane).getByRole("row", { name: /\.deploy-key/ })).toBeInTheDocument()
+      fireEvent.contextMenu(within(pane).getByRole("row", { name: /\.deploy-key/ }))
+      fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }))
+
+      await waitFor(() => expect(bridge.sftp.remove).toHaveBeenCalledWith(session.id, hiddenEntry.path, "file"))
+      await waitFor(() => expect(bridge.sftp.list).toHaveBeenCalledTimes(2))
+      expect(confirm).toHaveBeenCalledTimes(2)
+      expect(within(pane).getByRole("checkbox", { name: "Show hidden files" })).toBeChecked()
+      expect(within(pane).getByRole("row", { name: /\.deploy-key/ })).toBeInTheDocument()
+    } finally {
+      confirm.mockRestore()
+    }
   })
 
   it("moves a remote file into a folder and locks the source row while it runs", async () => {
@@ -593,13 +717,14 @@ function createBridge(): RockerBridge {
 
 function createDataTransfer() {
   const values = new Map<string, string>()
-  return {
+  const transfer = {
     files: [],
     effectAllowed: "none",
     dropEffect: "none",
     setData: (type: string, value: string) => { values.set(type, value) },
     getData: (type: string) => values.get(type) ?? ""
   }
+  return Object.defineProperty(transfer, "types", { get: () => Array.from(values.keys()) })
 }
 
 function rowNames(pane: HTMLElement): string[] {

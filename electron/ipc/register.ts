@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { chmod, lstat, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
-import { basename, dirname, join, resolve } from "node:path"
+import { basename, dirname, join, posix as pathPosix, resolve } from "node:path"
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron"
 import type { OpenDialogOptions } from "electron"
 import type { DiagnosticLogger } from "../diagnostics/diagnostic-logger"
@@ -318,16 +318,25 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     }
     const target = BrowserWindow.fromWebContents(event.sender)
     const result = target
-      ? await dialog.showOpenDialog(target, { title: "Upload file", properties: ["openFile"] })
-      : await dialog.showOpenDialog({ title: "Upload file", properties: ["openFile"] })
+      ? await dialog.showOpenDialog(target, { title: "Upload file or folder", properties: ["openFile", "openDirectory"] })
+      : await dialog.showOpenDialog({ title: "Upload file or folder", properties: ["openFile", "openDirectory"] })
     if (result.canceled || !result.filePaths[0]) return undefined
     assertCurrentOwner(dependencies, owner)
     return dependencies.sftp.selectUpload(workspaceId, remoteDirectory, result.filePaths[0], owner)
   })
-  ipcMain.handle(ipcChannels.sftpChooseDownload, async (event, workspaceId: unknown, remotePath: unknown, suggestedName: unknown) => {
+  ipcMain.handle(ipcChannels.sftpChooseDownload, async (event, workspaceId: unknown, remotePath: unknown, suggestedName: unknown, localDirectory: unknown) => {
     const owner = currentOwnerForWebContents(dependencies, event.sender.id)
     assertId(workspaceId, "SFTP workspace")
     if (typeof remotePath !== "string" || typeof suggestedName !== "string") throw new Error("Invalid SFTP download request")
+    if (localDirectory !== undefined) {
+      if (typeof localDirectory !== "string" || localDirectory.trim().length === 0) throw new Error("Invalid local destination directory")
+      if (suggestedName === "." || suggestedName === ".." || basename(suggestedName) !== suggestedName || pathPosix.basename(suggestedName) !== suggestedName || suggestedName.includes("\\") || suggestedName.includes("\u0000")) {
+        throw new Error("Invalid local destination name")
+      }
+      const destinationPath = join(resolve(localDirectory), suggestedName)
+      assertCurrentOwner(dependencies, owner)
+      return dependencies.sftp.selectDownload(workspaceId, remotePath, destinationPath, owner)
+    }
     const target = BrowserWindow.fromWebContents(event.sender)
     const result = target
       ? await dialog.showSaveDialog(target, { title: "Download file", defaultPath: suggestedName })
