@@ -213,13 +213,13 @@ describe("SftpWorkspaceView", () => {
     const onPatch = vi.fn()
     render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={session} bridge={bridge} onOpen={vi.fn()} onPatch={onPatch} /></I18nProvider>)
 
-    const documents = await screen.findByRole("row", { name: /Documents/ })
-    fireEvent.click(documents)
-    await waitFor(() => expect(documents).toHaveAttribute("aria-selected", "true"))
-    fireEvent.contextMenu(documents)
+    await screen.findByRole("row", { name: /Documents/ })
+    fireEvent.click(screen.getByRole("row", { name: /Documents/ }))
+    await waitFor(() => expect(screen.getByRole("row", { name: /Documents/ })).toHaveAttribute("aria-selected", "true"))
+    fireEvent.contextMenu(screen.getByRole("row", { name: /Documents/ }))
     expect(screen.getByRole("menuitem", { name: "Refresh" })).toBeEnabled()
     fireEvent.keyDown(window, { key: "Escape" })
-    fireEvent.doubleClick(documents)
+    fireEvent.doubleClick(screen.getByRole("row", { name: /Documents/ }))
 
     await waitFor(() => expect(bridge.sftp.listLocal).toHaveBeenLastCalledWith("/Users/test/Documents"))
     expect(screen.getByRole("button", { name: "Documents" })).toHaveAttribute("aria-current", "location")
@@ -411,6 +411,93 @@ describe("SftpWorkspaceView", () => {
     }
   })
 
+  it("lists concurrent tasks and exposes independent cancel and retry actions", async () => {
+    const bridge = createBridge()
+    const failedTask = {
+      id: "failed-download",
+      workspaceId: session.id,
+      hostId: host.id,
+      direction: "download" as const,
+      name: "report.csv",
+      remotePath: "/reports/report.csv",
+      localPath: "/tmp/report.csv",
+      status: "failed" as const,
+      error: "Permission denied",
+      bytesTransferred: 0,
+      attempt: 1,
+      createdAt: "2026-09-18T00:00:02.000Z",
+      updatedAt: "2026-09-18T00:00:03.000Z"
+    }
+    const runningTask = {
+      id: "running-upload",
+      workspaceId: session.id,
+      hostId: host.id,
+      direction: "upload" as const,
+      name: "payload.bin",
+      remotePath: "/payload.bin",
+      sourcePath: "/tmp/payload.bin",
+      status: "running" as const,
+      bytesTransferred: 4,
+      totalBytes: 10,
+      attempt: 1,
+      createdAt: "2026-09-18T00:00:01.000Z",
+      updatedAt: "2026-09-18T00:00:02.000Z"
+    }
+    vi.mocked(bridge.sftp.listTransfers).mockResolvedValue([runningTask, failedTask])
+    vi.mocked(bridge.sftp.retryTransfer).mockResolvedValue({ kind: "started", task: { ...failedTask, status: "queued", error: undefined, attempt: 2 } })
+    render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={session} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+
+    expect(await screen.findByText("Permission denied")).toBeInTheDocument()
+    const listToggle = await screen.findByRole("button", { name: "Show transfer tasks: 2" })
+    fireEvent.click(listToggle)
+    const taskList = screen.getByRole("region", { name: "Transfer tasks" })
+    expect(within(taskList).getByText(/G11:\/reports\/report\.csv/)).toBeInTheDocument()
+    expect(within(taskList).getByRole("alert")).toHaveTextContent("Permission denied")
+
+    fireEvent.click(within(taskList).getByRole("button", { name: /Copy · payload\.bin/ }))
+    expect(screen.queryByRole("region", { name: "Transfer tasks" })).not.toBeInTheDocument()
+    expect(screen.getByText("/tmp/payload.bin → G11:/payload.bin")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Show transfer tasks: 2" }))
+    const reopenedTaskList = screen.getByRole("region", { name: "Transfer tasks" })
+
+    fireEvent.click(within(reopenedTaskList).getByRole("button", { name: "Cancel transfer: payload.bin" }))
+    expect(bridge.sftp.cancelTransfer).toHaveBeenCalledWith(runningTask.id)
+    fireEvent.click(within(reopenedTaskList).getByRole("button", { name: "Retry transfer: report.csv" }))
+    await waitFor(() => expect(bridge.sftp.retryTransfer).toHaveBeenCalledWith(failedTask.id))
+    await waitFor(() => expect(within(screen.getByRole("region", { name: "Transfer tasks" })).getByRole("button", { name: /Download · report\.csv/ })).toHaveTextContent("Queued"))
+  })
+
+  it("shows remote metadata without adding table columns or inventing missing values", async () => {
+    const bridge = createBridge()
+    const file = { name: "private.key", path: "/private.key", type: "file" as const, size: 128, permissions: 0o100600, uid: 1001, gid: 1002 }
+    vi.mocked(bridge.sftp.list).mockResolvedValue({ path: "/", entries: [file] })
+    const remotePane = { ...session, browser: { ...session.browser, entries: [file] } }
+    const firstRender = render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={remotePane} bridge={bridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+
+    const pane = screen.getByRole("heading", { name: "G11" }).closest(".sftp-file-pane") as HTMLElement
+    expect(within(pane).getAllByRole("columnheader")).toHaveLength(4)
+    fireEvent.contextMenu(await screen.findByRole("row", { name: /private\.key/ }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }))
+    const dialog = screen.getByRole("dialog", { name: "private.key" })
+    expect(within(dialog).getByText("0600")).toBeInTheDocument()
+    expect(within(dialog).getByText("1001")).toBeInTheDocument()
+    expect(within(dialog).getByText("1002")).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: "Escape" })
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    firstRender.unmount()
+
+    const sparseBridge = createBridge()
+    const sparseFile = { name: "plain.txt", path: "/plain.txt", type: "file" as const, size: 1 }
+    vi.mocked(sparseBridge.sftp.list).mockResolvedValue({ path: "/", entries: [sparseFile] })
+    const secondRender = render(<I18nProvider><SftpWorkspaceView hosts={[host]} selectedSession={{ ...session, browser: { ...session.browser, entries: [sparseFile] } }} bridge={sparseBridge} onOpen={vi.fn()} onPatch={vi.fn()} /></I18nProvider>)
+    fireEvent.contextMenu(await screen.findByRole("row", { name: /plain\.txt/ }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Properties" }))
+    const sparseDialog = screen.getByRole("dialog", { name: "plain.txt" })
+    expect(within(sparseDialog).queryByText("Permissions")).not.toBeInTheDocument()
+    expect(within(sparseDialog).queryByText("UID")).not.toBeInTheDocument()
+    secondRender.unmount()
+  })
+
   it("opens the file actions from a row context menu in the requested order", async () => {
     const bridge = createBridge()
     const file = { name: "payload.txt", path: "/payload.txt", type: "file" as const, size: 7 }
@@ -431,7 +518,8 @@ describe("SftpWorkspaceView", () => {
       "Rename",
       "Delete",
       "Upload",
-      "Download"
+      "Download",
+      "Properties"
     ])
     fireEvent.keyDown(window, { key: "Escape" })
     expect(screen.queryByRole("menu", { name: "G11 Actions" })).not.toBeInTheDocument()
@@ -440,7 +528,7 @@ describe("SftpWorkspaceView", () => {
     await waitFor(() => expect(screen.getByRole("menu", { name: "G11 Actions" })).toBeInTheDocument())
     await waitFor(() => expect(screen.getByRole("menuitem", { name: "Refresh" })).toHaveFocus())
     fireEvent.keyDown(window, { key: "End" })
-    expect(screen.getByRole("menuitem", { name: "Download" })).toHaveFocus()
+    expect(screen.getByRole("menuitem", { name: "Properties" })).toHaveFocus()
     fireEvent.keyDown(window, { key: "Escape" })
     expect(row).toHaveFocus()
     expect(container.querySelectorAll(".sftp-file-pane")).toHaveLength(2)

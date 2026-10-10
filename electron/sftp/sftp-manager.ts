@@ -424,6 +424,7 @@ export class SftpManager {
       name: selection.name,
       remotePath: selection.remotePath,
       ...(selection.direction === "upload" ? { sourcePath: selection.localPath, entryType: "file" as const } : {}),
+      ...(selection.direction === "download" ? { localPath: selection.localPath } : {}),
       status: "queued",
       bytesTransferred: 0,
       ...(selection.size === undefined ? {} : { totalBytes: selection.size }),

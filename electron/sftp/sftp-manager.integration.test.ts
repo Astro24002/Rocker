@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -6,6 +6,7 @@ import { normalizeRemotePath, SftpManager } from "./sftp-manager"
 import { SshConnectionManager, type ResolvedConnectionRequest } from "../ssh/connection-manager"
 import { createSshTestServer, TEST_PASSWORD, TEST_USERNAME } from "../ssh/test-fixtures/ssh-server"
 import type { RuntimeOwner } from "../runtime/owner"
+import type { ClientChannel } from "ssh2"
 
 const owner: RuntimeOwner = { webContentsId: 41, rendererGeneration: 1 }
 const managers: SftpManager[] = []
@@ -108,6 +109,94 @@ describe("SftpManager", () => {
     expect(download.kind).toBe("started")
     await waitFor(() => manager.listTransfers(owner).some((task) => task.id === (download.kind === "started" ? download.task.id : "") && task.status === "completed"))
     await expect(readFile(targetPath, "utf8")).resolves.toBe("payload from Rocker\n")
+  })
+
+  it("retries a failed download and releases its lease after completion", async () => {
+    const fixture = await createSshTestServer({ sftpFiles: { "/retry.txt": "retry succeeds" } })
+    fixtures.push(fixture)
+    const { manager, connectionManager } = createManager(fixture.port)
+    const workspace = await manager.open("00000000-0000-4000-8000-000000000106", "fixture", owner)
+    const localDirectory = await mkdtemp(join(tmpdir(), "rocker-sftp-retry-"))
+    temporaryDirectories.push(localDirectory)
+    const missingDirectory = join(localDirectory, "created-before-retry")
+    const targetPath = join(missingDirectory, "retry.txt")
+    const selection = await manager.selectDownload(workspace.workspaceId, "/retry.txt", targetPath, owner)
+    const started = await manager.download(selection.selectionId, true, owner)
+    if (started.kind !== "started") throw new Error("Expected download task")
+
+    await waitFor(() => manager.listTransfers(owner).some((task) => task.id === started.task.id && task.status === "failed"))
+    expect(manager.listTransfers(owner)).toEqual(expect.arrayContaining([expect.objectContaining({ id: started.task.id, error: expect.any(String), localPath: targetPath })]))
+    expect(connectionManager.resourceSnapshot().leases).toBe(1)
+
+    await mkdir(missingDirectory)
+    await expect(manager.retryTransfer(started.task.id, owner)).resolves.toMatchObject({ kind: "started", task: { attempt: 2 } })
+    await waitFor(() => manager.listTransfers(owner).some((task) => task.id === started.task.id && task.status === "completed"))
+    await expect(readFile(targetPath, "utf8")).resolves.toBe("retry succeeds")
+    expect(connectionManager.resourceSnapshot().leases).toBe(1)
+    expect(manager.resourceSnapshot().activeTransfers).toBe(0)
+  })
+
+  it("runs concurrent Host transfers and cancellation only stops the selected task", async () => {
+    const fixture = await createSshTestServer({ sftpWriteDelayMs: 12 })
+    fixtures.push(fixture)
+    const { manager, connectionManager } = createManager(fixture.port)
+    const workspace = await manager.open("00000000-0000-4000-8000-000000000107", "fixture", owner)
+    const localDirectory = await mkdtemp(join(tmpdir(), "rocker-sftp-concurrent-"))
+    temporaryDirectories.push(localDirectory)
+    const firstPath = join(localDirectory, "first.bin")
+    const secondPath = join(localDirectory, "second.bin")
+    const payload = Buffer.alloc(2 * 1024 * 1024, 7)
+    await Promise.all([writeFile(firstPath, payload), writeFile(secondPath, payload)])
+
+    const firstSelection = await manager.selectUpload(workspace.workspaceId, "/", firstPath, owner)
+    const first = await manager.upload(firstSelection.selectionId, true, owner)
+    const secondSelection = await manager.selectUpload(workspace.workspaceId, "/", secondPath, owner)
+    const second = await manager.upload(secondSelection.selectionId, true, owner)
+    if (first.kind !== "started" || second.kind !== "started") throw new Error("Expected concurrent upload tasks")
+
+    await waitFor(() => manager.resourceSnapshot().activeTransfers === 2 && connectionManager.resourceSnapshot().leases >= 3, 5_000)
+    await manager.cancelTransfer(first.task.id, owner)
+    await waitFor(() => {
+      const tasks = manager.listTransfers(owner)
+      return tasks.some((task) => task.id === first.task.id && task.status === "cancelled")
+        && tasks.some((task) => task.id === second.task.id && task.status === "completed")
+    }, 5_000)
+
+    expect(manager.listTransfers(owner)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: first.task.id, status: "cancelled" }),
+      expect.objectContaining({ id: second.task.id, status: "completed" })
+    ]))
+    expect(manager.resourceSnapshot().activeTransfers).toBe(0)
+    expect(connectionManager.resourceSnapshot().leases).toBe(1)
+    expect((await manager.list(workspace.workspaceId, "/", owner)).entries.map((entry) => entry.name)).toContain("second.bin")
+  })
+
+  it("keeps a live terminal PTY usable after an SFTP request fails on its shared transport", async () => {
+    const fixture = await createSshTestServer({ welcome: "pty-ready\n" })
+    fixtures.push(fixture)
+    const { manager, connectionManager } = createManager(fixture.port)
+    const terminalLease = await connectionManager.acquire({ hostId: "fixture", owner, kind: "terminal" })
+    const shell = await new Promise<ClientChannel>((resolve, reject) => {
+      connectionManager.getClientForConnection(terminalLease.connectionId).shell((error, channel) => {
+        if (error) reject(error)
+        else if (channel) resolve(channel)
+        else reject(new Error("SSH shell channel was not created"))
+      })
+    })
+    let output = ""
+    shell.on("data", (chunk: Buffer | string) => { output += chunk.toString() })
+    const workspace = await manager.open("00000000-0000-4000-8000-000000000108", "fixture", owner)
+    expect(workspace.connectionId).toBe(terminalLease.connectionId)
+
+    shell.write("before-sftp\n")
+    await waitFor(() => output.includes("echo: before-sftp"))
+    await expect(manager.list(workspace.workspaceId, "/missing-directory", owner)).rejects.toThrow()
+    shell.write("after-sftp\n")
+    await waitFor(() => output.includes("echo: after-sftp"))
+
+    expect(connectionManager.resourceSnapshot()).toMatchObject({ connections: 1, leases: 2 })
+    expect(fixture.resourceSnapshot().shells).toBe(1)
+    shell.end()
   })
 
   it("keeps a transfer alive when its visible SFTP workspace closes", async () => {

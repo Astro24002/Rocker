@@ -15,6 +15,7 @@ export interface SshTestServerOptions {
   onPtyResize?: (info: WindowChangeInfo) => void
   sftpFiles?: Record<string, string>
   sftpHome?: string
+  sftpWriteDelayMs?: number
 }
 
 export interface SshResourceSnapshot {
@@ -170,7 +171,7 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
       })
       session.on("sftp", (sftpAccept, sftpReject) => {
         try {
-          installSftpFixture(sftpAccept(), sftpRoot, options.sftpHome)
+          installSftpFixture(sftpAccept(), sftpRoot, options.sftpHome, options.sftpWriteDelayMs)
         } catch {
           sftpReject()
         }
@@ -260,7 +261,7 @@ type FixtureHandle =
   | { kind: "file"; file: FileHandle }
   | { kind: "directory"; path: string; entries: string[]; index: number }
 
-function installSftpFixture(sftp: SFTPWrapper, root: string, home = "/"): void {
+function installSftpFixture(sftp: SFTPWrapper, root: string, home = "/", writeDelayMs = 0): void {
   const handles = new Map<string, FixtureHandle>()
   let nextHandle = 1
   const allocateHandle = (handle: FixtureHandle): Buffer => {
@@ -330,7 +331,13 @@ function installSftpFixture(sftp: SFTPWrapper, root: string, home = "/"): void {
       sftp.status(id, SFTP_STATUS_FAILURE, "Invalid file handle")
       return
     }
-    void handle.file.write(data, 0, data.length, offset).then(() => sftp.status(id, SFTP_STATUS_OK)).catch((error: unknown) => sendSftpError(sftp, id, error))
+    void (async (): Promise<void> => {
+      if (writeDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, writeDelayMs))
+      }
+      await handle.file.write(data, 0, data.length, offset)
+      sftp.status(id, SFTP_STATUS_OK)
+    })().catch((error: unknown) => sendSftpError(sftp, id, error))
   })
   sftp.on("CLOSE", (id: number, rawHandle: Buffer) => {
     const handle = readHandle(rawHandle)

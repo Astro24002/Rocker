@@ -53,6 +53,7 @@ export interface SftpTransferTask {
   name: string
   remotePath: string
   sourcePath?: string
+  localPath?: string
   entryType?: "file" | "directory"
   status: SftpTransferStatus
   bytesTransferred: number

@@ -10,9 +10,11 @@ import {
   File,
   Folder,
   FolderPlus,
+  Info,
   Laptop,
   ListFilter,
   RefreshCw,
+  RotateCcw,
   Search,
   Server,
   Square,
@@ -162,6 +164,8 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
   const [actionError, setActionError] = useState<string>()
   const [dropActive, setDropActive] = useState(false)
   const [transfers, setTransfers] = useState<SftpTransferTask[]>([])
+  const [propertiesEntry, setPropertiesEntry] = useState<SftpDirectoryEntry>()
+  const closeProperties = useCallback((): void => setPropertiesEntry(undefined), [])
 
   const remotePath = selectedSession?.browser.path || "."
   const selectedHost = hosts.find((host) => host.id === selectedSession?.hostId)
@@ -558,7 +562,13 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
       icon: <Download aria-hidden="true" size={14} />,
       disabled: selectedRemoteEntry?.type !== "file",
       onSelect: () => void downloadEntry(selectedRemoteEntry)
-    }
+    },
+    ...(selectedRemoteEntry ? [{
+      id: "properties",
+      label: t("session.sftp.properties"),
+      icon: <Info aria-hidden="true" size={14} />,
+      onSelect: () => setPropertiesEntry(selectedRemoteEntry)
+    }] : [])
   ] : [], [selectedRemoteEntry, selectedSession, t])
 
   const remoteBreadcrumbs = selectedSession
@@ -640,9 +650,12 @@ export function SftpWorkspacePage({ hosts, selectedSession, bridge, onOpen, onPa
           transfers={transfers.filter(isTransferVisible)}
           bridge={bridge}
           remoteTitle={remoteTitle}
+          onUpdate={rememberTransfer}
+          onTaskError={(taskId, message) => setTransfers((current) => current.map((task) => task.id === taskId ? { ...task, error: message } : task))}
           onDismiss={(taskId) => setTransfers((current) => current.filter((task) => task.id !== taskId))}
         />
       </div>
+      {propertiesEntry ? <SftpPropertiesDialog entry={propertiesEntry} onClose={closeProperties} /> : null}
     </section>
   )
 }
@@ -1067,61 +1080,223 @@ function FileRow({ entry, selected, onSelect, onOpen, onDragStart, onDrop, onCon
   )
 }
 
-function SftpTransferFooter({ transfers, bridge, remoteTitle, onDismiss }: {
+function SftpTransferFooter({ transfers, bridge, remoteTitle, onUpdate, onTaskError, onDismiss }: {
   transfers: readonly SftpTransferTask[]
   bridge: RockerBridge
   remoteTitle: string
+  onUpdate(task: SftpTransferTask): void
+  onTaskError(taskId: string, message: string): void
   onDismiss(taskId: string): void
 }): ReactElement | null {
   const { t } = useI18n()
-  if (transfers.length === 0) return null
   const orderedTransfers = [...transfers].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-  const primaryTask = orderedTransfers[0]
-  const statusLabel = primaryTask.status === "queued"
-    ? t("session.sftp.transferStatus.queued")
-    : primaryTask.status === "completed"
-      ? t("session.sftp.transferStatus.completed")
-      : primaryTask.status === "failed"
-        ? t("session.sftp.transferStatus.failed")
-        : primaryTask.status === "cancelled"
-          ? t("session.sftp.transferStatus.cancelled")
-          : primaryTask.direction === "move"
-            ? t("session.sftp.transferStatus.moving")
-            : t("session.sftp.transferStatus.running")
-  const operationLabel = primaryTask.direction === "upload"
-    ? t("session.sftp.copy")
-    : primaryTask.direction === "move"
-      ? t("session.sftp.move")
-      : t("session.sftp.download")
-  const itemKind = primaryTask.entryType === "directory" ? t("session.sftp.kind.folder") : t("session.sftp.kind.file")
-  const progress = primaryTask.totalBytes && primaryTask.totalBytes > 0 ? Math.min(100, Math.round(primaryTask.bytesTransferred / primaryTask.totalBytes * 100)) : undefined
+  const [primaryTaskId, setPrimaryTaskId] = useState<string>()
+  const [taskListOpen, setTaskListOpen] = useState(false)
+  const [taskListPosition, setTaskListPosition] = useState<{ left: number; top: number }>()
+  const taskListRef = useRef<HTMLDivElement>(null)
+  const taskListTriggerRef = useRef<HTMLButtonElement>(null)
+  const primaryTask = orderedTransfers.find((task) => task.id === primaryTaskId) ?? orderedTransfers[0]
+  const positionTaskList = useCallback((): void => {
+    const trigger = taskListTriggerRef.current
+    if (!trigger) return
+    const bounds = trigger.getBoundingClientRect()
+    const width = Math.min(460, window.innerWidth - 24)
+    setTaskListPosition({
+      left: Math.max(12, Math.min(bounds.right - width, window.innerWidth - width - 12)),
+      top: Math.max(12, bounds.top - 352)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!primaryTask) {
+      setPrimaryTaskId(undefined)
+    } else if (primaryTaskId !== primaryTask.id) {
+      setPrimaryTaskId(primaryTask.id)
+    }
+  }, [primaryTask, primaryTaskId])
+
+  useEffect(() => {
+    if (!taskListOpen) return
+    positionTaskList()
+    const dismissOutside = (event: PointerEvent): void => {
+      if (event.target instanceof Node && (taskListRef.current?.contains(event.target) || taskListTriggerRef.current?.contains(event.target))) return
+      setTaskListOpen(false)
+    }
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      setTaskListOpen(false)
+      taskListTriggerRef.current?.focus()
+    }
+    window.addEventListener("pointerdown", dismissOutside)
+    window.addEventListener("keydown", handleKeyDown)
+    window.addEventListener("resize", positionTaskList)
+    window.addEventListener("scroll", positionTaskList, true)
+    return () => {
+      window.removeEventListener("pointerdown", dismissOutside)
+      window.removeEventListener("keydown", handleKeyDown)
+      window.removeEventListener("resize", positionTaskList)
+      window.removeEventListener("scroll", positionTaskList, true)
+    }
+  }, [positionTaskList, taskListOpen])
+
+  if (!primaryTask) return null
+  const statusLabel = getTransferStatusLabel(primaryTask, t)
+  const operationLabel = getTransferOperationLabel(primaryTask, t)
+  const progress = getTransferProgress(primaryTask)
   const terminal = primaryTask.status === "completed" || primaryTask.status === "failed" || primaryTask.status === "cancelled"
-  const description = primaryTask.direction === "download"
-    ? `${itemKind}: ${primaryTask.name} · ${remoteTitle}:${primaryTask.remotePath}`
-    : `${itemKind}: ${primaryTask.name} → ${remoteTitle}:${primaryTask.remotePath}`
+  const description = getTransferRoute(primaryTask, remoteTitle)
+  const retry = (task: SftpTransferTask): void => {
+    void bridge.sftp.retryTransfer(task.id).then((result) => {
+      if (result.kind === "started") onUpdate(result.task)
+    }).catch((reason: unknown) => onTaskError(task.id, reason instanceof Error ? reason.message : String(reason)))
+  }
+  const cancel = (task: SftpTransferTask): void => {
+    void bridge.sftp.cancelTransfer(task.id).catch((reason: unknown) => onTaskError(task.id, reason instanceof Error ? reason.message : String(reason)))
+  }
+
   return (
     <footer className="sftp-transfer-footer" aria-label={t("session.sftp.transfers")}>
       <div className="sftp-transfer-task" data-direction={primaryTask.direction} data-status={primaryTask.status}>
         <span aria-hidden="true" className="sftp-transfer-status-dot" />
         {primaryTask.direction === "upload" ? <Copy aria-hidden="true" size={15} /> : primaryTask.direction === "move" ? <ArrowRightLeft aria-hidden="true" size={15} /> : <Download aria-hidden="true" size={15} />}
         <strong>{operationLabel}</strong>
-        <span className="sftp-transfer-description" title={primaryTask.sourcePath ? `${primaryTask.sourcePath} → ${primaryTask.remotePath}` : description}>{description}</span>
+        <span className="sftp-transfer-description" title={description}>{description}</span>
         <span className="sftp-transfer-progress-track" role="progressbar" aria-label={`${primaryTask.name} ${statusLabel}`} aria-valuemin={0} aria-valuemax={100} {...(progress === undefined ? {} : { "aria-valuenow": progress })}>
           <span className={terminal ? undefined : progress === undefined ? "is-indeterminate" : undefined} style={terminal ? { width: "100%" } : progress === undefined ? undefined : { width: `${progress}%` }} />
         </span>
-        <span className="sftp-transfer-task-status">{orderedTransfers.length > 1 ? `${orderedTransfers.length} ${t("session.sftp.active")}` : terminal ? statusLabel : progress === undefined ? statusLabel : `${progress}%`}</span>
-        <button aria-label={terminal ? t("session.sftp.dismissTransfer") : t("session.sftp.cancelTransfer")} className="sftp-transfer-task-action" title={terminal ? t("session.sftp.dismissTransfer") : t("session.sftp.cancelTransfer")} type="button" onClick={() => terminal ? onDismiss(primaryTask.id) : void bridge.sftp.cancelTransfer(primaryTask.id)}>
-          {terminal ? <X aria-hidden="true" size={15} /> : <Square aria-hidden="true" size={13} />}
-        </button>
+        <span className="sftp-transfer-task-status">{progress === undefined || terminal ? statusLabel : `${progress}%`}</span>
+        {primaryTask.error ? <span className="sftp-transfer-error" role="alert" title={primaryTask.error}>{primaryTask.error}</span> : null}
+        {orderedTransfers.length > 1 ? (
+          <button
+            aria-expanded={taskListOpen}
+            aria-label={`${t("session.sftp.openTaskList")}: ${orderedTransfers.length}`}
+            className="sftp-transfer-task-count"
+            ref={taskListTriggerRef}
+            title={t("session.sftp.openTaskList")}
+            type="button"
+            onClick={() => {
+              if (taskListOpen) setTaskListOpen(false)
+              else {
+                positionTaskList()
+                setTaskListOpen(true)
+              }
+            }}
+          >{t("session.sftp.taskCount").replace("{count}", String(orderedTransfers.length))}</button>
+        ) : null}
+        {(primaryTask.status === "failed" || primaryTask.status === "cancelled") ? <button aria-label={t("session.sftp.retryTransfer")} className="sftp-transfer-task-action" title={t("session.sftp.retryTransfer")} type="button" onClick={() => retry(primaryTask)}><RotateCcw aria-hidden="true" size={15} /></button> : null}
+        {primaryTask.status === "queued" || primaryTask.status === "running" ? <button aria-label={t("session.sftp.cancelTransfer")} className="sftp-transfer-task-action" title={t("session.sftp.cancelTransfer")} type="button" onClick={() => cancel(primaryTask)}><Square aria-hidden="true" size={13} /></button> : null}
+        {terminal ? <button aria-label={t("session.sftp.dismissTransfer")} className="sftp-transfer-task-action" title={t("session.sftp.dismissTransfer")} type="button" onClick={() => onDismiss(primaryTask.id)}><X aria-hidden="true" size={15} /></button> : null}
       </div>
+      {taskListOpen && taskListPosition ? createPortal(
+        <div aria-label={t("session.sftp.transferTaskList")} className="sftp-transfer-task-popover" ref={taskListRef} role="region" style={{ left: taskListPosition.left, top: taskListPosition.top }}>
+          <div className="sftp-transfer-list-heading">
+            <strong>{t("session.sftp.transferTaskList")}</strong>
+            <button aria-label={t("session.sftp.closeDialog")} className="sftp-transfer-task-action" type="button" onClick={() => setTaskListOpen(false)}><X aria-hidden="true" size={15} /></button>
+          </div>
+          {orderedTransfers.map((task) => {
+            const taskProgress = getTransferProgress(task)
+            const taskIsTerminal = task.status === "completed" || task.status === "failed" || task.status === "cancelled"
+            return <article className={`sftp-transfer-list-item${task.error ? " has-error" : ""}`} data-selected={task.id === primaryTask.id || undefined} data-status={task.status} key={task.id}>
+              <button aria-pressed={task.id === primaryTask.id} className="sftp-transfer-list-select" type="button" onClick={() => { setPrimaryTaskId(task.id); setTaskListOpen(false); taskListTriggerRef.current?.focus() }}>
+                <strong>{getTransferOperationLabel(task, t)} · {task.name}</strong>
+                <span>{getTransferRoute(task, remoteTitle)}</span>
+                <span className="sftp-transfer-list-status">{getTransferStatusLabel(task, t)}{taskProgress === undefined ? "" : ` · ${taskProgress}%`}</span>
+                <span aria-hidden="true" className="sftp-transfer-list-progress"><span className={taskIsTerminal ? undefined : taskProgress === undefined ? "is-indeterminate" : undefined} style={taskIsTerminal ? { width: "100%" } : taskProgress === undefined ? undefined : { width: `${taskProgress}%` }} /></span>
+              </button>
+              {task.error ? <p className="sftp-transfer-list-error" role="alert">{task.error}</p> : null}
+              <div className="sftp-transfer-list-actions">
+                {task.status === "queued" || task.status === "running" ? <button className="sftp-transfer-task-action" aria-label={`${t("session.sftp.cancelTransfer")}: ${task.name}`} title={t("session.sftp.cancelTransfer")} type="button" onClick={() => cancel(task)}><Square aria-hidden="true" size={13} /></button> : null}
+                {task.status === "failed" || task.status === "cancelled" ? <button className="sftp-transfer-task-action" aria-label={`${t("session.sftp.retryTransfer")}: ${task.name}`} title={t("session.sftp.retryTransfer")} type="button" onClick={() => retry(task)}><RotateCcw aria-hidden="true" size={15} /></button> : null}
+                {taskIsTerminal ? <button className="sftp-transfer-task-action" aria-label={`${t("session.sftp.dismissTransfer")}: ${task.name}`} title={t("session.sftp.dismissTransfer")} type="button" onClick={() => onDismiss(task.id)}><X aria-hidden="true" size={15} /></button> : null}
+              </div>
+            </article>
+          })}
+        </div>,
+        document.body
+      ) : null}
     </footer>
   )
 }
 
 function isTransferVisible(task: SftpTransferTask): boolean {
-  if (task.status === "queued" || task.status === "running" || task.status === "failed") return true
+  if (task.status === "queued" || task.status === "running" || task.status === "failed" || task.status === "cancelled") return true
   if (task.status !== "completed") return false
   return Date.now() - Date.parse(task.updatedAt) < 60_000
+}
+
+function getTransferOperationLabel(task: SftpTransferTask, t: ReturnType<typeof useI18n>["t"]): string {
+  if (task.direction === "upload") return t("session.sftp.copy")
+  if (task.direction === "move") return t("session.sftp.move")
+  return t("session.sftp.download")
+}
+
+function getTransferStatusLabel(task: SftpTransferTask, t: ReturnType<typeof useI18n>["t"]): string {
+  if (task.status === "queued") return t("session.sftp.transferStatus.queued")
+  if (task.status === "completed") return t("session.sftp.transferStatus.completed")
+  if (task.status === "failed") return t("session.sftp.transferStatus.failed")
+  if (task.status === "cancelled") return t("session.sftp.transferStatus.cancelled")
+  return task.direction === "move" ? t("session.sftp.transferStatus.moving") : t("session.sftp.transferStatus.running")
+}
+
+function getTransferProgress(task: SftpTransferTask): number | undefined {
+  return task.totalBytes && task.totalBytes > 0 ? Math.min(100, Math.round(task.bytesTransferred / task.totalBytes * 100)) : undefined
+}
+
+function getTransferRoute(task: SftpTransferTask, remoteTitle: string): string {
+  if (task.direction === "move") return `${remoteTitle}:${task.sourcePath ?? task.name} → ${remoteTitle}:${task.remotePath}`
+  if (task.direction === "download") return `${remoteTitle}:${task.remotePath} → ${task.localPath ?? task.name}`
+  return `${task.sourcePath ?? task.name} → ${remoteTitle}:${task.remotePath}`
+}
+
+function SftpPropertiesDialog({ entry, onClose }: { entry: SftpDirectoryEntry; onClose(): void }): ReactElement {
+  const { t } = useI18n()
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const kind = entry.type === "directory"
+    ? t("session.sftp.kind.folder")
+    : entry.type === "file"
+      ? t("session.sftp.kind.file")
+      : entry.type === "symlink"
+        ? t("session.sftp.kind.symlink")
+        : t("session.sftp.kind.other")
+  const properties: Array<[string, string]> = [
+    [t("session.sftp.propertyPath"), entry.path],
+    [t("session.sftp.propertyType"), kind],
+    ...(entry.modifiedAt ? [[t("session.sftp.propertyModified"), formatModifiedAt(entry.modifiedAt, t("workspace.sftp.today"), t("workspace.sftp.yesterday"))] as [string, string]] : []),
+    ...(entry.size === undefined ? [] : [[t("session.sftp.propertySize"), formatFileSize(entry.size)] as [string, string]]),
+    ...(entry.permissions === undefined ? [] : [[t("session.sftp.propertyPermissions"), `0${(entry.permissions & 0o7777).toString(8).padStart(3, "0")}`] as [string, string]]),
+    ...(entry.uid === undefined ? [] : [["UID", String(entry.uid)] as [string, string]]),
+    ...(entry.gid === undefined ? [] : [["GID", String(entry.gid)] as [string, string]])
+  ]
+
+  useEffect(() => {
+    closeButtonRef.current?.focus()
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        onClose()
+      } else if (event.key === "Tab") {
+        event.preventDefault()
+        closeButtonRef.current?.focus()
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [onClose])
+
+  return createPortal(
+    <div className="sftp-properties-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose() }}>
+      <section aria-labelledby="sftp-properties-title" aria-modal="true" className="sftp-properties-dialog" role="dialog">
+        <header className="sftp-properties-header">
+          <div><span>{t("session.sftp.properties")}</span><h2 id="sftp-properties-title">{entry.name}</h2></div>
+          <button aria-label={t("session.sftp.closeDialog")} className="sftp-transfer-task-action" ref={closeButtonRef} type="button" onClick={onClose}><X aria-hidden="true" size={16} /></button>
+        </header>
+        <dl className="sftp-properties-list">
+          {properties.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+        </dl>
+      </section>
+    </div>,
+    document.body
+  )
 }
 
 function readRemoteDragPayload(event: DragEvent<HTMLDivElement>): RemoteDragPayload | undefined {
