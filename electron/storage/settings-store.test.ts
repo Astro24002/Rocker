@@ -9,6 +9,21 @@ const temporaryPaths: string[] = []
 afterEach(async () => Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true }))))
 
 describe("SettingsStore", () => {
+  it("defaults new settings to Consolas and preserves an existing font preference", () => {
+    expect(defaultSettings.terminalFont).toBe("Consolas")
+    const normalized = normalizeSettings({
+      locale: "en",
+      sidebarWidth: 220,
+      terminalFont: "JetBrains Mono",
+      terminalFontSize: 13,
+      connectionTimeout: 15,
+      autoReconnect: true,
+      bindAddress: "127.0.0.1"
+    })
+
+    expect(normalized?.terminalFont).toBe("JetBrains Mono")
+  })
+
   it.each([
     [58, 58],
     [119, 58],

@@ -24,6 +24,12 @@ const settings: AppSettings = {
 describe("SettingsView", () => {
   afterEach(() => localStorage.clear())
 
+  it("shows the configured default terminal font", () => {
+    render(<I18nProvider><SettingsView locale="en" settings={{ ...settings, terminalFont: "Consolas" }} onLocaleChange={vi.fn()} onUpdate={vi.fn()} onExportDiagnostics={vi.fn(async () => ({ canceled: true }))} /></I18nProvider>)
+
+    expect(screen.getByRole("combobox", { name: "Terminal font" })).toHaveValue("Consolas")
+  })
+
   it("keeps diagnostics available while disabling setting mutations", () => {
     const onUpdate = vi.fn()
     const onLocaleChange = vi.fn()

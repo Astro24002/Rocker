@@ -123,6 +123,18 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     hostSaveQueue = save.then(() => undefined, () => undefined)
     await save
   })
+  ipcMain.handle(ipcChannels.hostsChooseIdentityFile, async (event): Promise<string | undefined> => {
+    const options: OpenDialogOptions = {
+      title: "Choose SSH private key",
+      properties: ["openFile"]
+    }
+    const target = BrowserWindow.fromWebContents(event.sender)
+    const result = target
+      ? await dialog.showOpenDialog(target, options)
+      : await dialog.showOpenDialog(options)
+    if (result.canceled || !result.filePaths[0]) return undefined
+    return result.filePaths[0]
+  })
   ipcMain.handle(ipcChannels.hostsDuplicate, async (_event, id: unknown) => {
     assertId(id, "host")
     return dependencies.mutations.run(() => dependencies.hosts.duplicate(id))

@@ -1,4 +1,4 @@
-import { KeyRound, Palette, Server, ShieldCheck, X } from "lucide-react"
+import { FolderOpen, KeyRound, Palette, Server, ShieldCheck, X } from "lucide-react"
 import { useEffect, useState, type FormEvent, type ReactElement, type ReactNode } from "react"
 import type { BootstrapHostProfile, HostSaveProfile } from "../../../electron/ipc/bridge-contract"
 import type { HostProfile } from "../../app/types"
@@ -13,14 +13,17 @@ interface HostEditorProps {
   hosts: readonly HostEditorProfile[]
   onClose(): void
   onSave(profile: HostSaveProfile, credentials: { password?: string; passphrase?: string }): void | Promise<void>
+  onChooseIdentityFile(): Promise<string | undefined>
 }
 
-export function HostEditor({ open, profile, hosts, onClose, onSave }: HostEditorProps): ReactElement | null {
+export function HostEditor({ open, profile, hosts, onClose, onSave, onChooseIdentityFile }: HostEditorProps): ReactElement | null {
   const { t } = useI18n()
   const [draft, setDraft] = useState<HostProfile>(() => draftFromProfile(profile))
   const [password, setPassword] = useState("")
   const [passphrase, setPassphrase] = useState("")
   const [keyPath, setKeyPath] = useState("")
+  const [isChoosingKey, setIsChoosingKey] = useState(false)
+  const [keySelectionError, setKeySelectionError] = useState(false)
   const [publicKeyEnabled, setPublicKeyEnabled] = useState(() => isPublicKeyEnabled(profile))
   const [nonKeyAuthMethod, setNonKeyAuthMethod] = useState<"password" | "agent">(() => profile?.authMethod === "agent" ? "agent" : "password")
   const [isSaving, setIsSaving] = useState(false)
@@ -32,6 +35,8 @@ export function HostEditor({ open, profile, hosts, onClose, onSave }: HostEditor
     setPassword("")
     setPassphrase("")
     setKeyPath("")
+    setIsChoosingKey(false)
+    setKeySelectionError(false)
     setPublicKeyEnabled(isPublicKeyEnabled(profile))
     setNonKeyAuthMethod(profile?.authMethod === "agent" ? "agent" : "password")
     setIsSaving(false)
@@ -50,6 +55,7 @@ export function HostEditor({ open, profile, hosts, onClose, onSave }: HostEditor
   const togglePublicKey = (enabled: boolean): void => {
     setSaveError(false)
     setPublicKeyEnabled(enabled)
+    setKeySelectionError(false)
     if (enabled) setPassword("")
     else setPassphrase("")
     setDraft((current) => ({
@@ -66,9 +72,27 @@ export function HostEditor({ open, profile, hosts, onClose, onSave }: HostEditor
     setNonKeyAuthMethod(value)
     setPassword("")
     setPassphrase("")
+    setKeySelectionError(false)
     setDraft((current) => ({ ...current, authMethod: value, publicKeyEnabled: false, identityFile: undefined }))
     setPublicKeyEnabled(false)
     setKeyPath("")
+  }
+
+  const choosePrivateKey = async (): Promise<void> => {
+    if (isChoosingKey || isSaving) return
+    setIsChoosingKey(true)
+    setKeySelectionError(false)
+    try {
+      const path = await onChooseIdentityFile()
+      if (path) {
+        setKeyPath(path)
+        setSaveError(false)
+      }
+    } catch {
+      setKeySelectionError(true)
+    } finally {
+      setIsChoosingKey(false)
+    }
   }
 
   const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
@@ -179,8 +203,21 @@ export function HostEditor({ open, profile, hosts, onClose, onSave }: HostEditor
                 wide
               />
               {publicKeyEnabled && <>
-                <Field label={t("hosts.editor.setKey")} wide hint={hasExistingKey(profile) && !keyPath ? t("hosts.editor.keyPreserve") : undefined}>
-                  <input aria-label={t("hosts.editor.setKey")} maxLength={4096} required={!hasExistingKey(profile)} value={keyPath} onChange={(event) => { setKeyPath(event.target.value); setSaveError(false) }} placeholder={t("hosts.editor.keyPlaceholder")} />
+                <Field label={t("hosts.editor.setKey")} wide labelFor="host-private-key" hint={hasExistingKey(profile) && !keyPath ? t("hosts.editor.keyPreserve") : undefined}>
+                  <div className="identity-file-input">
+                    <input id="host-private-key" aria-label={t("hosts.editor.setKey")} maxLength={4096} required={!hasExistingKey(profile)} value={keyPath} onChange={(event) => { setKeyPath(event.target.value); setSaveError(false); setKeySelectionError(false) }} placeholder={t("hosts.editor.keyPlaceholder")} />
+                    <button
+                      aria-busy={isChoosingKey}
+                      aria-describedby={keySelectionError ? "host-key-picker-error" : undefined}
+                      className="secondary-command"
+                      type="button"
+                      disabled={isSaving || isChoosingKey}
+                      onClick={() => { void choosePrivateKey() }}
+                    >
+                      <FolderOpen size={15} />{isChoosingKey ? t("hosts.editor.choosingKeyFile") : t("hosts.editor.chooseKeyFile")}
+                    </button>
+                  </div>
+                  {keySelectionError && <small className="field-error" id="host-key-picker-error" role="status">{t("hosts.editor.keyPickerError")}</small>}
                 </Field>
                 <Field label={t("hosts.editor.passphrase")} wide hint={t("hosts.editor.passphraseHint")}>
                   <input aria-label={t("hosts.editor.passphrase")} type="password" value={passphrase} onChange={(event) => { setPassphrase(event.target.value); setSaveError(false) }} autoComplete="new-password" />
@@ -237,7 +274,10 @@ function EditorSection({ icon, title, children }: { icon: ReactNode; title: stri
   return <section className="host-editor-section"><div className="host-editor-section-title">{icon}<h3>{title}</h3></div><div className="host-editor-section-grid">{children}</div></section>
 }
 
-function Field({ label, hint, wide, children }: { label: string; hint?: string; wide?: boolean; children: ReactNode }): ReactElement {
+function Field({ label, hint, wide, labelFor, children }: { label: string; hint?: string; wide?: boolean; labelFor?: string; children: ReactNode }): ReactElement {
+  if (labelFor) {
+    return <div className={`field${wide ? " field-wide" : ""}`}><label htmlFor={labelFor}>{label}</label>{children}{hint && <small className="field-hint">{hint}</small>}</div>
+  }
   return <label className={`field${wide ? " field-wide" : ""}`}><span>{label}</span>{children}{hint && <small className="field-hint">{hint}</small>}</label>
 }
 

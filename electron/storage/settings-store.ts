@@ -11,7 +11,7 @@ export const defaultSettings: AppSettings = {
   hostSort: "name-asc",
   hostFavoritesOnly: false,
   connectionsTab: "history",
-  terminalFont: "JetBrains Mono",
+  terminalFont: "Consolas",
   terminalFontSize: 13,
   scrollback: 10000,
   cursorStyle: "bar",

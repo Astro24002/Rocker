@@ -19,6 +19,7 @@ const bridge: RockerBridge = {
   },
   hosts: {
     list: () => ipcRenderer.invoke(ipcChannels.hostsList),
+    chooseIdentityFile: () => ipcRenderer.invoke(ipcChannels.hostsChooseIdentityFile),
     save: (request) => ipcRenderer.invoke(ipcChannels.hostsSave, request),
     duplicate: (id) => ipcRenderer.invoke(ipcChannels.hostsDuplicate, id),
     setFavorite: (id, favorite) => ipcRenderer.invoke(ipcChannels.hostsSetFavorite, id, favorite),

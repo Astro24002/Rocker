@@ -104,6 +104,53 @@ describe("HostEditor", () => {
     }), expect.anything())
   })
 
+  it("fills and saves the private-key path selected from the native file picker", async () => {
+    const onSave = vi.fn()
+    const onChooseIdentityFile = vi.fn().mockResolvedValue("/keys/id_ed25519")
+    renderEditor(undefined, onSave, [], onChooseIdentityFile)
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Public key login" }))
+    fireEvent.click(screen.getByRole("button", { name: "Choose file" }))
+
+    const keyPath = screen.getByLabelText("Set a key")
+    await waitFor(() => expect(keyPath).toHaveValue("/keys/id_ed25519"))
+    fillRequiredIdentity()
+    fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
+
+    expect(onChooseIdentityFile).toHaveBeenCalledOnce()
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      authMethod: "privateKey",
+      publicKeyEnabled: true,
+      identityFile: "/keys/id_ed25519"
+    }), expect.anything())
+  })
+
+  it("keeps a manually entered private-key path when the native picker is cancelled", async () => {
+    const onChooseIdentityFile = vi.fn().mockResolvedValue(undefined)
+    renderEditor(undefined, vi.fn(), [], onChooseIdentityFile)
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Public key login" }))
+    const keyPath = screen.getByLabelText("Set a key")
+    fireEvent.change(keyPath, { target: { value: "/keys/manual_ed25519" } })
+    fireEvent.click(screen.getByRole("button", { name: "Choose file" }))
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Choose file" })).toBeEnabled())
+    expect(keyPath).toHaveValue("/keys/manual_ed25519")
+    expect(onChooseIdentityFile).toHaveBeenCalledOnce()
+  })
+
+  it("announces native picker errors and associates them with the picker button", async () => {
+    const onChooseIdentityFile = vi.fn().mockRejectedValue(new Error("dialog unavailable"))
+    renderEditor(undefined, vi.fn(), [], onChooseIdentityFile)
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Public key login" }))
+    fireEvent.click(screen.getByRole("button", { name: "Choose file" }))
+
+    const error = await screen.findByText("Could not open the file picker. Try again.")
+    expect(error).toHaveAttribute("role", "status")
+    expect(screen.getByRole("button", { name: "Choose file" })).toHaveAttribute("aria-describedby", "host-key-picker-error")
+  })
+
   it("requires a snippet collection only while Snippets is enabled", () => {
     const onSave = vi.fn()
     renderEditor(undefined, onSave)
@@ -193,10 +240,15 @@ describe("HostEditor", () => {
   })
 })
 
-function renderEditor(profile?: HostProfile, onSave = vi.fn(), hosts: readonly HostProfile[] = []): void {
+function renderEditor(
+  profile?: HostProfile,
+  onSave = vi.fn(),
+  hosts: readonly HostProfile[] = [],
+  onChooseIdentityFile = vi.fn(async () => undefined)
+): void {
   render(
     <I18nProvider>
-      <HostEditor open profile={profile} hosts={hosts} onClose={vi.fn()} onSave={onSave} />
+      <HostEditor open profile={profile} hosts={hosts} onClose={vi.fn()} onSave={onSave} onChooseIdentityFile={onChooseIdentityFile} />
     </I18nProvider>
   )
 }

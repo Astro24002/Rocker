@@ -126,7 +126,7 @@ const defaultSettings: AppSettings = {
   hostSort: "name-asc",
   hostFavoritesOnly: false,
   connectionsTab: "history",
-  terminalFont: "JetBrains Mono",
+  terminalFont: "Consolas",
   terminalFontSize: 13,
   scrollback: 10000,
   cursorStyle: "bar",
@@ -1501,7 +1501,7 @@ function Workspace() {
           )}
           </div>
       </main>
-      <HostEditor open={editor.open} profile={editor.profile} hosts={hosts} onClose={() => setEditor({ open: false })} onSave={saveHost} />
+      <HostEditor open={editor.open} profile={editor.profile} hosts={hosts} onClose={() => setEditor({ open: false })} onSave={saveHost} onChooseIdentityFile={bridge.hosts.chooseIdentityFile} />
       <CommandPalette open={paletteOpen} context={commandContext} onClose={() => setPaletteOpen(false)} onRestoreFocus={restorePaletteFocus} />
       {!paletteOpen && terminalContextMenu && terminalMenuSession && <TerminalContextMenu open x={terminalContextMenu.x} y={terminalContextMenu.y} context={terminalMenuContext} onClose={closeTerminalContextMenu} onRestoreFocus={(request) => {
         if (request === "terminal.focus") return

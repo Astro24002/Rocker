@@ -75,7 +75,7 @@ let mockHostKeys: HostKeyInventorySnapshot = {
 let mockSettings: AppSettings = {
   locale: "en",
   sidebarWidth: 220,
-  terminalFont: "JetBrains Mono",
+  terminalFont: "Consolas",
   terminalFontSize: 13,
   scrollback: 10000,
   cursorStyle: "bar",
@@ -105,6 +105,7 @@ function createBrowserPreviewBridge(): RockerBridge {
     },
     hosts: {
       list: async () => mockHosts,
+      chooseIdentityFile: async () => undefined,
       save: async ({ profile }) => {
         const existing = mockHosts.find((host) => host.id === profile.id)
         const nextProfile = normalizePreviewHostProfile(profile, existing)

@@ -749,6 +749,22 @@ describe("registerIpcHandlers", () => {
     expect(harness.hosts.duplicate).toHaveBeenCalledWith("host-a")
   })
 
+  it("returns a selected SSH private-key path without reading key contents", async () => {
+    const harness = createHarness()
+    electron.BrowserWindow.fromWebContents.mockReturnValue(harness.owner)
+    electron.dialog.showOpenDialog
+      .mockResolvedValueOnce({ canceled: false, filePaths: ["/home/rock/.ssh/id_ed25519"] })
+      .mockResolvedValueOnce({ canceled: true, filePaths: [] })
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.hostsChooseIdentityFile)).resolves.toBe("/home/rock/.ssh/id_ed25519")
+    expect(electron.dialog.showOpenDialog).toHaveBeenNthCalledWith(1, harness.owner, {
+      title: "Choose SSH private key",
+      properties: ["openFile"]
+    })
+    await expect(invokeFrom(21, ipcChannels.hostsChooseIdentityFile)).resolves.toBeUndefined()
+  })
+
   it("rejects non-boolean favorite values before storage", async () => {
     const harness = createHarness()
     registerIpcHandlers(harness.dependencies)

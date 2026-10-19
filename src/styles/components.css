@@ -2248,6 +2248,11 @@ textarea:focus-visible {
   font-weight: 600;
 }
 
+.field > label {
+  color: inherit;
+  font: inherit;
+}
+
 .field input,
 .field select,
 .field textarea,
@@ -2303,6 +2308,24 @@ textarea:focus-visible {
   min-width: 0;
   flex: 1;
   border: 0;
+}
+
+.identity-file-input {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.identity-file-input input {
+  width: 0;
+  min-width: 0;
+  flex: 1;
+}
+
+.identity-file-input .secondary-command {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .host-editor-section {
