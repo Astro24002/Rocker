@@ -30,7 +30,8 @@ export interface ForwardingProfileRequest {
   localPort: number
   remoteAddress: string
   remotePort: number
-  autoStart: boolean
+  /** Legacy storage compatibility only; does not start a listener. */
+  autoStart?: boolean
 }
 
 export interface ForwardingInfo extends ForwardingSpec {

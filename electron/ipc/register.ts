@@ -67,7 +67,7 @@ export interface IpcDependencies {
   forwarding: ForwardingManager
   sftp: SftpManager
   forwardingProfiles?: Pick<ForwardingProfileStore, "list" | "get" | "save" | "remove" | "replace" | "flush">
-  history: HistoryStore
+  history: Pick<HistoryStore, "list" | "clear" | "loadWithStatus">
   settings: SettingsStore
   diagnostics: DiagnosticLogger
   mutations: SerializedOperationQueue
@@ -147,6 +147,7 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
   ipcMain.handle(ipcChannels.hostsRemove, async (_event, id: unknown) => {
     assertId(id, "host")
     await dependencies.mutations.run(async () => {
+      await dependencies.ports.releaseHost(id)
       const profiles = dependencies.forwardingProfiles ? await dependencies.forwardingProfiles.list(id) : []
       const runtimes = dependencies.forwarding.list().filter((runtime) => runtime.hostId === id || profiles.some((profile) => profile.id === runtime.profileId))
       await Promise.all(runtimes.map((runtime) => dependencies.forwarding.stop(runtime.id)))
@@ -216,14 +217,7 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     if (!sameRuntimeOwner(currentOwnerForWebContents(dependencies, event.sender.id), owner)) {
       throw new Error("Renderer owner was replaced")
     }
-    try {
-      const session = await dependencies.sessions.open({ ...request, owner })
-      await dependencies.history.add({ id: randomUUID(), hostId: host.id, connectedAt: new Date().toISOString(), durationMs: 0, outcome: "connected" })
-      return session
-    } catch (error) {
-      await dependencies.history.add({ id: randomUUID(), hostId: host.id, connectedAt: new Date().toISOString(), durationMs: 0, outcome: "failed" })
-      throw error
-    }
+    return dependencies.sessions.open({ ...request, owner })
   })
   ipcMain.handle(ipcChannels.sessionWrite, (event, sessionId: unknown, channelGeneration: unknown, data: unknown) => {
     const owner = currentOwnerForWebContents(dependencies, event.sender.id)
@@ -385,8 +379,25 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     return dependencies.sftp.retryTransfer(taskId, owner)
   })
 
+  ipcMain.handle(ipcChannels.portsOpenWorkspace, async (event, workspaceId: unknown, hostId: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(workspaceId, "PF workspace")
+    assertId(hostId, "host")
+    // Resolve Host/credentials inside acquire, after registering the cancellable
+    // workspace so a concurrent close cannot leave a late connection behind.
+    await dependencies.ports.openWorkspace(workspaceId, hostId, owner)
+  })
+  ipcMain.handle(ipcChannels.portsCloseWorkspace, async (event, workspaceId: unknown) => {
+    const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    assertId(workspaceId, "PF workspace")
+    await dependencies.ports.closeWorkspace(workspaceId, owner)
+  })
   ipcMain.handle(ipcChannels.portsScan, (event, connectionId: unknown) => {
     const owner = currentOwnerForWebContents(dependencies, event.sender.id)
+    if (isRecord(connectionId)) {
+      assertId(connectionId.workspaceId, "PF workspace")
+      return dependencies.ports.scanWorkspace(connectionId.workspaceId, owner)
+    }
     assertOwnedConnection(dependencies, owner, connectionId)
     return dependencies.ports.scan(connectionId)
   })
@@ -438,6 +449,7 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
       id: randomUUID(),
       hostId,
       ...request,
+      autoStart: false,
       createdAt: now,
       updatedAt: now
     }
@@ -453,7 +465,12 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     const existing = await store.get(profileId)
     if (!existing) throw new Error("Forwarding profile was not found")
     await requireHost(dependencies, existing.hostId)
-    const profile = { ...existing, ...request, updatedAt: new Date().toISOString() }
+    const profile = {
+      ...existing,
+      ...request,
+      autoStart: request.autoStart ?? existing.autoStart,
+      updatedAt: new Date().toISOString()
+    }
     assertCurrentOwner(dependencies, owner)
     await dependencies.mutations.run(() => store.save(profile))
     return profile
@@ -1267,12 +1284,6 @@ function assertHostProfile(profile: HostSaveProfile | undefined): asserts profil
   if (profile.publicKeyEnabled !== undefined && typeof profile.publicKeyEnabled !== "boolean") {
     throw new Error("Invalid public key setting")
   }
-  if (profile.snippetsEnabled !== undefined && typeof profile.snippetsEnabled !== "boolean") {
-    throw new Error("Invalid snippets setting")
-  }
-  if (profile.snippetCollection !== undefined && (typeof profile.snippetCollection !== "string" || profile.snippetCollection.length > 256)) {
-    throw new Error("Invalid snippet collection")
-  }
   if (profile.group !== undefined && (typeof profile.group !== "string" || profile.group.length > 256)) {
     throw new Error("Invalid host group")
   }
@@ -1306,9 +1317,6 @@ function assertHostProfile(profile: HostSaveProfile | undefined): asserts profil
     if (!hasPath && !hasRetainedPath) throw new Error("Private key path is required")
   } else if (profile.authMethod === "privateKey") {
     throw new Error("Public key login must be enabled for private key authentication")
-  }
-  if (profile.snippetsEnabled === true && !isNonBlankBoundedString(profile.snippetCollection, 256)) {
-    throw new Error("Snippet collection is required")
   }
 }
 
@@ -1409,7 +1417,7 @@ function normalizeForwardingProfileRequest(value: unknown): ForwardingProfileReq
   if (!isValidRemotePort(value.localPort)) throw new Error("Local port must be between 1 and 65535")
   if (!isNonBlankBoundedString(value.remoteAddress, 512)) throw new Error("Remote address is required")
   if (!isValidRemotePort(value.remotePort)) throw new Error("Remote port must be between 1 and 65535")
-  if (typeof value.autoStart !== "boolean") throw new Error("Invalid auto-start setting")
+  if (value.autoStart !== undefined && typeof value.autoStart !== "boolean") throw new Error("Invalid auto-start setting")
   return {
     name: value.name.trim(),
     ...(typeof value.description === "string" && value.description.trim() ? { description: value.description.trim() } : {}),
@@ -1417,7 +1425,7 @@ function normalizeForwardingProfileRequest(value: unknown): ForwardingProfileReq
     localPort: value.localPort,
     remoteAddress: value.remoteAddress.trim(),
     remotePort: value.remotePort,
-    autoStart: value.autoStart
+    ...(typeof value.autoStart === "boolean" ? { autoStart: value.autoStart } : {})
   }
 }
 

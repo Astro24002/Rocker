@@ -11,7 +11,7 @@ import { PortsView } from "../features/ports/PortsView"
 import { SettingsView } from "../features/settings/SettingsView"
 import { TrustView } from "../features/trust/TrustView"
 import { ConnectionsView } from "../features/connections/ConnectionsView"
-import { SftpWorkspaceView, SnippetsView } from "../features/workspace/WorkspaceLandingViews"
+import { SftpWorkspaceView } from "../features/workspace/WorkspaceLandingViews"
 import { CommandPalette, type CommandPaletteFocusRequest } from "../features/commands/CommandPalette"
 import { executeCommand, isCommandEnabled, type CommandActions, type CommandContext, type CommandId, type TerminalCommandSurface } from "../features/commands/command-registry"
 import { matchGlobalShortcut, shouldIgnoreGlobalShortcutTarget } from "../features/commands/command-shortcuts"
@@ -153,6 +153,8 @@ function Workspace() {
   const [hostForwardingHostId, setHostForwardingHostId] = useState<string>()
   const [hosts, setHosts] = useState<HostProfile[]>([])
   const [history, setHistory] = useState<ConnectionHistoryItem[]>([])
+  const historyReadVersion = useRef(0)
+  const refreshVisibleHistory = useRef<() => void>(() => undefined)
   const [hostKeyInventory, setHostKeyInventory] = useState<HostKeyInventorySnapshot>({ entries: [], history: [] })
   const [hostKeyLoading, setHostKeyLoading] = useState(false)
   const [hostKeyLoadError, setHostKeyLoadError] = useState(false)
@@ -338,7 +340,11 @@ function Workspace() {
       releaseRestoreAdmission(sessionId)
       const info = await request
       setWorkspace((current) => attachChannel(current, info))
-      void bridge.history.list().then(setHistory).catch(() => undefined)
+      // Keep Hosts' recent-connection sorting current even outside History.
+      const historyVersion = historyReadVersion.current
+      void bridge.history.list().then((items) => {
+        if (historyVersion === historyReadVersion.current) setHistory(items)
+      }).catch(() => undefined)
     } catch (error) {
       releaseRestoreAdmission(sessionId)
       markSessionState(sessionId, "error", failureReasonFor(error))
@@ -420,6 +426,7 @@ function Workspace() {
     }
     if (event.connectionId) connectionIds.current.set(event.sessionId, event.connectionId)
     setWorkspace((current) => applyTerminalState(current, event))
+    refreshVisibleHistory.current()
   }, [])
 
   const queueSessionOpen = useCallback((host: HostProfile, label: string | ((current: TerminalWorkspaceState) => string), options: Pick<PendingTerminalOpen, "forceNewConnection"> = {}): void => {
@@ -672,6 +679,39 @@ function Workspace() {
     void initialize()
     return () => { cancelled = true }
   }, [bridge, refreshHostKeys])
+
+  useEffect(() => {
+    const historyVisible = activeNav === "history" ||
+      (activeNav === "connections" && (settings.connectionsTab ?? "history") === "history")
+    if (!historyVisible) return
+
+    let cancelled = false
+    let inFlight = false
+    const refreshHistory = async (): Promise<void> => {
+      if (cancelled || document.hidden || inFlight) return
+      inFlight = true
+      const version = historyReadVersion.current
+      try {
+        const items = await bridge.history.list()
+        if (!cancelled && version === historyReadVersion.current) setHistory(items)
+      } catch {
+        // Keep the last readable history while the store is temporarily unavailable.
+      } finally {
+        inFlight = false
+      }
+    }
+    const refreshWhenVisible = (): void => { void refreshHistory() }
+    refreshVisibleHistory.current = refreshWhenVisible
+    void refreshHistory()
+    const timer = window.setInterval(refreshWhenVisible, 1_500)
+    document.addEventListener("visibilitychange", refreshWhenVisible)
+    return () => {
+      cancelled = true
+      refreshVisibleHistory.current = () => undefined
+      window.clearInterval(timer)
+      document.removeEventListener("visibilitychange", refreshWhenVisible)
+    }
+  }, [activeNav, bridge, settings.connectionsTab])
 
   useEffect(() => {
     if (!workspaceWritable.current) return
@@ -1046,6 +1086,7 @@ function Workspace() {
     setRecentSessionState((current) => removeRecentSession(current, session.id))
     if (kind === "ssh") void bridge.sessions.close(session.id).catch(() => undefined)
     if (kind === "sftp") void bridge.sftp.close(session.id).catch(() => undefined)
+    if (kind === "pf") void bridge.ports.closeWorkspace(session.id).catch(() => undefined)
     const currentWorkspace = workspaceRef.current
     const nextWorkspace = closeSession(currentWorkspace, session.id)
     setWorkspace((current) => closeSession(current, session.id))
@@ -1435,7 +1476,7 @@ function Workspace() {
               />
             </div>
           )}
-          {workspace.sessions.filter((session) => sessionKind(session) !== "ssh" && !(activeNav === "sftp" && isSftpSession(session))).map((session) => (
+          {workspace.sessions.filter((session) => isSftpSession(session) && activeNav !== "sftp").map((session) => (
             <div
               className="session-content-host"
               data-session-id={session.id}
@@ -1454,6 +1495,13 @@ function Workspace() {
           <div className="workspace-destination" data-destination="hosts" hidden={activeNav !== "hosts" && !(activeNav === "terminal" && workspace.sessions.length === 0)}>
             {hostList}
           </div>
+          {workspace.sessions.filter(isPortForwardingSession).map((session) => {
+            const host = hosts.find((candidate) => candidate.id === session.hostId)
+            return <div className="session-content-host" data-session-id={session.id} data-theme={themeForHost(session.hostId)} key={session.id}
+              hidden={activeNav !== "host-port-forwarding" || workspace.activeSessionId !== session.id}>
+              <PortsView mode="host" bridge={bridge} hostId={session.hostId} hostName={host?.name} session={session} username={host?.username} bindAddress={settings.bindAddress} onOpenSession={openPfSession} />
+            </div>
+          })}
           {activeNav === "settings" ? (
             <SettingsView locale={locale} settings={settings} hosts={hosts} bridge={hasDataProtectionBridge(bridge) ? bridge : undefined} onConfigurationImported={refreshConfigurationAfterImport} disabled={!settingsMutationsAvailable} terminalAppearanceDisabled={false} persistenceUnavailable={!settingsMutationsAvailable || settingsPersistenceFailed} onLocaleChange={(next) => {
               if (!settingsMutationsAvailable) return
@@ -1470,18 +1518,16 @@ function Workspace() {
               onTabChange={(connectionsTab) => updateSettings({ connectionsTab })}
               history={<HistoryView items={history} hosts={hosts} disabled={!capabilities.historyWritable} reconnectDisabled={!capabilities.sshAvailable} onReconnect={connectHost} onClear={() => {
                 if (!capabilities.historyWritable) return
-                void bridge.history.clear().then(() => setHistory([])).catch(() => undefined)
+                historyReadVersion.current += 1
+                void bridge.history.clear().then(() => {
+                  historyReadVersion.current += 1
+                  setHistory([])
+                }).catch(() => refreshVisibleHistory.current())
               }} />}
               trust={<TrustView entries={hostKeyInventory.entries} history={hostKeyInventory.history} hosts={hosts} disabled={!hostKeysAvailable} loading={hostKeyLoading} error={hostKeyLoadError} onRemove={removeHostKey} />}
             />
           ) : activeNav === "host-port-forwarding" && hostForwardingHostId ? (
-            (() => {
-              const hostSession = workspace.sessions.find((candidate) => candidate.hostId === hostForwardingHostId && isSshSession(candidate))
-              const forwardingSession = workspace.sessions.find((candidate) => candidate.hostId === hostForwardingHostId && isPortForwardingSession(candidate))
-              const hostConnectionId = hostSession && canUseConnection(hostSession.state) ? connectionIds.current.get(hostSession.id) : undefined
-              const host = hosts.find((candidate) => candidate.id === hostForwardingHostId)
-              return <PortsView mode="host" bridge={bridge} hostId={hostForwardingHostId} hostName={host?.name} connectionId={hostConnectionId} session={forwardingSession} username={host?.username} bindAddress={settings.bindAddress} onOpenSession={openPfSession} />
-            })()
+            null
           ) : activeNav === "port-forwarding" ? (
             <PortsView mode="global" bridge={bridge} hosts={hosts} onOpenSession={openPfSession} onProfileRemoved={(profileId) => {
               setWorkspace((current) => current.sessions.reduce((next, session) => isPortForwardingSession(session) && session.profileId === profileId
@@ -1496,9 +1542,7 @@ function Workspace() {
               onOpen={openSftpSession}
               onPatch={patchWorkspaceSession}
             />
-          ) : (
-            <SnippetsView sessions={workspace.sessions} onSelect={activateExistingSession} />
-          )}
+          ) : null}
           </div>
       </main>
       <HostEditor open={editor.open} profile={editor.profile} hosts={hosts} onClose={() => setEditor({ open: false })} onSave={saveHost} onChooseIdentityFile={bridge.hosts.chooseIdentityFile} />

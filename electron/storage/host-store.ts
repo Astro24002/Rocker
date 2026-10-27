@@ -90,7 +90,6 @@ export class HostStore {
         charset: source.charset ?? "utf-8",
         themeColor: source.themeColor ?? "rocker",
         publicKeyEnabled: false,
-        snippetsEnabled: false,
         favorite: false,
         notes: source.notes
       }
@@ -181,7 +180,6 @@ export function normalizeHostProfile(value: unknown): HostProfile | undefined {
   const identityFile = typeof value.identityFile === "string" && value.identityFile.trim() ? value.identityFile : undefined
   const group = typeof value.group === "string" ? value.group.trim() : undefined
   const publicKeyEnabled = value.authMethod === "privateKey"
-  const snippetsEnabled = value.snippetsEnabled === true && isBoundedString(value.snippetCollection, 256)
   const tags = normalizeHostTags(value.tags)
   return {
     id: value.id,
@@ -194,8 +192,6 @@ export function normalizeHostProfile(value: unknown): HostProfile | undefined {
     ...(identityFile ? { identityFile } : {}),
     ...(group ? { group } : {}),
     publicKeyEnabled,
-    snippetsEnabled,
-    ...(snippetsEnabled ? { snippetCollection: value.snippetCollection as string } : {}),
     charset: isHostCharset(value.charset) ? value.charset : "utf-8",
     themeColor: isHostThemeColor(value.themeColor) ? value.themeColor : "rocker",
     ...(isHostEnvironment(value.environment) ? { environment: value.environment } : {}),

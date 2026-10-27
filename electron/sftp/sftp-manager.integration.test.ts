@@ -4,23 +4,30 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { normalizeRemotePath, SftpManager } from "./sftp-manager"
 import { SshConnectionManager, type ResolvedConnectionRequest } from "../ssh/connection-manager"
-import { createSshTestServer, TEST_PASSWORD, TEST_USERNAME } from "../ssh/test-fixtures/ssh-server"
+import { createSshTestServer, SftpWriteBarrier, TEST_PASSWORD, TEST_USERNAME } from "../ssh/test-fixtures/ssh-server"
 import type { RuntimeOwner } from "../runtime/owner"
 import type { ClientChannel } from "ssh2"
 
 const owner: RuntimeOwner = { webContentsId: 41, rendererGeneration: 1 }
 const managers: SftpManager[] = []
 const connections: SshConnectionManager[] = []
+const barriers: SftpWriteBarrier[] = []
 const fixtures: Array<{ close(): Promise<void>; resourceSnapshot(): { clients: number; sessions: number; shells: number; forwards: number } }> = []
 const temporaryDirectories: string[] = []
 
 afterEach(async () => {
-  await Promise.all(managers.splice(0).map((manager) => manager.releaseOwner(owner)))
-  await Promise.all(connections.splice(0).map((connection) => connection.releaseOwner(owner)))
+  for (const barrier of barriers.splice(0)) barrier.releaseAll()
+  const errors: unknown[] = []
+  const cleanup = async (operation: Promise<unknown>, phase: string): Promise<void> => {
+    try { await withDeadline(operation, phase, 2_000) } catch (error) { errors.push(error) }
+  }
+  await cleanup(Promise.all(managers.splice(0).map((manager) => manager.releaseOwner(owner))), "manager cleanup")
+  await cleanup(Promise.all(connections.splice(0).map((connection) => connection.releaseOwner(owner))), "connection cleanup")
   const closing = fixtures.splice(0)
-  await Promise.all(closing.map((fixture) => fixture.close()))
-  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
-  for (const fixture of closing) expect(fixture.resourceSnapshot()).toEqual({ clients: 0, sessions: 0, shells: 0, forwards: 0 })
+  await cleanup(Promise.all(closing.map((fixture) => fixture.close())), "fixture cleanup")
+  await cleanup(Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))), "temporary directory cleanup")
+  if (errors.length) throw new AggregateError(errors, `SFTP cleanup failed: ${JSON.stringify(closing.map((fixture) => fixture.resourceSnapshot()))}`)
+  for (const fixture of closing) expect(fixture.resourceSnapshot()).toMatchObject({ clients: 0, sessions: 0, shells: 0, forwards: 0, sftpChannels: 0, sftpHandles: 0, sftpWritesWaiting: 0 })
 })
 
 describe("SftpManager", () => {
@@ -177,15 +184,26 @@ describe("SftpManager", () => {
   })
 
   it("runs concurrent Host transfers and cancellation only stops the selected task", async () => {
-    const fixture = await createSshTestServer({ sftpWriteDelayMs: 12 })
+    const barrier = new SftpWriteBarrier()
+    barriers.push(barrier)
+    barrier.hold("/first.bin")
+    barrier.hold("/second.bin")
+    const fixture = await createSshTestServer({ sftpWriteBarrier: barrier })
     fixtures.push(fixture)
     const { manager, connectionManager } = createManager(fixture.port)
     const workspace = await manager.open("00000000-0000-4000-8000-000000000107", "fixture", owner)
+    const terminalLease = await connectionManager.acquire({ hostId: "fixture", owner, kind: "terminal" })
+    const shell = await new Promise<ClientChannel>((resolve, reject) => {
+      connectionManager.getClientForConnection(terminalLease.connectionId).shell((error, channel) => error ? reject(error) : resolve(channel))
+    })
+    let terminalOutput = ""
+    shell.on("data", (chunk: Buffer) => { terminalOutput += chunk.toString() })
+    const baselineLeases = connectionManager.resourceSnapshot().leases
     const localDirectory = await mkdtemp(join(tmpdir(), "rocker-sftp-concurrent-"))
     temporaryDirectories.push(localDirectory)
     const firstPath = join(localDirectory, "first.bin")
     const secondPath = join(localDirectory, "second.bin")
-    const payload = Buffer.alloc(2 * 1024 * 1024, 7)
+    const payload = Buffer.alloc(96 * 1024, 7)
     await Promise.all([writeFile(firstPath, payload), writeFile(secondPath, payload)])
 
     const firstSelection = await manager.selectUpload(workspace.workspaceId, "/", firstPath, owner)
@@ -194,22 +212,64 @@ describe("SftpManager", () => {
     const second = await manager.upload(secondSelection.selectionId, true, owner)
     if (first.kind !== "started" || second.kind !== "started") throw new Error("Expected concurrent upload tasks")
 
-    await waitFor(() => manager.resourceSnapshot().activeTransfers === 2 && connectionManager.resourceSnapshot().leases >= 3, 5_000)
-    await manager.cancelTransfer(first.task.id, owner)
+    await Promise.all([
+      withDeadline(barrier.waitUntilReached("/first.bin"), "first upload WRITE", 3_000),
+      withDeadline(barrier.waitUntilReached("/second.bin"), "second upload WRITE", 3_000)
+    ])
+    expect(manager.resourceSnapshot().activeTransfers).toBe(2)
+    expect(connectionManager.resourceSnapshot().leases).toBe(baselineLeases + 2)
+    const heldResources = fixture.resourceSnapshot()
+    expect(heldResources).toMatchObject({ sftpChannels: 2, sftpHandles: 2 })
+    expect(heldResources.sftpWritesWaiting).toBeGreaterThanOrEqual(2)
+
+    const cancellation = manager.cancelTransfer(first.task.id, owner)
+    let cancellationError: unknown
+    try {
+      await withDeadline(cancellation, "cancel first upload before releasing its server response", 2_000)
+    } catch (error) {
+      cancellationError = new Error(`${error instanceof Error ? error.message : String(error)}; fixture=${JSON.stringify(fixture.resourceSnapshot())}; manager=${JSON.stringify(manager.resourceSnapshot())}; leases=${connectionManager.resourceSnapshot().leases}`)
+    }
+    expect(barrier.isWaiting("/first.bin")).toBe(true)
+    if (cancellationError) {
+      barrier.releaseAll()
+      throw cancellationError
+    }
+
+    expect(manager.listTransfers(owner)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: first.task.id, status: "cancelled" }),
+      expect.objectContaining({ id: second.task.id, status: "running" })
+    ]))
+    expect(connectionManager.resourceSnapshot().leases).toBe(baselineLeases + 1)
+    barrier.release("/second.bin")
     await waitFor(() => {
       const tasks = manager.listTransfers(owner)
       return tasks.some((task) => task.id === first.task.id && task.status === "cancelled")
         && tasks.some((task) => task.id === second.task.id && task.status === "completed")
-    }, 5_000)
+    }, 5_000, "second upload completion")
+    barrier.releaseAll()
+    await waitFor(() => {
+      const snapshot = fixture.resourceSnapshot()
+      return snapshot.sftpChannels === 0 && snapshot.sftpHandles === 0 && snapshot.sftpWritesWaiting === 0
+    }, 3_000, "SFTP channel and handle cleanup")
 
     expect(manager.listTransfers(owner)).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: first.task.id, status: "cancelled" }),
       expect.objectContaining({ id: second.task.id, status: "completed" })
     ]))
     expect(manager.resourceSnapshot().activeTransfers).toBe(0)
-    expect(connectionManager.resourceSnapshot().leases).toBe(1)
+    expect(connectionManager.resourceSnapshot().leases).toBe(baselineLeases)
     expect((await manager.list(workspace.workspaceId, "/", owner)).entries.map((entry) => entry.name)).toContain("second.bin")
-  })
+    shell.write("still-alive\n")
+    await waitFor(() => terminalOutput.includes("echo: still-alive"), 2_000, "PTY remains usable after cancellation")
+    const destination = join(localDirectory, "verified.bin")
+    const selection = await manager.selectDownload(workspace.workspaceId, "/second.bin", destination, owner)
+    const download = await manager.download(selection.selectionId, true, owner)
+    if (download.kind !== "started") throw new Error("Expected verification download")
+    await waitFor(() => manager.listTransfers(owner).some((task) => task.id === download.task.id && task.status === "completed"))
+    expect(await readFile(destination)).toEqual(payload)
+    shell.end()
+    await connectionManager.release(terminalLease.id)
+  }, 20_000)
 
   it("keeps a live terminal PTY usable after an SFTP request fails on its shared transport", async () => {
     const fixture = await createSshTestServer({ welcome: "pty-ready\n" })
@@ -281,10 +341,24 @@ function createManager(port: number): { manager: SftpManager; connectionManager:
   return { manager, connectionManager }
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 3_000, phase = "SFTP transfer"): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (!predicate()) {
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for SFTP transfer")
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${phase}`)
     await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+async function withDeadline<T>(promise: Promise<T>, phase: string, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${phase}`)), timeoutMs)
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }

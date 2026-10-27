@@ -6,7 +6,7 @@ import type { ForwardingProfile } from "../../../electron/storage/types"
 import type { AppSettings, DiscoveredPort, ForwardingInfo, HostProfile, PortStatus } from "../../app/types"
 import { IconButton } from "../../components/IconButton"
 import { useI18n } from "../../i18n"
-import type { WorkspaceSession } from "../terminal/session-state"
+import { isPortForwardingSession, type WorkspaceSession } from "../terminal/session-state"
 import { forwardingSshCommand } from "./forwarding-command"
 import { applyDiscoveredPorts, applyForwarding, createPortState, setPortError, setPortLoading } from "./port-state"
 
@@ -341,7 +341,6 @@ interface HostForwardingFormState {
   localPort: string
   remoteAddress: string
   remotePort: string
-  autoStart: boolean
 }
 
 function HostPortsView({ bridge, hostId, hostName, connectionId, session, username, bindAddress = "127.0.0.1", onOpenSession }: PortsViewProps) {
@@ -356,6 +355,21 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
   const [saving, setSaving] = useState(false)
   const [discoveredPorts, setDiscoveredPorts] = useState<DiscoveredPort[]>([])
   const [scanning, setScanning] = useState(false)
+  const [connecting, setConnecting] = useState(false)
+  const [connectionError, setConnectionError] = useState<string>()
+  const workspaceId = isPortForwardingSession(session) ? session.id : undefined
+
+  useEffect(() => {
+    if (!workspaceId || !hostId) return
+    let cancelled = false
+    setConnecting(true)
+    setConnectionError(undefined)
+    void bridge.ports.openWorkspace(workspaceId, hostId).catch((reason: unknown) => {
+      if (!cancelled) setConnectionError(reason instanceof Error ? reason.message : String(reason))
+    }).finally(() => { if (!cancelled) setConnecting(false) })
+    // Explicit Session close and main-process owner cleanup release the lease.
+    return () => { cancelled = true }
+  }, [bridge, workspaceId, hostId])
 
   const refresh = async (): Promise<void> => {
     if (!hostId) {
@@ -399,8 +413,7 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
       localAddress: profile.localAddress,
       localPort: String(profile.localPort),
       remoteAddress: profile.remoteAddress,
-      remotePort: String(profile.remotePort),
-      autoStart: profile.autoStart
+      remotePort: String(profile.remotePort)
     })
     setError(undefined)
     setEditorOpen(true)
@@ -431,8 +444,7 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
       localAddress: form.localAddress,
       localPort,
       remoteAddress: form.remoteAddress.trim(),
-      remotePort,
-      autoStart: form.autoStart
+      remotePort
     }
   }
 
@@ -497,10 +509,13 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
   }
 
   const scan = async (): Promise<void> => {
-    if (!connectionId || scanning) return
+    if ((!workspaceId && !connectionId) || scanning || connecting) return
     setScanning(true)
+    setError(undefined)
+    setConnectionError(undefined)
     try {
-      setDiscoveredPorts(await bridge.ports.scan(connectionId))
+      if (workspaceId && hostId) await bridge.ports.openWorkspace(workspaceId, hostId)
+      setDiscoveredPorts(await bridge.ports.scan(workspaceId ? { workspaceId } : connectionId!))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
@@ -529,8 +544,8 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
           <p>{t("ports.hostSubtitle")}</p>
         </div>
         <div className="view-header-actions">
-          <button className="secondary-command" type="button" onClick={() => void scan()} disabled={!connectionId || scanning}>
-            <RefreshCw size={15} className={scanning ? "is-spinning" : ""} />{t("ports.scan")}
+          <button className="secondary-command" type="button" onClick={() => void scan()} disabled={(!workspaceId && !connectionId) || scanning || connecting}>
+            <RefreshCw size={15} className={scanning || connecting ? "is-spinning" : ""} />{connecting ? t("ports.connecting") : t("ports.scan")}
           </button>
           <button className="primary-command" type="button" onClick={openNew} disabled={!canCreateProfile}>
             <Plus size={15} />{t("ports.newForwarding")}
@@ -546,15 +561,15 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
           {username && <small>{username}</small>}
         </div>
         {error && <div className="inline-error">{error}</div>}
+        {connectionError && <div className="inline-error" role="alert">{connectionError}</div>}
         {rows.length > 0 ? <div className="ports-table ports-host-table">
-          <div className="ports-heading"><span>{t("ports.rule")}</span><span>{t("ports.route")}</span><span>{t("ports.status")}</span><span>{t("ports.policy")}</span><span /></div>
+          <div className="ports-heading"><span>{t("ports.rule")}</span><span>{t("ports.route")}</span><span>{t("ports.status")}</span><span /></div>
           {rows.map(({ profile, runtime }) => {
             const status = runtime?.status ?? "stopped"
             return <div className="port-row ports-profile-row" key={profile.id}>
               <div><strong>{profile.name}</strong>{profile.description && <small>{profile.description}</small>}</div>
               <code>{formatAddress(profile.localAddress, profile.localPort)} <span className="route-arrow">-&gt;</span> {profile.remoteAddress}:{profile.remotePort}</code>
               <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
-              <span>{profile.autoStart ? t("ports.autoStart") : t("ports.manualStart")}</span>
               <div className="port-actions">
                 {onOpenSession && <IconButton label={t("session.open")} onClick={() => onOpenSession(profile, runtime)}><PanelTopOpen size={14} /></IconButton>}
                 {runtime?.status === "forwarding" && <>
@@ -584,7 +599,6 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
               <label><span>{t("ports.remotePort")}</span><input aria-label={t("ports.remotePort")} type="number" min={1} max={65535} value={form.remotePort} onChange={(event) => updateField("remotePort", event.target.value)} /></label>
             </div>
             {form.localAddress === "0.0.0.0" && <div className="forwarding-exposure-warning"><AlertTriangle size={15} /><span>{t("ports.exposureWarning")}</span></div>}
-            <label className="forwarding-checkbox"><input type="checkbox" checked={form.autoStart} onChange={(event) => updateField("autoStart", event.target.checked)} /><span>{t("ports.autoStart")}</span></label>
           </div>
           <div className="forwarding-editor-actions"><button className="secondary-command" type="button" onClick={() => setEditorOpen(false)}>{t("hosts.editor.close")}</button><button className="secondary-command" type="button" disabled={saving} onClick={() => void saveProfile(false)}>{t("ports.saveProfile")}</button><button className="primary-command" type="button" disabled={saving} onClick={() => void saveProfile(true)}><Play size={14} />{t("ports.saveAndStart")}</button></div>
         </div>
@@ -594,7 +608,7 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
 }
 
 function emptyForwardingForm(bindAddress: PortsViewProps["bindAddress"] = "127.0.0.1"): HostForwardingFormState {
-  return { name: "", description: "", localAddress: bindAddress ?? "127.0.0.1", localPort: "8080", remoteAddress: "127.0.0.1", remotePort: "8080", autoStart: false }
+  return { name: "", description: "", localAddress: bindAddress ?? "127.0.0.1", localPort: "8080", remoteAddress: "127.0.0.1", remotePort: "8080" }
 }
 
 function runtimeToFallbackProfile(runtime: ForwardingInfo): ForwardingProfile {

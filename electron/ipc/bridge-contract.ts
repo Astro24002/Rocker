@@ -163,7 +163,9 @@ export interface RockerBridge {
     duplicateInNewWindow(request: SessionLaunchRequest): Promise<void>
   }
   ports: {
-    scan(connectionId: string): Promise<DiscoveredPort[]>
+    openWorkspace(workspaceId: string, hostId: string): Promise<void>
+    closeWorkspace(workspaceId: string): Promise<void>
+    scan(target: string | { workspaceId: string }): Promise<DiscoveredPort[]>
     start(connectionId: string, spec: ForwardingSpec): Promise<ForwardingInfo>
     resume(forwardingId: string): Promise<ForwardingInfo>
     stop(forwardingId: string): Promise<void>
@@ -259,6 +261,8 @@ export const ipcChannels = {
   sessionDuplicateWindow: "rocker:sessions:duplicate-window",
   sessionEvent: "rocker:sessions:event",
   portsScan: "rocker:ports:scan",
+  portsOpenWorkspace: "rocker:ports:open-workspace",
+  portsCloseWorkspace: "rocker:ports:close-workspace",
   portsStart: "rocker:ports:start",
   portsResume: "rocker:ports:resume",
   portsStop: "rocker:ports:stop",

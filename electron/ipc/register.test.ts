@@ -313,6 +313,21 @@ describe("registerIpcHandlers", () => {
     expect(harness.ports.scan).not.toHaveBeenCalled()
   })
 
+  it("routes PF workspace open, scan and close with the current renderer owner", async () => {
+    const harness = createHarness()
+    registerIpcHandlers(harness.dependencies)
+    await invokeFrom(21, ipcChannels.portsOpenWorkspace, sessionId, "host-a")
+    expect(harness.ports.openWorkspace).toHaveBeenCalledWith(sessionId, "host-a", owner21)
+    await invokeFrom(21, ipcChannels.portsScan, { workspaceId: sessionId })
+    expect(harness.ports.scanWorkspace).toHaveBeenCalledWith(sessionId, owner21)
+    await invokeFrom(21, ipcChannels.portsCloseWorkspace, sessionId)
+    expect(harness.ports.closeWorkspace).toHaveBeenCalledWith(sessionId, owner21)
+    expect(harness.sessions.open).not.toHaveBeenCalled()
+    expect(harness.forwarding.startProfile).not.toHaveBeenCalled()
+    await expect(invokeFrom(21, ipcChannels.portsScan, { workspaceId: "" })).rejects.toThrow()
+    await expect(invokeFrom(21, ipcChannels.portsOpenWorkspace, sessionId, "")).rejects.toThrow()
+  })
+
   it("keeps SFTP rename, move, and dropped-upload requests owner scoped", async () => {
     const harness = createHarness()
     electron.BrowserWindow.fromWebContents.mockReturnValue(harness.owner)
@@ -380,7 +395,7 @@ describe("registerIpcHandlers", () => {
 
   it("lists saved forwarding profiles globally, including stopped runtimes", async () => {
     const harness = createHarness()
-    const profile = testForwardingProfile()
+    const profile = { ...testForwardingProfile(), autoStart: true }
     harness.forwardingProfiles.list.mockResolvedValue([profile])
     harness.forwarding.list.mockReturnValue([{
       id: "forwarding-runtime",
@@ -396,9 +411,10 @@ describe("registerIpcHandlers", () => {
     registerIpcHandlers(harness.dependencies)
 
     await expect(invokeFrom(21, ipcChannels.portsListOverview)).resolves.toEqual([{ profile, runtime: expect.objectContaining({ status: "stopped" }) }])
+    expect(harness.forwarding.startProfile).not.toHaveBeenCalled()
   })
 
-  it("creates a Host-bound profile without starting a runtime", async () => {
+  it.each([undefined, false, true])("creates a manual Host-bound profile even with legacy autoStart=%s", async (autoStart) => {
     const harness = createHarness()
     const profile = testForwardingProfile()
     harness.hosts.list.mockResolvedValue([{ id: profile.hostId, name: "Host A", host: "server.example", port: 22, username: "root", authMethod: "agent", favorite: false, notes: "" }])
@@ -412,9 +428,29 @@ describe("registerIpcHandlers", () => {
       localPort: profile.localPort,
       remoteAddress: profile.remoteAddress,
       remotePort: profile.remotePort,
-      autoStart: profile.autoStart
-    })).resolves.toMatchObject({ hostId: profile.hostId, name: profile.name })
+      ...(autoStart === undefined ? {} : { autoStart })
+    })).resolves.toMatchObject({ hostId: profile.hostId, name: profile.name, autoStart: false })
     expect(harness.forwardingProfiles.save).toHaveBeenCalledOnce()
+    expect(harness.forwarding.startProfile).not.toHaveBeenCalled()
+  })
+
+  it("preserves a legacy autoStart value when editing without that compatibility field", async () => {
+    const harness = createHarness()
+    const profile = { ...testForwardingProfile(), autoStart: true }
+    harness.forwardingProfiles.get.mockResolvedValue(profile)
+    harness.hosts.list.mockResolvedValue([{ id: profile.hostId, name: "Host A", host: "server.example", port: 22, username: "root", authMethod: "agent", favorite: false, notes: "" }])
+    harness.forwardingProfiles.save.mockResolvedValue(undefined)
+    registerIpcHandlers(harness.dependencies)
+
+    await expect(invokeFrom(21, ipcChannels.portsUpdateProfile, profile.id, {
+      name: profile.name,
+      description: profile.description,
+      localAddress: profile.localAddress,
+      localPort: profile.localPort,
+      remoteAddress: profile.remoteAddress,
+      remotePort: profile.remotePort
+    })).resolves.toMatchObject({ autoStart: true })
+    expect(harness.forwardingProfiles.save).toHaveBeenCalledWith(expect.objectContaining({ autoStart: true }))
     expect(harness.forwarding.startProfile).not.toHaveBeenCalled()
   })
 
@@ -573,6 +609,7 @@ describe("registerIpcHandlers", () => {
       await expect(invokeFrom(21, ipcChannels.configImportApply, { importId: selected.importId, resolution: {} }))
         .resolves.toEqual({ importedHosts: 0 })
       expect(harness.configuration.import).toHaveBeenCalledWith(expect.any(Uint8Array), undefined, {})
+      expect(harness.forwarding.startProfile).not.toHaveBeenCalled()
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -797,8 +834,6 @@ describe("registerIpcHandlers", () => {
         username: "rock",
         authMethod: "password",
         publicKeyEnabled: false,
-        snippetsEnabled: true,
-        snippetCollection: "Deployment",
         charset: "gb18030",
         themeColor: "amber",
         environment: "production",
@@ -810,8 +845,6 @@ describe("registerIpcHandlers", () => {
 
     expect(harness.hosts.save).toHaveBeenCalledWith(expect.objectContaining({
       publicKeyEnabled: false,
-      snippetsEnabled: true,
-      snippetCollection: "Deployment",
       charset: "gb18030",
       themeColor: "amber",
       environment: "production",
@@ -854,20 +887,15 @@ describe("registerIpcHandlers", () => {
         username: "rock",
         authMethod: "password",
         publicKeyEnabled: false,
-        snippetsEnabled: false,
-        snippetCollection: "",
         favorite: false,
         notes: ""
       }
     })
 
-    expect(harness.hosts.save).toHaveBeenCalledWith(expect.objectContaining({
-      publicKeyEnabled: false,
-      snippetsEnabled: false
-    }))
+    expect(harness.hosts.save).toHaveBeenCalledWith(expect.objectContaining({ publicKeyEnabled: false }))
   })
 
-  it("rejects enabled optional capabilities without their required values", async () => {
+  it("rejects public-key login without its required identity file", async () => {
     const harness = createHarness()
     registerIpcHandlers(harness.dependencies)
 
@@ -882,9 +910,6 @@ describe("registerIpcHandlers", () => {
       notes: ""
     }
 
-    await expect(invokeFrom(21, ipcChannels.hostsSave, {
-      profile: { ...base, snippetsEnabled: true }
-    })).rejects.toThrow("Snippet collection is required")
     await expect(invokeFrom(21, ipcChannels.hostsSave, {
       profile: { ...base, publicKeyEnabled: true, authMethod: "privateKey" }
     })).rejects.toThrow("Private key path is required")
@@ -1154,7 +1179,7 @@ function createHarness() {
     hostKeys,
     sessions,
     connections,
-    ports: { scan: vi.fn() },
+    ports: { scan: vi.fn(), openWorkspace: vi.fn(), closeWorkspace: vi.fn(), scanWorkspace: vi.fn(), releaseHost: vi.fn() },
     forwarding,
     sftp,
     forwardingProfiles,

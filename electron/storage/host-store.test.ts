@@ -59,14 +59,10 @@ describe("host profile editor metadata", () => {
       publicKeyEnabled: true,
       authMethod: "privateKey",
       identityFile: "/keys/id_ed25519",
-      snippetsEnabled: true,
-      snippetCollection: "Deployment",
       charset: "gb18030",
       themeColor: "amber"
     })).toMatchObject({
       publicKeyEnabled: true,
-      snippetsEnabled: true,
-      snippetCollection: "Deployment",
       charset: "gb18030",
       themeColor: "amber"
     })
@@ -83,13 +79,22 @@ describe("host profile editor metadata", () => {
     const normalized = normalizeHostProfile({
       ...profile,
       publicKeyEnabled: "yes",
-      snippetsEnabled: "yes",
-      snippetCollection: 42,
       charset: "cp500",
       themeColor: "neon"
     })
 
     expect(normalized).toMatchObject({ publicKeyEnabled: false, charset: "utf-8", themeColor: "rocker" })
+  })
+
+  it("ignores retired Snippets metadata when reading legacy Host records", () => {
+    const normalized = normalizeHostProfile({
+      ...profile,
+      snippetsEnabled: true,
+      snippetCollection: "Deployment"
+    })
+
+    expect(normalized).toMatchObject({ id: "host-editor", name: "Editor host" })
+    expect(normalized).not.toHaveProperty("snippetsEnabled")
     expect(normalized).not.toHaveProperty("snippetCollection")
   })
 
@@ -133,7 +138,7 @@ describe("host profile editor metadata", () => {
 })
 
 describe("host profile mutations", () => {
-  it("duplicates a host without carrying authentication material or optional Snippets", async () => {
+  it("duplicates a host without carrying authentication material or retired metadata", async () => {
     const directory = await mkdtemp(join(tmpdir(), "rocker-host-store-mutations-"))
     temporaryPaths.push(directory)
     const store = new HostStore(join(directory, "rocker.json"))
@@ -149,8 +154,6 @@ describe("host profile mutations", () => {
       platform: "ubuntu",
       environment: "production",
       tags: ["core", "linux"],
-      snippetsEnabled: true,
-      snippetCollection: "Release",
       charset: "gb18030",
       themeColor: "amber",
       favorite: true,
@@ -174,11 +177,9 @@ describe("host profile mutations", () => {
     })
     expect(duplicate.id).not.toBe("host-a")
     expect(duplicate).not.toHaveProperty("identityFile")
-    expect(duplicate).not.toHaveProperty("snippetCollection")
     expect(duplicate).not.toHaveProperty("group")
     expect(duplicate).not.toHaveProperty("environment")
     expect(duplicate).not.toHaveProperty("tags")
-    expect(duplicate.snippetsEnabled).toBe(false)
     expect(duplicate.publicKeyEnabled).toBe(false)
     expect(secondDuplicate.name).toBe("G11 copy (2)")
   })

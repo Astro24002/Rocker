@@ -85,8 +85,6 @@ describe("browser preview bridge", () => {
       username: "rock",
       authMethod: "privateKey",
       identityFile: "/private/user-data/.ssh/id_ed25519",
-      snippetsEnabled: true,
-      snippetCollection: "Release",
       environment: "production",
       tags: ["core", "linux"],
       favorite: true,
@@ -102,12 +100,10 @@ describe("browser preview bridge", () => {
         name: "Preview duplicate copy",
         authMethod: "agent",
         favorite: false,
-        snippetsEnabled: false,
         environment: "production",
         tags: ["core", "linux"]
       })
       expect(duplicate).not.toHaveProperty("identityFile")
-      expect(duplicate).not.toHaveProperty("snippetCollection")
 
       await expect(bridge.hosts.setFavorite(duplicate.id, true)).resolves.toMatchObject({ favorite: true })
     } finally {
@@ -122,6 +118,7 @@ describe("browser preview bridge", () => {
 
     await expect(bridge.hosts.testConnection("demo-g11")).resolves.toEqual({ status: "reachable", latencyMs: 24 })
   })
+
 })
 
 function setPreviewWindowBridge(bridge: Window["rocker"] | undefined): void {

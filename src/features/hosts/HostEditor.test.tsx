@@ -18,7 +18,7 @@ const baseProfile: HostProfile = {
 }
 
 describe("HostEditor", () => {
-  it("starts with SSH-only fields, optional capabilities off, and UTF-8 defaults", () => {
+  it("starts with SSH fields and UTF-8 defaults", () => {
     renderEditor()
 
     expect(screen.getByRole("heading", { name: "Add Host" })).toBeInTheDocument()
@@ -27,13 +27,12 @@ describe("HostEditor", () => {
     expect(screen.getByLabelText("Charset")).toHaveValue("utf-8")
     expect(screen.getByLabelText("Theme color")).toHaveValue("rocker")
     expect(screen.getByRole("checkbox", { name: "Public key login" })).not.toBeChecked()
-    expect(screen.getByRole("checkbox", { name: "Snippets" })).not.toBeChecked()
     expect(screen.queryByLabelText("Set a key")).not.toBeInTheDocument()
     expect(screen.queryByText("MOSH")).not.toBeInTheDocument()
     expect(screen.queryByText("Telnet")).not.toBeInTheDocument()
   })
 
-  it("allows empty optional values while both capabilities stay disabled", () => {
+  it("allows empty optional values while public-key login stays disabled", () => {
     const onSave = vi.fn()
     renderEditor(undefined, onSave)
     fillRequiredIdentity()
@@ -41,9 +40,20 @@ describe("HostEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
 
     const saved = onSave.mock.calls[0]?.[0] as HostSaveProfile
-    expect(saved).toMatchObject({ publicKeyEnabled: false, snippetsEnabled: false, charset: "utf-8", themeColor: "rocker" })
+    expect(saved).toMatchObject({ publicKeyEnabled: false, charset: "utf-8", themeColor: "rocker" })
     expect(saved).not.toHaveProperty("identityFile")
-    expect(saved).not.toHaveProperty("snippetCollection")
+  })
+
+  it("drops retired metadata when editing a legacy Host record", () => {
+    const onSave = vi.fn()
+    const legacyProfile = { ...baseProfile, snippetsEnabled: true, snippetCollection: "Deployment" }
+    renderEditor(legacyProfile, onSave)
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+
+    expect(screen.queryByRole("checkbox", { name: "Snippets" })).not.toBeInTheDocument()
+    expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("snippetsEnabled")
+    expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("snippetCollection")
   })
 
   it("blocks a duplicate local Host name regardless of case or surrounding spaces", () => {
@@ -151,45 +161,19 @@ describe("HostEditor", () => {
     expect(screen.getByRole("button", { name: "Choose file" })).toHaveAttribute("aria-describedby", "host-key-picker-error")
   })
 
-  it("requires a snippet collection only while Snippets is enabled", () => {
-    const onSave = vi.fn()
-    renderEditor(undefined, onSave)
-
-    fireEvent.click(screen.getByRole("checkbox", { name: "Snippets" }))
-    const collection = screen.getByLabelText("Snippet collection")
-    expect(collection).toBeRequired()
-
-    fillRequiredIdentity()
-    fireEvent.change(collection, { target: { value: "Deployment" } })
-    fireEvent.change(screen.getByLabelText("Charset"), { target: { value: "gb18030" } })
-    fireEvent.change(screen.getByLabelText("Theme color"), { target: { value: "amber" } })
-    fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
-
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
-      snippetsEnabled: true,
-      snippetCollection: "Deployment",
-      charset: "gb18030",
-      themeColor: "amber"
-    }), expect.anything())
-  })
-
-  it("saves public-key and snippet preferences together without exposing credentials", () => {
+  it("saves public-key preferences without exposing credentials", () => {
     const onSave = vi.fn()
     renderEditor(undefined, onSave)
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Public key login" }))
     fireEvent.change(screen.getByLabelText("Set a key"), { target: { value: "/keys/deploy" } })
-    fireEvent.click(screen.getByRole("checkbox", { name: "Snippets" }))
-    fireEvent.change(screen.getByLabelText("Snippet collection"), { target: { value: "Release" } })
     fillRequiredIdentity()
     fireEvent.click(screen.getByRole("button", { name: "Save Host" }))
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       authMethod: "privateKey",
       publicKeyEnabled: true,
-      identityFile: "/keys/deploy",
-      snippetsEnabled: true,
-      snippetCollection: "Release"
+      identityFile: "/keys/deploy"
     }), expect.anything())
     expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("password")
     expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("passphrase")

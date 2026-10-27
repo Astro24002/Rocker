@@ -11,7 +11,7 @@ afterEach(async () => {
   await Promise.all(sessions.splice(0).map((terminal) => terminal.releaseOwner(owner1)))
   const closing = fixtures.splice(0)
   await Promise.all(closing.map((fixture) => fixture.close()))
-  for (const fixture of closing) expect(fixture.resourceSnapshot()).toEqual({ clients: 0, sessions: 0, shells: 0, forwards: 0 })
+  for (const fixture of closing) expect(fixture.resourceSnapshot()).toMatchObject({ clients: 0, sessions: 0, shells: 0, forwards: 0, sftpChannels: 0, sftpHandles: 0, sftpWritesWaiting: 0 })
 })
 
 class ManualScheduler implements RetryScheduler {
@@ -143,8 +143,10 @@ describe("real SSH terminal integration", () => {
     const scheduler = new ManualScheduler(); const { terminal, events } = setup(fixture.port, request(fixture.port), scheduler)
     fixture.holdNextShell()
     const opening = terminal.open(openRequest("00000000-0000-4000-8000-00000000000a", fixture.port))
+    void opening.catch(() => undefined)
 
-    await waitFor(() => fixture.ptyRequests.length === 1)
+    // PTY acceptance precedes the shell request; wait for the actual hold.
+    await waitFor(() => fixture.pendingShellCount === 1)
     fixture.dropTransports()
     await waitFor(() => events.some((event) => event.event.kind === "state" && event.event.state === "reconnecting"))
     fixture.releaseNextShell()

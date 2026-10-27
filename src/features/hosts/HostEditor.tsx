@@ -110,8 +110,7 @@ export function HostEditor({ open, profile, hosts, onClose, onSave, onChooseIden
     const saved = buildSaveProfile({ ...draft, name }, {
       keyPath,
       publicKeyEnabled,
-      hasExistingKey: hasExistingKey(profile),
-      snippetsEnabled: draft.snippetsEnabled === true
+      hasExistingKey: hasExistingKey(profile)
     })
     const credentials = {
       ...(!publicKeyEnabled && nonKeyAuthMethod === "password" && password ? { password } : {}),
@@ -226,16 +225,6 @@ export function HostEditor({ open, profile, hosts, onClose, onSave, onChooseIden
             </EditorSection>
 
             <EditorSection icon={<Palette size={15} />} title={t("hosts.editor.terminalPreferences")}>
-              <ToggleField
-                label={t("hosts.editor.snippets")}
-                description={draft.snippetsEnabled ? t("hosts.editor.snippetsEnabled") : t("hosts.editor.snippetsOptional")}
-                checked={draft.snippetsEnabled === true}
-                onChange={(enabled) => update("snippetsEnabled", enabled)}
-                wide
-              />
-              {draft.snippetsEnabled && <Field label={t("hosts.editor.snippetCollection")} wide>
-                <input required maxLength={256} value={draft.snippetCollection ?? ""} onChange={(event) => update("snippetCollection", event.target.value)} placeholder={t("hosts.editor.snippetPlaceholder")} />
-              </Field>}
               <Field label={t("hosts.editor.charset")}>
                 <select value={draft.charset ?? "utf-8"} onChange={(event) => update("charset", event.target.value as HostProfile["charset"])}>
                   <option value="utf-8">UTF-8</option>
@@ -290,34 +279,29 @@ function ToggleField({ label, description, checked, onChange, wide }: { label: s
 }
 
 function draftFromProfile(profile?: HostEditorProfile): HostProfile {
-  const source = profile as (HostProfile & { hasIdentityFile?: boolean }) | undefined
-  const { identityFile: _identityFile, ...safeProfile } = source ?? {}
+  const source = profile as (HostProfile & { hasIdentityFile?: boolean; snippetsEnabled?: unknown; snippetCollection?: unknown }) | undefined
+  const { identityFile: _identityFile, snippetsEnabled: _legacySnippetsEnabled, snippetCollection: _legacySnippetCollection, ...safeProfile } = source ?? {}
   return {
     ...createEmptyHost(),
     ...safeProfile,
     charset: profile?.charset ?? "utf-8",
     themeColor: profile?.themeColor ?? "rocker",
-    publicKeyEnabled: isPublicKeyEnabled(profile),
-    snippetsEnabled: profile?.snippetsEnabled === true
+    publicKeyEnabled: isPublicKeyEnabled(profile)
   }
 }
 
-function buildSaveProfile(draft: HostProfile, options: { keyPath: string; publicKeyEnabled: boolean; hasExistingKey: boolean; snippetsEnabled: boolean }): HostSaveProfile {
-  const { identityFile: _identityFile, hasIdentityFile: _hasIdentityFile, snippetCollection: _snippetCollection, group: _group, environment: _environment, tags: _tags, ...safeDraft } = draft as HostProfile & { hasIdentityFile?: boolean }
+function buildSaveProfile(draft: HostProfile, options: { keyPath: string; publicKeyEnabled: boolean; hasExistingKey: boolean }): HostSaveProfile {
+  const { identityFile: _identityFile, hasIdentityFile: _hasIdentityFile, snippetsEnabled: _legacySnippetsEnabled, snippetCollection: _legacySnippetCollection, group: _group, environment: _environment, tags: _tags, ...safeDraft } = draft as HostProfile & { hasIdentityFile?: boolean; snippetsEnabled?: unknown; snippetCollection?: unknown }
   const base = {
     ...safeDraft,
     authMethod: options.publicKeyEnabled ? "privateKey" as const : draft.authMethod === "privateKey" ? "password" as const : draft.authMethod,
     publicKeyEnabled: options.publicKeyEnabled,
-    snippetsEnabled: options.snippetsEnabled,
     charset: draft.charset ?? "utf-8",
     themeColor: draft.themeColor ?? "rocker"
   }
-  const withSnippets = options.snippetsEnabled
-    ? { ...base, snippetCollection: draft.snippetCollection?.trim() ?? "" }
-    : base
-  if (options.publicKeyEnabled && options.keyPath.trim()) return { ...withSnippets, identityFile: options.keyPath.trim() }
-  if (options.publicKeyEnabled && options.hasExistingKey) return { ...withSnippets, hasIdentityFile: true }
-  return withSnippets
+  if (options.publicKeyEnabled && options.keyPath.trim()) return { ...base, identityFile: options.keyPath.trim() }
+  if (options.publicKeyEnabled && options.hasExistingKey) return { ...base, hasIdentityFile: true }
+  return base
 }
 
 function isPublicKeyEnabled(profile?: HostEditorProfile): boolean {
@@ -339,7 +323,6 @@ function createEmptyHost(): HostProfile {
     username: "",
     authMethod: "password",
     publicKeyEnabled: false,
-    snippetsEnabled: false,
     charset: "utf-8",
     themeColor: "rocker",
     favorite: false,

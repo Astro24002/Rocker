@@ -8,6 +8,18 @@ and forwarded only after an explicit user action.
 The implementation is independent of Tabby source code. Rocker uses Electron,
 React, xterm.js, and `ssh2`.
 
+## v0.8.0
+
+This release adds an independent SSH connection for Host forwarding workspaces,
+accurate SSH History duration/outcomes, and more reliable SFTP cancellation and
+cleanup. It also removes Snippets and the inert forwarding startup-policy setting.
+Consolas defaults and the native SSH private-key picker from v0.7.3 RC3 are included.
+
+Named workspace save/restore remains planned, not implemented in this release.
+Native installed-app and external-host validation remain deferred. See the
+[release notes](docs/releases/v0.8.0-notes.md) and
+[verification record](docs/releases/v0.8.0-verification.md).
+
 ## First-release features
 
 - Local host profiles, groups, favorites, and OpenSSH config import.
@@ -37,9 +49,8 @@ and [smoke checklist](docs/releases/v0.4.0-smoke-checklist.md).
 
 SFTP is in the v0.7 candidate line with a real main-process service,
 typed bridge, local and remote directory browsing, and a split Local/Host workspace.
-Snippets remain a visible navigation placeholder. Cloud sync, mobile clients,
-ProxyJump, remote forwarding, and Dynamic SOCKS5 are not part of the first
-release.
+Cloud sync, mobile clients, ProxyJump, remote forwarding, and Dynamic SOCKS5
+are not part of the first release.
 
 ## v0.6.0 release candidates
 

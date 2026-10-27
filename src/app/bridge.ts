@@ -130,7 +130,6 @@ function createBrowserPreviewBridge(): RockerBridge {
           charset: source.charset ?? "utf-8",
           themeColor: source.themeColor ?? "rocker",
           publicKeyEnabled: false,
-          snippetsEnabled: false,
           favorite: false,
           notes: source.notes
         }
@@ -206,6 +205,8 @@ function createBrowserPreviewBridge(): RockerBridge {
       duplicateInNewWindow: async () => undefined
     },
     ports: {
+      openWorkspace: async () => undefined,
+      closeWorkspace: async () => undefined,
       scan: async () => [],
       start: async (connectionId, spec) => {
         const forwarding: ForwardingInfo = { ...spec, id: crypto.randomUUID(), connectionId, status: "forwarding" }
@@ -231,7 +232,7 @@ function createBrowserPreviewBridge(): RockerBridge {
       updateProfile: async (profileId, request) => {
         const existing = mockProfiles.get(profileId)
         if (!existing) throw new Error("Forwarding profile was not found")
-        const profile = { ...existing, ...normalizePreviewForwardingRequest(request), updatedAt: new Date().toISOString() }
+        const profile = { ...existing, ...normalizePreviewForwardingRequest(request), autoStart: request.autoStart ?? existing.autoStart, updatedAt: new Date().toISOString() }
         mockProfiles.set(profileId, profile)
         return profile
       },
@@ -412,23 +413,16 @@ function normalizePreviewHostProfile(profile: HostSaveProfile, existing: HostPro
     })()
     : profile
   const publicKeyEnabled = source.publicKeyEnabled === true || source.authMethod === "privateKey"
-  const snippetCollection = isNonBlankString(source.snippetCollection, 256) ? source.snippetCollection.trim() : undefined
-  const snippetsEnabled = source.snippetsEnabled === true && snippetCollection !== undefined
   const normalizedTags = normalizePreviewTags(source.tags)
-  const { snippetCollection: _snippetCollection, environment: _environment, tags: _tags, ...withoutOptionalMetadata } = source
+  const { snippetsEnabled: _legacySnippetsEnabled, snippetCollection: _legacySnippetCollection, environment: _environment, tags: _tags, ...withoutOptionalMetadata } = source as HostProfile & { snippetsEnabled?: unknown; snippetCollection?: unknown }
   return {
-    ...(snippetsEnabled ? { ...withoutOptionalMetadata, snippetCollection } : withoutOptionalMetadata),
+    ...withoutOptionalMetadata,
     publicKeyEnabled,
-    snippetsEnabled,
     charset: isPreviewCharset(source.charset) ? source.charset : "utf-8",
     themeColor: isPreviewThemeColor(source.themeColor) ? source.themeColor : "rocker",
     ...(isPreviewEnvironment(source.environment) ? { environment: source.environment } : {}),
     ...(normalizedTags ? { tags: normalizedTags } : {})
   }
-}
-
-function isNonBlankString(value: unknown, maximum: number): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= maximum
 }
 
 function isPreviewCharset(value: unknown): value is HostCharset {
@@ -514,6 +508,7 @@ function createPreviewProfile(hostId: string, request: ForwardingProfileRequest)
     id: crypto.randomUUID(),
     hostId,
     ...normalizePreviewForwardingRequest(request),
+    autoStart: false,
     createdAt: now,
     updatedAt: now
   }
@@ -527,7 +522,7 @@ function normalizePreviewForwardingRequest(request: ForwardingProfileRequest): O
     localPort: request.localPort,
     remoteAddress: request.remoteAddress.trim(),
     remotePort: request.remotePort,
-    autoStart: request.autoStart
+    autoStart: request.autoStart ?? false
   }
 }
 

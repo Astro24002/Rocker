@@ -25,8 +25,6 @@ export interface HostProfile {
   identityFile?: string
   group?: string
   publicKeyEnabled?: boolean
-  snippetsEnabled?: boolean
-  snippetCollection?: string
   charset?: HostCharset
   themeColor?: HostThemeColor
   environment?: HostEnvironment
@@ -45,6 +43,9 @@ export interface ConnectionHistoryItem {
   connectedAt: string
   durationMs: number
   outcome: "connected" | "failed" | "disconnected"
+  timingVersion?: 1
+  endedAt?: string
+  endReason?: "closed" | "remote-exit" | "connection-error" | "cancelled" | "interrupted"
 }
 
 export type StoredTerminalLayout =
@@ -95,6 +96,7 @@ export interface ForwardingProfile {
   localPort: number
   remoteAddress: string
   remotePort: number
+  /** Retained for old documents; loading this value never starts a listener. */
   autoStart: boolean
   createdAt: string
   updatedAt: string

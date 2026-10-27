@@ -1,4 +1,4 @@
-import { Copy, ExternalLink, FileCode2, FolderClosed, Network, Pencil, Server, Settings, ShieldCheck, X } from "lucide-react"
+import { Copy, ExternalLink, FolderClosed, Network, Pencil, Server, Settings, ShieldCheck, X } from "lucide-react"
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactElement } from "react"
 import { createPortal } from "react-dom"
 import { useI18n } from "../i18n"
@@ -8,7 +8,7 @@ import { isCompactSidebar, normalizeSidebarWidth } from "../shared/sidebar-width
 import rockerMark from "../../build/icon.svg"
 import { isPortForwardingSession, isSftpSession, isSshSession, sessionKind, type SessionKind, type WorkspaceSession } from "../features/terminal/session-state"
 
-export type NavKey = "hosts" | "snippets" | "port-forwarding" | "connections" | "settings"
+export type NavKey = "hosts" | "port-forwarding" | "connections" | "settings"
 export type WorkspaceNavKey = NavKey | "sftp" | "terminal" | "history" | "trust" | "host-port-forwarding"
 export type SessionCommandId = Extract<CommandId, `session.${string}`>
 export type ContextMenuOwner = "sidebar" | "terminal"
@@ -31,7 +31,6 @@ interface SidebarProps {
 
 const navItems: Array<{ key: NavKey; icon: typeof Server }> = [
   { key: "hosts", icon: Server },
-  { key: "snippets", icon: FileCode2 },
   { key: "port-forwarding", icon: Network },
   { key: "connections", icon: ShieldCheck }
 ]

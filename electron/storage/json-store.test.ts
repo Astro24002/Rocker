@@ -4,6 +4,8 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { JsonStore } from "./json-store"
+import { HistoryStore } from "./history-store"
+import { SessionHistoryRecorder } from "../ssh/session-history-recorder"
 import { StorageBlockedError, type LoadResult, type StorageDiagnosticEvent } from "./storage-result"
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -37,6 +39,24 @@ afterEach(async () => {
 })
 
 describe("JsonStore", () => {
+  it("keeps History permission failures out of the session event chain and reports store health", async () => {
+    const path = await temporaryFilePath()
+    const store = new HistoryStore(path)
+    const onError = vi.fn()
+    const recorder = new SessionHistoryRecorder(store, { checkpointIntervalMs: 0, onError })
+    writeFileMock.mockImplementation(async (candidate, ...args) => {
+      if (typeof candidate === "string" && candidate.includes(".tmp.")) throw withCode("EACCES")
+      return defaultWriteFile(candidate, ...args)
+    })
+    for (const state of ["connecting", "connected", "closing"] as const) {
+      expect(() => recorder.recordSessionEvent({ owner: { webContentsId: 1, rendererGeneration: 1 }, event: {
+        kind: "state", sessionId: "session", state, channelGeneration: 1
+      } }, "host")).not.toThrow()
+    }
+    await recorder.flush()
+    expect(onError).toHaveBeenCalled()
+    expect(await store.loadWithStatus()).toMatchObject({ status: "blocked", issue: { store: "history", reason: "permission" } })
+  })
   it("serializes 25 concurrent updates without losing mutations", async () => {
     const filePath = await temporaryFilePath()
     const store = createCounterStore(filePath)

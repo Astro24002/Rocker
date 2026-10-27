@@ -1,6 +1,6 @@
 # Rocker Product Roadmap: v0.4.x to v0.9.0
 
-Date: 2026-08-28 (updated 2026-09-18 for v0.6 RC5 admission and the v0.7 SFTP foundation)
+Date: 2026-08-28 (updated 2026-10-27 for History lifecycle and explicit forwarding policy repairs)
 Status: Maintained product evolution baseline aligned with the approved workspace shell and v0.5.x quality sequence
 Scope: Windows and macOS desktop application
 
@@ -18,7 +18,7 @@ v0.5.0  Hosts and Trust
 v0.5.1-v0.5.5  UI quality and native-shell closure patches
 v0.6.0  Port Forwarding Manager
 v0.7.0  SFTP Foundation
-v0.8.0  Snippets and workspace productivity
+v0.8.0  Named Workspaces and workspace productivity
 v0.9.0  Release candidate hardening
 ```
 
@@ -52,10 +52,9 @@ Status terms used below:
 | Local data protection | Released | Local-first storage, system-protected credentials, optional Vault, sanitized template export, encrypted migration export/import, rollback, and recovery shipped in v0.4.3. |
 | Hosts | Working tree / v0.5-A through v0.5-D implemented | Compact cards, bounded direct SSH entry, the shared New/Edit drawer, exact group/environment/tag filtering, safe duplicate/favorite/remove actions, Recent Hosts, production deletion warnings, explicit fresh-transport connection testing, and App-level save error propagation are implemented and locally verified. Runtime metadata application is intentionally deferred; scale benchmarking is non-blocking engineering evidence. |
 | Host Key trust | Working tree / v0.5-B and v0.5-D integration implemented | First-use and changed-key verification, persistence, a user-facing Trust inventory, bounded audit history, expected-fingerprint removal, owner-scoped management IPC, and shared Host Key checks for Connection Test are implemented and locally verified. Re-trust remains the existing native confirmation path; release packaging and native manual checks remain open. |
-| Port Forwarding | Partial | Explicit scan, transient Local Forward lifecycle, leases, recovery, and owner cleanup exist. Persistent profiles and the full management workflow do not. |
-| History | Partial | List, search, clear, and reconnect exist. Completed-session outcome and elapsed-time recording are not yet closed; current open records use a zero duration. |
+| Port Forwarding | Implemented; policy cleanup in working tree | Persistent Host-bound profiles, explicit start/stop/resume, leases, recovery, import/export, and owner cleanup exist. The inert startup-policy control is removed; legacy autoStart values are preserved without starting listeners. |
+| History | Working tree / lifecycle repair implemented | The main process records connected intervals, reconnect pauses and final outcomes, with checkpoints, clear suppression and interrupted-record recovery. Legacy zero durations display Unknown. Native shutdown validation remains deferred. |
 | SFTP | Working tree / v0.7 foundation | Main-process SFTP leases, typed IPC, real fixture-backed directory operations, rename, metadata, drag-and-drop upload, and independent runtime transfer tasks are implemented. Native packaged-app and exit-cleanup checks remain open; durable transfer persistence is intentionally optional. |
-| Snippets | Placeholder | The route and Host editor association fields exist, but there is no Snippet store, expansion, preview, or execution path. |
 | Named Workspaces | Partial | Automatic Session/split/layout recovery exists. User-named save/restore and forwarding intent do not. |
 | Release engineering | Partial | Windows/macOS x64/arm64 packaging and a six-asset release allow-list exist. Signing, notarization, native launch smoke, and final migration/security/performance gates remain v0.9 work. |
 | Product documentation | Partial | The roadmap records v0.5-A through v0.5-D and the completed v0.5.1-v0.5.5 quality sequence with design, implementation, and verification records. README still reports v0.4.0, the architecture audit predates Vault/Host work, and release tags remain product-owner controlled. |
@@ -133,13 +132,12 @@ the top of the right Workspace.
 | Hosts | Host management workspace | Working-tree UI foundation; completion target is v0.5. |
 | Trust | Host Key trust workspace | Working-tree v0.5-B inventory, audit, and expected-fingerprint removal; native re-trust remains the connection confirmation flow. |
 | SFTP Session detail | Remote file workspace opened from a Host or Session | v0.7 foundation is in the working tree; real host and packaged-app acceptance remains open. |
-| Snippets | Command-library workspace | Reserved destination; placeholder until v0.8. |
 | Port Forwarding | Forwarding management workspace | Existing runtime flow; manager workflow planned in v0.6. |
-| History | Connection history workspace | Existing local workflow; outcome/duration closeout remains partial. |
+| History | Connection history workspace | Outcome/duration closeout implemented in the 2026-10-27 working-tree repair; see the verification record. |
 | Settings | Device-local preferences and data protection | Existing local workflow. |
 
-The Sidebar order is Hosts, Trust, Snippets, Port Forwarding, History, and
-Settings. SFTP opens from a Host action or an existing SFTP Session instead of
+The Sidebar order is Hosts, Trust, Port Forwarding, History, and Settings.
+SFTP opens from a Host action or an existing SFTP Session instead of
 occupying a standalone feature destination. Sessions remain a separate section below product navigation. A
 feature must use its route in the right Workspace; it must not add a permanent
 toolbar, monitoring panel, or side pane that reduces the SSH terminal's normal
@@ -247,8 +245,8 @@ product owner; this roadmap does not classify it as a new product subsystem.
   active.
 - Keep Hosts as a dense card workspace with direct SSH entry and a shared
   New/Edit Host drawer.
-- Keep SFTP and Snippets as honest placeholders until their respective
-  backend, ownership, and safety contracts exist.
+- Keep SFTP as an honest placeholder until its backend, ownership, and safety
+  contracts exist.
 - Keep the workspace-internal Sidebar resize affordance invisible at rest;
   do not reintroduce a permanent gray divider or global title bar.
 - Preserve the Rocker Dark `#0AA344` semantic accent system and the blank
@@ -318,12 +316,10 @@ plus [v0.5-C Host Organization Verification](../../releases/v0.5-c-host-organiza
 and [v0.5-D Connection Test Verification](../../releases/v0.5-d-connection-test-verification.md)
 for the exact automated evidence and native-manual PENDING checks.
 
-`snippetsEnabled`, `snippetCollection`, `charset`, and `themeColor` in the Host
-editor are reserved profile metadata. Snippets have no executable entity model,
-and charset/theme values are not applied to terminal decoding or rendering yet.
-The UI must not imply otherwise. The fields remain storage-compatible for a
-future Session and Terminal Runtime track; they are not v0.5 acceptance items.
-Snippet association remains dormant until v0.8.
+`charset` and `themeColor` in the Host editor are reserved profile metadata and
+are not applied to terminal decoding or rendering yet. The UI must not imply
+otherwise. The fields remain storage-compatible for a future Terminal Runtime
+track; they are not v0.5 acceptance items.
 
 ### Features
 
@@ -428,7 +424,7 @@ and [v0.5.x implementation plan](../plans/2026-09-11-rocker-v0.5-ui-quality-and-
 
 ### Out of Scope
 
-SFTP, Snippets execution, Local Terminal, monitoring, Mobile, AI, cloud sync,
+SFTP, Local Terminal, monitoring, Mobile, AI, cloud sync,
 ProxyJump, SOCKS5, remote forwarding, Session Security Summary, Host Charset /
 Terminal Theme Runtime, 1,000-host product-scale acceptance, a new global
 shortcut family, and a redesign of the approved Hosts card information
@@ -462,7 +458,7 @@ the same restrained tool-UI language as Hosts.
 - Manual Local Forward editor with validation.
 - Forward names, descriptions, status filters, and search.
 - Local port conflict check and actionable `LOCAL_PORT_IN_USE` errors.
-- Explicit startup policy: off by default, opt-in per forwarding profile.
+- Saved profiles never start implicitly; Start and Resume are explicit actions.
 - Bind exposure warning for `0.0.0.0`.
 - Independent forwarding lifecycle and connection dependency display.
 - Import/export of forwarding profiles as sanitized JSON.
@@ -546,50 +542,38 @@ transfer tasks remain independent in the main process.
 - Dual-pane local browsing, remote code editing, directory synchronization,
   offline cache, and file diff.
 
-## v0.8.0: Snippets and Workspace Productivity
+## v0.8.0: Named Workspaces and Workspace Productivity
+
+Release-scope update (2026-10-27): the product owner selected `v0.8.0` for
+the current PF connection, History, SFTP reliability and Snippets-removal work.
+The named-workspace milestone below remains planned and is not part of this
+release. Its next version is not assigned. See the
+[v0.8.0 release notes](../../releases/v0.8.0-notes.md).
 
 ### Goal
 
-Reduce repetitive operational work while preserving explicit user control over
-commands and workspace state.
-
-### UI Contract
-
-Snippets occupies its reserved full right-workspace destination. It must not
-add persistent controls above the terminal; command selection and confirmation
-remain explicit workspace interactions.
+Let users save and restore named workspaces while preserving explicit control
+over session layout and forwarding intent.
 
 ### User Scenarios
 
-- Store a command globally or for one host.
-- Preview variable expansion before sending a command.
-- Execute a multi-line snippet only after confirmation.
 - Restore named workspaces with Sessions, splits, and saved forwarding intent.
 
 ### Features
 
-- Global and host-scoped Snippets.
-- Categories, search, favorites, and recent snippets.
-- Safe variables such as host name, username, date, and current path.
-- Preview and confirmation for multi-line or destructive snippets.
 - Workspace names and explicit save/restore actions.
 - Restore Session layout and forwarding profiles without silently starting
   unsafe listeners.
 
 ### Architecture Impact
 
-- Add versioned local Snippet and Workspace stores.
-- Keep command expansion in a pure, tested renderer-side module.
-- Keep command execution through the existing owner-scoped Session IPC.
+- Add a versioned local Workspace store compatible with existing recovery data.
+- Keep saved layout and forwarding intent separate from live session resources.
 - Add explicit workspace migration versions instead of mutating old files in
   place without validation.
-- Activate Host snippet associations only after a real Snippet entity exists;
-  a stored collection name alone is not an executable capability.
 
 ### Acceptance
 
-- Snippets never execute on single click without the configured confirmation.
-- Host-scoped snippets cannot be executed against another host accidentally.
 - Restoring a workspace is idempotent and respects active/background ordering.
 - Saved forwarding intent is displayed before any listener is started.
 
@@ -648,8 +632,8 @@ adding a new product subsystem.
   process implementation details.
 - Every persisted data structure has validation, migration coverage, and a
   backward-compatible failure mode.
-- Persisted Host charset, theme, and Snippet association fields must be labelled
-  as reserved until a consuming engine makes them effective.
+- Persisted Host charset and theme fields must be labelled as reserved until a
+  consuming engine makes them effective.
 - The two-column desktop workspace is a cross-version layout contract:
   management features render in the right Workspace, while active SSH Sessions
   retain their terminal-first surface.
@@ -671,8 +655,7 @@ adding a new product subsystem.
    lifecycle is the proving ground for generalized SSH connection leases.
 4. Build v0.7 SFTP on the generalized lease, typed IPC, and owner-cleanup model;
    do not build file UI against transient terminal-session ownership.
-5. Add real Snippet entities and named Workspaces in v0.8, then activate the
-   currently reserved Host associations.
+5. Implement named Workspaces and saved forwarding intent in v0.8.
 6. Freeze features for v0.9 and close signing, native smoke, migrations,
    accessibility, performance, security, diagnostics, and release operations.
 

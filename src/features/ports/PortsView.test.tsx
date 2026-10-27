@@ -5,6 +5,63 @@ import { I18nProvider } from "../../i18n"
 import { PortsView } from "./PortsView"
 
 describe("PortsView", () => {
+  it("connects a PF workspace without a terminal, retains scan results, and leaves release to explicit close", async () => {
+    let connected!: () => void
+    const ports = {
+      openWorkspace: vi.fn().mockReturnValueOnce(new Promise<void>((resolve) => { connected = resolve })).mockResolvedValue(undefined),
+      closeWorkspace: vi.fn(),
+      listForHost: vi.fn(async () => []),
+      scan: vi.fn(async () => [{ id: "node", remoteAddress: "127.0.0.1", remotePort: 3000, process: "node", source: "ss", status: "discovered" }])
+    }
+    const session = { id: "pf", hostId: "host-a", label: "G11", kind: "pf" as const, state: "disconnected" as const, forwardingStatus: "stopped" as const }
+    const bridge = { ports } as unknown as RockerBridge
+    const view = render(<I18nProvider><PortsView bridge={bridge} mode="host" hostId="host-a" session={session} /></I18nProvider>)
+    expect(screen.getByRole("button", { name: "Connecting SSH..." })).toBeDisabled()
+    expect(ports.scan).not.toHaveBeenCalled()
+    connected()
+    const scan = await screen.findByRole("button", { name: "Scan remote services" })
+    fireEvent.click(scan)
+    expect(await screen.findByText("node")).toBeInTheDocument()
+    expect(ports.scan).toHaveBeenCalledWith({ workspaceId: "pf" })
+    view.rerender(<I18nProvider><PortsView bridge={bridge} mode="host" hostId="host-a" session={{ ...session, label: "Renamed" }} /></I18nProvider>)
+    expect(screen.getByText("node")).toBeInTheDocument()
+    expect(ports.openWorkspace).toHaveBeenCalledTimes(2)
+    view.unmount()
+    expect(ports.closeWorkspace).not.toHaveBeenCalled()
+  })
+
+  it("reports PF authentication failure and allows retry from Scan", async () => {
+    const ports = {
+      openWorkspace: vi.fn().mockRejectedValueOnce(new Error("Authentication failed")).mockResolvedValue(undefined),
+      listForHost: vi.fn(async () => []),
+      scan: vi.fn(async () => [])
+    }
+    const session = { id: "pf", hostId: "host-a", label: "G11", kind: "pf" as const, state: "disconnected" as const, forwardingStatus: "stopped" as const }
+    render(<I18nProvider><PortsView bridge={{ ports } as unknown as RockerBridge} mode="host" hostId="host-a" session={session} /></I18nProvider>)
+    expect(await screen.findByRole("alert")).toHaveTextContent("Authentication failed")
+    fireEvent.click(await screen.findByRole("button", { name: "Scan remote services" }))
+    await waitFor(() => expect(ports.scan).toHaveBeenCalledWith({ workspaceId: "pf" }))
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it("opens and edits a legacy autoStart profile without starting it or resending the field", async () => {
+    const profile = { ...profileFixture(), autoStart: true }
+    const ports = {
+      listForHost: vi.fn(async () => [{ profile }]),
+      updateProfile: vi.fn(async (_id: string, _request: object) => profile),
+      startProfile: vi.fn()
+    }
+    render(<I18nProvider><PortsView bridge={{ ports } as unknown as RockerBridge} mode="host" hostId="host-a" session={sessionFixture()} /></I18nProvider>)
+    expect(await screen.findByText("Web console")).toBeInTheDocument()
+    expect(screen.queryByText("Policy")).not.toBeInTheDocument()
+    expect(ports.startProfile).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "Edit forwarding profile" }))
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }))
+    await waitFor(() => expect(ports.updateProfile).toHaveBeenCalledOnce())
+    expect(ports.updateProfile.mock.calls[0][1]).not.toHaveProperty("autoStart")
+    expect(ports.startProfile).not.toHaveBeenCalled()
+  })
   it("opens details separately from starting and pausing a saved rule", async () => {
     const startProfile = vi.fn(async () => ({
       id: "runtime-1",
@@ -39,6 +96,7 @@ describe("PortsView", () => {
     onOpenSession.mockClear()
     fireEvent.click(screen.getByRole("button", { name: "Start forwarding" }))
     expect(startProfile).toHaveBeenCalledWith("profile-1")
+    expect(startProfile).toHaveBeenCalledOnce()
     const pause = await screen.findByRole("button", { name: "Pause forwarding" })
     expect(onOpenSession).not.toHaveBeenCalled()
     fireEvent.click(pause)
@@ -138,7 +196,7 @@ describe("PortsView", () => {
   })
 
   it("saves a Host-local profile without starting it", async () => {
-    const createProfile = vi.fn(async () => profileFixture())
+    const createProfile = vi.fn(async (_hostId: string, _request: Record<string, unknown>) => profileFixture())
     const startProfile = vi.fn()
     const bridge = {
       ports: {
@@ -156,6 +214,7 @@ describe("PortsView", () => {
     render(<I18nProvider><PortsView bridge={bridge} mode="host" hostId="host-a" session={sessionFixture()} onOpenSession={onOpenSession} /></I18nProvider>)
     expect(screen.getByText("Rocker / Port Forwarding / G11")).toBeInTheDocument()
     fireEvent.click(await screen.findByRole("button", { name: "New forwarding" }))
+    expect(screen.queryByLabelText("Start when requested")).not.toBeInTheDocument()
     fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: "Web console" } })
     fireEvent.change(screen.getByLabelText("Remote address"), { target: { value: "127.0.0.1" } })
     fireEvent.change(screen.getByLabelText("Remote port"), { target: { value: "8080" } })
@@ -163,6 +222,8 @@ describe("PortsView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }))
 
     expect(await createProfile).toHaveBeenCalledWith("host-a", expect.objectContaining({ name: "Web console", remotePort: 8080 }))
+    expect(createProfile.mock.calls[0]?.[1]).not.toHaveProperty("autoStart")
+    expect(screen.queryByText("Policy")).not.toBeInTheDocument()
     expect(startProfile).not.toHaveBeenCalled()
     await waitFor(() => expect(onOpenSession).toHaveBeenCalledWith(profileFixture(), undefined))
   })
@@ -192,6 +253,7 @@ describe("PortsView", () => {
 
     expect(await createProfile).toHaveBeenCalled()
     expect(startProfile).toHaveBeenCalledWith(created.id)
+    expect(startProfile).toHaveBeenCalledOnce()
   })
 
   it("does not expose profile creation without a Host session", async () => {
@@ -262,6 +324,7 @@ describe("PortsView", () => {
     fireEvent.click(resumeButton)
 
     expect(resume).toHaveBeenCalledWith("forward-1")
+    expect(resume).toHaveBeenCalledOnce()
   })
 
   it("keeps a suspended forward visible after its last terminal closes", async () => {

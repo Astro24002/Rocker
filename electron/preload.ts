@@ -40,6 +40,8 @@ const bridge: RockerBridge = {
     duplicateInNewWindow: (request) => ipcRenderer.invoke(ipcChannels.sessionDuplicateWindow, request)
   },
   ports: {
+    openWorkspace: (workspaceId, hostId) => ipcRenderer.invoke(ipcChannels.portsOpenWorkspace, workspaceId, hostId),
+    closeWorkspace: (workspaceId) => ipcRenderer.invoke(ipcChannels.portsCloseWorkspace, workspaceId),
     scan: (connectionId) => ipcRenderer.invoke(ipcChannels.portsScan, connectionId),
     start: (connectionId, spec) => ipcRenderer.invoke(ipcChannels.portsStart, connectionId, spec),
     resume: (forwardingId) => ipcRenderer.invoke(ipcChannels.portsResume, forwardingId),

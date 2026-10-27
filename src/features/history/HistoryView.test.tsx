@@ -36,8 +36,24 @@ describe("HistoryView", () => {
     render(<I18nProvider><HistoryView items={[item]} hosts={[host]} onReconnect={vi.fn()} onClear={vi.fn()} /></I18nProvider>)
 
     expect(screen.getByText("主机", { selector: ".history-heading span" })).toBeInTheDocument()
-    expect(screen.getByText("连接时间", { selector: ".history-heading span" })).toBeInTheDocument()
+    expect(screen.getByText("时间", { selector: ".history-heading span" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "清除历史记录" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "重新连接" })).toBeInTheDocument()
+  })
+
+  it("shows legacy duration as unknown and interrupted duration as a lower bound", () => {
+    const interrupted = {
+      ...item,
+      id: "history-interrupted",
+      durationMs: 15_000,
+      outcome: "disconnected" as const,
+      timingVersion: 1 as const,
+      endReason: "interrupted" as const
+    }
+    render(<I18nProvider><HistoryView items={[{ ...item, durationMs: 0 }, interrupted]} hosts={[host]} onReconnect={vi.fn()} onClear={vi.fn()} /></I18nProvider>)
+
+    expect(screen.getByText("Unknown")).toBeInTheDocument()
+    expect(screen.getByText("At least 15s")).toBeInTheDocument()
+    expect(screen.getByText("Interrupted")).toBeInTheDocument()
   })
 })

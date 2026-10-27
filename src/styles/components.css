@@ -2984,7 +2984,7 @@ textarea:focus-visible {
 
 .ports-host-table .ports-heading,
 .ports-profile-row {
-  grid-template-columns: minmax(150px, 1fr) minmax(240px, 1.45fr) 100px 110px 220px;
+  grid-template-columns: minmax(150px, 1fr) minmax(240px, 1.45fr) 100px 220px;
 }
 
 .port-profile-cell,

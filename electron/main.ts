@@ -11,6 +11,7 @@ import { JsonCredentialValueStore, JsonVaultStore } from "./storage/credential-s
 import { ConfigBundleService, credentialsForHosts, hostKeysForHosts } from "./storage/config-bundle"
 import { ConfigImportJournalStore } from "./storage/config-import-journal"
 import { HistoryStore } from "./storage/history-store"
+import { SessionHistoryRecorder } from "./ssh/session-history-recorder"
 import { ForwardingProfileStore } from "./storage/forwarding-profile-store"
 import { createHostStore } from "./storage/host-store"
 import { createSafeStorageCipher } from "./storage/safe-storage"
@@ -42,6 +43,8 @@ interface ApplicationRuntime {
   windows: WorkspaceWindowManager
   diagnostics: DiagnosticLogger
   forwardingProfiles: ForwardingProfileStore
+  history: SessionHistoryRecorder
+  ports: PortService
 }
 
 let runtime: ApplicationRuntime | undefined
@@ -90,6 +93,7 @@ async function startApplication(): Promise<void> {
   const mutations = new SerializedOperationQueue()
   const hosts = createHostStore(resolvedUserDataPath, onStorageDiagnostic)
   const forwardingProfiles = new ForwardingProfileStore(join(resolvedUserDataPath, "forwarding.json"), onStorageDiagnostic)
+  const historyStore = new HistoryStore(join(resolvedUserDataPath, "history.json"), onStorageDiagnostic)
   const credentials = new CredentialVault(
     new JsonCredentialValueStore(join(resolvedUserDataPath, "credentials.json"), onStorageDiagnostic),
     createSafeStorageCipher(),
@@ -137,6 +141,17 @@ async function startApplication(): Promise<void> {
     connections,
     onEvent: (event) => recordSessionDiagnostic(diagnostics, event)
   })
+  const history = new SessionHistoryRecorder(historyStore, {
+    onError: (error) => recordUnexpectedStorageFailure(diagnostics, "history", "session-recorder", error)
+  })
+  try {
+    await history.recoverInterrupted()
+  } catch (error) {
+    recordUnexpectedStorageFailure(diagnostics, "history", "startup-recovery", error)
+  }
+  sessions.onEvent(({ owner, event }) => {
+    if (event.kind === "state") history.recordSessionEvent({ owner, event }, sessions.hostIdForSession(event.sessionId))
+  })
   const forwarding = new ForwardingManager(connections, {
     onEvent: (event) => recordForwardingDiagnostic(diagnostics, event)
   })
@@ -160,6 +175,7 @@ async function startApplication(): Promise<void> {
     importCredentials: (values) => credentials.importValues(values),
     journal: importJournal
   })
+  const ports = new PortService(connections)
   windows = new WorkspaceWindowManager({
     snapshots,
     createWindow: createNativeWindow,
@@ -171,12 +187,14 @@ async function startApplication(): Promise<void> {
     preserveLastWindowWorkspace: process.platform !== "darwin",
     workspacePersistenceBlocked: initialWorkspaceResult.status === "blocked",
     onWindowClosed: async (ownerWebContentsId) => {
+      await ports.releaseWebContents(ownerWebContentsId)
       await sftp.releaseWebContents(ownerWebContentsId)
       await forwarding.releaseWebContents(ownerWebContentsId)
       await sessions.releaseWebContents(ownerWebContentsId)
       await connections.releaseWebContents(ownerWebContentsId)
     },
     onRendererReleased: async (owner) => {
+      await ports.releaseOwner(owner)
       await sftp.releaseOwner(owner)
       await forwarding.releaseOwner(owner)
       await sessions.releaseOwner(owner)
@@ -190,11 +208,11 @@ async function startApplication(): Promise<void> {
     hostKeys,
     sessions,
     connections,
-    ports: new PortService(connections),
+    ports,
     forwarding,
     sftp,
     forwardingProfiles,
-    history: new HistoryStore(join(resolvedUserDataPath, "history.json"), onStorageDiagnostic),
+    history,
     settings,
     diagnostics,
     mutations,
@@ -244,7 +262,7 @@ async function startApplication(): Promise<void> {
   app.on("activate", () => {
     if (windows.ownerWebContentsIds().length === 0) windows.createNew()
   })
-  runtime = { connections, sessions, forwarding, sftp, snapshots, windows, diagnostics, forwardingProfiles }
+  runtime = { connections, sessions, forwarding, sftp, snapshots, windows, diagnostics, forwardingProfiles, history, ports }
   if (pendingFocus) {
     pendingFocus = false
     windows.focusMostRecentOrCreate()
@@ -334,11 +352,26 @@ async function shutdownApplication(applicationRuntime: ApplicationRuntime): Prom
     // Profile writes are best effort during shutdown; active transports still need cleanup.
   }
   await Promise.all(applicationRuntime.windows.ownerWebContentsIds().map(async (ownerWebContentsId) => {
+    await applicationRuntime.ports.releaseWebContents(ownerWebContentsId)
     await applicationRuntime.sftp.releaseWebContents(ownerWebContentsId)
     await applicationRuntime.forwarding.releaseWebContents(ownerWebContentsId)
     await applicationRuntime.sessions.releaseWebContents(ownerWebContentsId)
     await applicationRuntime.connections.releaseWebContents(ownerWebContentsId)
   }))
+  let historyFlushTimer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      applicationRuntime.history.flush(),
+      new Promise<never>((_resolve, reject) => {
+        historyFlushTimer = setTimeout(() => reject(new Error("History flush timed out")), 3_000)
+      })
+    ])
+  } catch (error) {
+    recordUnexpectedStorageFailure(applicationRuntime.diagnostics, "history", "shutdown-flush", error)
+    // History is best effort during shutdown; it must not hold transports open.
+  } finally {
+    if (historyFlushTimer) clearTimeout(historyFlushTimer)
+  }
   try {
     await applicationRuntime.diagnostics.close()
   } catch {

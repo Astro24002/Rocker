@@ -25,11 +25,10 @@ export type CommandId =
   | "navigation.history"
   | "navigation.ports"
   | "navigation.settings"
-  | "navigation.snippets"
   | "palette.open"
 
 export type CommandCategory = "terminal" | "session" | "navigation" | "palette"
-export type NavigationCommand = "hosts" | "trust" | "history" | "connections" | "port-forwarding" | "settings" | "sftp" | "snippets" | "terminal"
+export type NavigationCommand = "hosts" | "trust" | "history" | "connections" | "port-forwarding" | "settings" | "sftp" | "terminal"
 
 export interface TerminalCommandSurface {
   hasSelection(): boolean
@@ -319,15 +318,6 @@ export const commandRegistry: readonly CommandDefinition[] = [
     category: "navigation",
     isEnabled: alwaysEnabled,
     execute: ({ actions }) => actions.navigation.navigate("settings")
-  },
-  {
-    id: "navigation.snippets",
-    label: "Snippets",
-    labelKey: "nav.snippets",
-    category: "navigation",
-    keywords: ["commands", "templates"],
-    isEnabled: alwaysEnabled,
-    execute: ({ actions }) => actions.navigation.navigate("snippets")
   },
   {
     id: "palette.open",

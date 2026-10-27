@@ -28,13 +28,13 @@ export function HistoryView({ items, hosts, disabled = false, reconnectDisabled 
       <div className="history-content">
         <label className="search-field"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("common.search")} /></label>
         <div className="history-table">
-          <div className="history-heading"><span>{t("history.host")}</span><span>{t("history.connected")}</span><span>{t("history.duration")}</span><span>{t("history.outcome")}</span><span /></div>
+          <div className="history-heading"><span>{t("history.host")}</span><span>{t("history.time")}</span><span>{t("history.duration")}</span><span>{t("history.outcome")}</span><span /></div>
           {rows.map(({ item, host }) => (
             <div key={item.id} className="history-row">
               <span className="history-host"><Clock3 size={14} /><strong>{host?.name ?? t("history.removedHost")}</strong><small>{host?.host ?? item.hostId}</small></span>
               <span>{new Date(item.connectedAt).toLocaleString(locale)}</span>
-              <span>{formatDuration(item.durationMs)}</span>
-              <span className="history-outcome" data-outcome={item.outcome}>{formatOutcome(item.outcome, t)}</span>
+              <span>{formatHistoryDuration(item, t)}</span>
+              <span className="history-outcome" data-outcome={item.outcome}>{formatOutcome(item, t)}</span>
               <IconButton label={t("history.reconnect")} disabled={!host || reconnectDisabled} onClick={() => { if (host && !reconnectDisabled) onReconnect(host) }}><RotateCcw size={14} /></IconButton>
             </div>
           ))}
@@ -50,8 +50,15 @@ function formatDuration(milliseconds: number): string {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
-function formatOutcome(outcome: ConnectionHistoryItem["outcome"], translate: ReturnType<typeof useI18n>["t"]): string {
-  if (outcome === "connected") return translate("history.outcomeConnected")
-  if (outcome === "failed") return translate("history.outcomeFailed")
+function formatHistoryDuration(item: ConnectionHistoryItem, translate: ReturnType<typeof useI18n>["t"]): string {
+  if (item.timingVersion !== 1 && item.durationMs === 0) return translate("history.durationUnknown")
+  const duration = formatDuration(item.durationMs)
+  return item.endReason === "interrupted" ? `${translate("history.atLeast")} ${duration}` : duration
+}
+
+function formatOutcome(item: ConnectionHistoryItem, translate: ReturnType<typeof useI18n>["t"]): string {
+  if (item.endReason === "interrupted") return translate("history.outcomeInterrupted")
+  if (item.outcome === "connected") return translate("history.outcomeConnected")
+  if (item.outcome === "failed") return translate("history.outcomeFailed")
   return translate("history.outcomeDisconnected")
 }

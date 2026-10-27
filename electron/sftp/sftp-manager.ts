@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { lstat as lstatLocal, mkdir as mkdirLocal, readdir as readdirLocal, stat as statLocal } from "node:fs/promises"
 import { basename, dirname as dirnameLocal, join as joinLocal, posix } from "node:path"
 import type { Client, FileEntryWithStats, SFTPWrapper } from "ssh2"
+import { SftpCleanupError, sftpOperation, trackSftpClosure } from "./sftp-operation"
 import { sameRuntimeOwner, type RuntimeOwner } from "../runtime/owner"
 import type {
   ConnectionAcquireRequest,
@@ -334,9 +335,12 @@ export class SftpManager {
 
   public async cancelTransfer(taskId: string, owner: RuntimeOwner): Promise<void> {
     const record = this.requireTransfer(taskId, owner)
-    if (record.task.status === "completed" || record.task.status === "failed" || record.task.status === "cancelled") return
+    if (record.task.status === "completed" || record.task.status === "failed" || record.task.status === "cancelled") {
+      await record.runPromise
+      return
+    }
     record.controller.abort()
-    record.channel?.end()
+    record.channel?.destroy()
     this.updateTask(record, { status: "cancelled", error: undefined })
     if (record.runPromise) await record.runPromise
   }
@@ -346,6 +350,8 @@ export class SftpManager {
     if (record.task.status !== "failed" && record.task.status !== "cancelled") {
       throw new Error("Only failed or cancelled transfers can be retried")
     }
+    await record.runPromise
+    if (record.task.status !== "failed" && record.task.status !== "cancelled") throw new Error("SFTP transfer is already retrying")
     record.controller = new AbortController()
     this.updateTask(record, {
       status: "queued",
@@ -354,6 +360,7 @@ export class SftpManager {
       attempt: record.task.attempt + 1
     })
     record.runPromise = this.runTransfer(record)
+    void record.runPromise.catch(() => undefined)
     return { kind: "started", task: { ...record.task } }
   }
 
@@ -461,6 +468,7 @@ export class SftpManager {
     this.transfers.set(task.id, record)
     this.emit(owner, { kind: "transfer", task: { ...task } })
     record.runPromise = this.runTransfer(record)
+    void record.runPromise.catch(() => undefined)
     return { kind: "started", task: { ...task } }
   }
 
@@ -497,6 +505,7 @@ export class SftpManager {
     this.transfers.set(task.id, record)
     this.emit(owner, { kind: "transfer", task: { ...task } })
     record.runPromise = this.runTransfer(record)
+    void record.runPromise.catch(() => undefined)
     return { kind: "started", task: { ...task } }
   }
 
@@ -504,13 +513,17 @@ export class SftpManager {
     if (record.controller.signal.aborted || record.task.status === "cancelled") return
     this.updateTask(record, { status: "running", error: undefined })
     try {
-      const lease = await this.connections.acquire({ hostId: record.task.hostId, owner: record.owner, kind: "sftp" })
+      const lease = await this.connections.acquire({ hostId: record.task.hostId, owner: record.owner, kind: "sftp", signal: record.controller.signal })
       record.lease = lease
       if (record.controller.signal.aborted) return
       await this.withSftpLease(lease, async (sftp) => {
         record.channel = sftp
+        if (record.controller.signal.aborted) {
+          sftp.destroy()
+          return
+        }
         if (record.task.direction === "move") {
-          await moveRemoteEntry(sftp, record.task.sourcePath, record.task.remotePath)
+          await moveRemoteEntry(sftp, record.task.sourcePath, record.task.remotePath, record.controller.signal)
           return
         }
         if (!record.localPath) throw new Error("The local transfer path is missing")
@@ -524,11 +537,11 @@ export class SftpManager {
         } else if (record.task.entryType === "directory") {
           await this.downloadDirectory(sftp, record)
         } else {
-          const totalBytes = await this.remoteFileSize(sftp, record.task.remotePath)
+          const totalBytes = await this.remoteFileSize(sftp, record.task.remotePath, record.controller.signal)
           this.updateTask(record, { totalBytes })
           await this.transferFile(sftp, record, "download", record.localPath, record.task.remotePath, 0, totalBytes, totalBytes)
         }
-      })
+      }, record.controller.signal)
       if (!record.controller.signal.aborted && !isTransferCancelled(record)) {
         this.updateTask(record, { status: "completed", error: undefined })
       }
@@ -536,6 +549,7 @@ export class SftpManager {
       if (!record.controller.signal.aborted && !isTransferCancelled(record)) {
         this.updateTask(record, { status: "failed", error: errorMessage(error) })
       }
+      if (error instanceof SftpCleanupError) throw error
     } finally {
       record.channel = undefined
       if (record.lease) {
@@ -545,17 +559,10 @@ export class SftpManager {
     }
   }
 
-  private async remoteFileSize(sftp: SFTPWrapper, path: string): Promise<number> {
-    return new Promise<number>((resolve, reject) => {
-      sftp.stat(path, (error, stats) => {
-        if (error) {
-          reject(error)
-          return
-        }
-        if (!stats.isFile()) reject(new Error("Only files can be downloaded"))
-        else resolve(stats.size)
-      })
-    })
+  private async remoteFileSize(sftp: SFTPWrapper, path: string, signal: AbortSignal): Promise<number> {
+    const stats = await sftpOperation<import("ssh2").Stats>(sftp, signal, (done) => sftp.stat(path, done))
+    if (!stats.isFile()) throw new Error("Only files can be downloaded")
+    return stats.size
   }
 
   private async uploadDirectory(sftp: SFTPWrapper, record: SftpTransferRecord): Promise<void> {
@@ -563,10 +570,10 @@ export class SftpManager {
     if (!sourcePath) throw new Error("The local upload source is missing")
     const manifest = await collectLocalDirectory(sourcePath, record.controller.signal)
     this.updateTask(record, { totalBytes: manifest.totalBytes })
-    await ensureRemoteDirectory(sftp, record.task.remotePath)
+    await ensureRemoteDirectory(sftp, record.task.remotePath, record.controller.signal)
     for (const segments of manifest.directories.slice(1)) {
       assertTransferActive(record.controller.signal)
-      await ensureRemoteDirectory(sftp, joinRemotePath(record.task.remotePath, segments))
+      await ensureRemoteDirectory(sftp, joinRemotePath(record.task.remotePath, segments), record.controller.signal)
     }
     let completedBytes = 0
     for (const file of manifest.files) {
@@ -605,9 +612,10 @@ export class SftpManager {
     totalBytes: number,
     fileSize: number
   ): Promise<number> {
-    await runFastTransfer(sftp, direction, localPath, remotePath, (bytesTransferred) => {
+    await runFastTransfer(sftp, direction, localPath, remotePath, record.controller.signal, (bytesTransferred) => {
       this.updateTask(record, { bytesTransferred: completedBytes + bytesTransferred, totalBytes })
     })
+    assertTransferActive(record.controller.signal)
     const nextCompletedBytes = completedBytes + fileSize
     this.updateTask(record, { bytesTransferred: nextCompletedBytes, totalBytes })
     return nextCompletedBytes
@@ -617,13 +625,15 @@ export class SftpManager {
     return this.withSftpLease(record.lease, operation)
   }
 
-  private async withSftpLease<T>(lease: ConnectionLease, operation: (sftp: SFTPWrapper) => Promise<T>): Promise<T> {
+  private async withSftpLease<T>(lease: ConnectionLease, operation: (sftp: SFTPWrapper) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const client = this.connections.getClientForConnection(lease.connectionId)
     const sftp = await openSftp(client)
+    const close = trackSftpClosure(sftp)
     try {
+      if (signal) assertTransferActive(signal)
       return await operation(sftp)
     } finally {
-      sftp.end()
+      await close()
     }
   }
 
@@ -640,6 +650,7 @@ export class SftpManager {
   }
 
   private updateTask(record: SftpTransferRecord, patch: Partial<SftpTransferTask>): void {
+    if (record.controller.signal.aborted && patch.status !== "cancelled") return
     record.task = {
       ...record.task,
       ...patch,
@@ -676,19 +687,30 @@ function openSftp(client: Client): Promise<SFTPWrapper> {
   })
 }
 
-function runFastTransfer(
+async function runFastTransfer(
   sftp: SFTPWrapper,
   direction: "upload" | "download",
   localPath: string,
   remotePath: string,
+  signal: AbortSignal,
   onProgress: (bytesTransferred: number, totalBytes: number) => void
 ): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const step = (total: number, _chunk: number, fileSize: number): void => onProgress(total, fileSize)
-    const done = (error?: Error | null): void => error ? reject(error) : resolve()
-    if (direction === "upload") sftp.fastPut(localPath, remotePath, { step }, done)
-    else sftp.fastGet(remotePath, localPath, { step }, done)
-  })
+  let finished = false
+  try {
+    await sftpOperation<void>(sftp, signal, (complete) => {
+      const step = (total: number, _chunk: number, fileSize: number): void => {
+        if (!finished && !signal.aborted) onProgress(total, fileSize)
+      }
+      const done = (error?: Error | null): void => {
+        finished = true
+        complete(error, undefined)
+      }
+      if (direction === "upload") sftp.fastPut(localPath, remotePath, { step }, done)
+      else sftp.fastGet(remotePath, localPath, { step }, done)
+    })
+  } finally {
+    finished = true
+  }
 }
 
 async function collectLocalDirectory(rootPath: string, signal: AbortSignal): Promise<TransferManifest> {
@@ -723,7 +745,7 @@ async function collectRemoteDirectory(sftp: SFTPWrapper, rootPath: string, signa
   const manifest: TransferManifest = { directories: [[]], files: [], totalBytes: 0 }
   const visit = async (directoryPath: string, pathSegments: string[]): Promise<void> => {
     assertTransferActive(signal)
-    const entries = await readRemoteDirectory(sftp, directoryPath)
+    const entries = await readRemoteDirectory(sftp, directoryPath, signal)
     for (const entry of entries) {
       assertTransferActive(signal)
       if (entry.filename === "." || entry.filename === "..") continue
@@ -745,36 +767,23 @@ async function collectRemoteDirectory(sftp: SFTPWrapper, rootPath: string, signa
   return manifest
 }
 
-function readRemoteDirectory(sftp: SFTPWrapper, path: string): Promise<FileEntryWithStats[]> {
-  return new Promise<FileEntryWithStats[]>((resolve, reject) => {
-    sftp.readdir(path, (error, entries) => error ? reject(error) : resolve(entries))
-  })
+function readRemoteDirectory(sftp: SFTPWrapper, path: string, signal: AbortSignal): Promise<FileEntryWithStats[]> {
+  return sftpOperation(sftp, signal, (done) => sftp.readdir(path, done))
 }
 
-function ensureRemoteDirectory(sftp: SFTPWrapper, path: string): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    sftp.stat(path, (error, stats) => {
-      if (!error) {
-        if (stats.isDirectory()) resolve()
-        else reject(new Error(`Remote destination is not a directory: ${path}`))
-        return
-      }
-      if (!isMissingRemote(error)) {
-        reject(error)
-        return
-      }
-      sftp.mkdir(path, { mode: 0o755 }, (mkdirError) => {
-        if (!mkdirError) {
-          resolve()
-          return
-        }
-        sftp.stat(path, (statError, nextStats) => {
-          if (!statError && nextStats.isDirectory()) resolve()
-          else reject(mkdirError)
-        })
-      })
-    })
-  })
+async function ensureRemoteDirectory(sftp: SFTPWrapper, path: string, signal: AbortSignal): Promise<void> {
+  const metadata = () => sftpOperation<import("ssh2").Stats>(sftp, signal, (done) => sftp.stat(path, done))
+  try {
+    if (!(await metadata()).isDirectory()) throw new Error(`Remote destination is not a directory: ${path}`)
+    return
+  } catch (error) {
+    if (!isMissingRemote(error)) throw error
+  }
+  try {
+    await sftpOperation<void>(sftp, signal, (done) => sftp.mkdir(path, { mode: 0o755 }, (error) => done(error, undefined)))
+  } catch (error) {
+    if (signal.aborted || !(await metadata()).isDirectory()) throw error
+  }
 }
 
 async function ensureLocalDirectory(path: string): Promise<void> {
@@ -808,11 +817,9 @@ function assertTransferActive(signal: AbortSignal): void {
   if (signal.aborted) throw new Error("SFTP transfer was cancelled")
 }
 
-function moveRemoteEntry(sftp: SFTPWrapper, sourcePath: string | undefined, destinationPath: string): Promise<void> {
+function moveRemoteEntry(sftp: SFTPWrapper, sourcePath: string | undefined, destinationPath: string, signal: AbortSignal): Promise<void> {
   if (!sourcePath) return Promise.reject(new Error("The remote move source is missing"))
-  return new Promise<void>((resolve, reject) => {
-    sftp.rename(sourcePath, destinationPath, (error) => error ? reject(error) : resolve())
-  })
+  return sftpOperation<void>(sftp, signal, (done) => sftp.rename(sourcePath, destinationPath, (error) => done(error, undefined)))
 }
 
 function toDirectoryEntry(parentPath: string, entry: FileEntryWithStats): SftpDirectoryEntry {

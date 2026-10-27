@@ -16,6 +16,8 @@ export interface SshTestServerOptions {
   sftpFiles?: Record<string, string>
   sftpHome?: string
   sftpWriteDelayMs?: number
+  sftpWriteBarrier?: SftpWriteBarrier
+  execOutput?: string
 }
 
 export interface SshResourceSnapshot {
@@ -23,6 +25,63 @@ export interface SshResourceSnapshot {
   sessions: number
   shells: number
   forwards: number
+  sftpChannels: number
+  sftpHandles: number
+  sftpWritesWaiting: number
+}
+
+interface DeferredSignal {
+  promise: Promise<void>
+  resolve(): void
+  isResolved(): boolean
+}
+
+interface SftpWriteGate {
+  reached: DeferredSignal
+  released: DeferredSignal
+  entered: boolean
+}
+
+export class SftpWriteBarrier {
+  private readonly gates = new Map<string, SftpWriteGate>()
+
+  public hold(remotePath: string): void {
+    this.gates.set(remotePath, { reached: deferredSignal(), released: deferredSignal(), entered: false })
+  }
+
+  public waitUntilReached(remotePath: string): Promise<void> {
+    const gate = this.gates.get(remotePath)
+    if (!gate) throw new Error(`No SFTP write barrier is configured for ${remotePath}`)
+    return gate.reached.promise
+  }
+
+  public isWaiting(remotePath: string): boolean {
+    const gate = this.gates.get(remotePath)
+    return gate?.entered === true && !gate.released.isResolved()
+  }
+
+  public release(remotePath: string): void {
+    this.gates.get(remotePath)?.released.resolve()
+  }
+
+  public releaseAll(): void {
+    for (const gate of this.gates.values()) gate.released.resolve()
+  }
+
+  public async pause(remotePath: string, signal: AbortSignal): Promise<void> {
+    const gate = this.gates.get(remotePath)
+    if (!gate) return
+    if (!gate.entered) {
+      gate.entered = true
+      gate.reached.resolve()
+    }
+    if (signal.aborted) return
+    await new Promise<void>((resolve) => {
+      const finish = (): void => { signal.removeEventListener("abort", finish); resolve() }
+      signal.addEventListener("abort", finish, { once: true })
+      void gate.released.promise.then(finish)
+    })
+  }
 }
 
 export interface SshTestServer {
@@ -31,6 +90,7 @@ export interface SshTestServer {
   readonly connectionCount: number
   readonly ptyRequests: PseudoTtyInfo[]
   readonly ptyResizes: WindowChangeInfo[]
+  readonly pendingShellCount: number
   close(): Promise<void>
   holdAuthentication(): void
   releaseAuthentication(): void
@@ -59,6 +119,8 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
   const activeSessions = new Set<Session>()
   const activeShells = new Set<ServerChannel>()
   const activeForwards = new Set<ServerChannel>()
+  const activeSftpChannels = new Set<SFTPWrapper>()
+  const sftpResources = { handles: 0, writesWaiting: 0, cleanupErrors: [] as unknown[] }
   const ptyRequests: PseudoTtyInfo[] = []
   const ptyResizes: WindowChangeInfo[] = []
   const pendingAuthentications: AuthContext[] = []
@@ -158,10 +220,11 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
           activeShells.delete(channel)
           connectionShells.delete(channel)
         })
-        channel.write("ok\n")
+        channel.write(options.execOutput ?? "ok\n")
         queueMicrotask(() => {
           channel.exit(0)
           channel.end()
+          channel.close()
           // ssh2 keeps server-side exec streams half-open until the client
           // acknowledges the close. The command itself is complete once EOF
           // has been sent, so stop counting it as an active fixture resource.
@@ -171,7 +234,10 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
       })
       session.on("sftp", (sftpAccept, sftpReject) => {
         try {
-          installSftpFixture(sftpAccept(), sftpRoot, options.sftpHome, options.sftpWriteDelayMs)
+          const sftp = sftpAccept()
+          activeSftpChannels.add(sftp)
+          sftp.once("close", () => activeSftpChannels.delete(sftp))
+          installSftpFixture(sftp, sftpRoot, options.sftpHome, options.sftpWriteDelayMs, options.sftpWriteBarrier, sftpResources)
         } catch {
           sftpReject()
         }
@@ -195,6 +261,7 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
     get connectionCount() { return connectionCount },
     ptyRequests,
     ptyResizes,
+    get pendingShellCount() { return pendingShells.length },
     holdAuthentication() {
       authenticationHeld = true
     },
@@ -215,7 +282,15 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
       keepaliveResponse = enabled
     },
     resourceSnapshot() {
-      return { clients: activeClients.size, sessions: activeSessions.size, shells: activeShells.size, forwards: activeForwards.size }
+      return {
+        clients: activeClients.size,
+        sessions: activeSessions.size,
+        shells: activeShells.size,
+        forwards: activeForwards.size,
+        sftpChannels: activeSftpChannels.size,
+        sftpHandles: sftpResources.handles,
+        sftpWritesWaiting: sftpResources.writesWaiting
+      }
     },
     resizePty(cols, rows) {
       const info = { cols, rows, width: 0, height: 0 }
@@ -226,6 +301,7 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
       for (const socket of sockets) socket.destroy()
     },
     async close() {
+      options.sftpWriteBarrier?.releaseAll()
       authenticationHeld = false
       for (const context of pendingAuthentications.splice(0)) context.reject()
       shellHoldCount = 0
@@ -235,13 +311,20 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
         if (server.address() === null) return resolve()
         server.close(() => resolve())
       })
-      while (sockets.size > 0) await new Promise((resolve) => setImmediate(resolve))
+      const cleanupDeadline = Date.now() + 1_500
+      while (sockets.size > 0 || activeSftpChannels.size > 0 || sftpResources.handles > 0 || sftpResources.writesWaiting > 0) {
+        if (Date.now() >= cleanupDeadline) {
+          throw new Error(`SSH fixture cleanup timed out: sockets=${sockets.size}, SFTP channels=${activeSftpChannels.size}, handles=${sftpResources.handles}, writes=${sftpResources.writesWaiting}`)
+        }
+        await new Promise((resolve) => setImmediate(resolve))
+      }
       for (const channel of [...activeShells, ...activeForwards]) channel.close()
       activeClients.clear()
       activeSessions.clear()
       activeShells.clear()
       activeForwards.clear()
       await rm(sftpRoot, { recursive: true, force: true })
+      if (sftpResources.cleanupErrors.length > 0) throw new AggregateError(sftpResources.cleanupErrors, "SFTP fixture handle cleanup failed")
     }
   }
 }
@@ -258,19 +341,53 @@ const SFTP_STATUS_PERMISSION_DENIED = 3
 const SFTP_STATUS_FAILURE = 4
 
 type FixtureHandle =
-  | { kind: "file"; file: FileHandle }
+  | { kind: "file"; file: FileHandle; remotePath: string }
   | { kind: "directory"; path: string; entries: string[]; index: number }
 
-function installSftpFixture(sftp: SFTPWrapper, root: string, home = "/", writeDelayMs = 0): void {
+function installSftpFixture(
+  sftp: SFTPWrapper,
+  root: string,
+  home = "/",
+  writeDelayMs = 0,
+  writeBarrier?: SftpWriteBarrier,
+  resources = { handles: 0, writesWaiting: 0, cleanupErrors: [] as unknown[] }
+): void {
   const handles = new Map<string, FixtureHandle>()
+  const closed = new AbortController()
   let nextHandle = 1
   const allocateHandle = (handle: FixtureHandle): Buffer => {
     const value = Buffer.from(`rocker-${nextHandle++}`)
     handles.set(value.toString("hex"), handle)
+    resources.handles += 1
     return value
   }
   const readHandle = (value: Buffer): FixtureHandle | undefined => handles.get(value.toString("hex"))
-  const removeHandle = (value: Buffer): void => { handles.delete(value.toString("hex")) }
+  const removeHandle = (value: Buffer): FixtureHandle | undefined => {
+    const key = value.toString("hex")
+    const handle = handles.get(key)
+    if (handle) {
+      handles.delete(key)
+    }
+    return handle
+  }
+
+  const releaseHandle = async (handle: FixtureHandle): Promise<void> => {
+    try { if (handle.kind === "file") await handle.file.close() }
+    finally { resources.handles -= 1 }
+  }
+  const closeHandles = (): void => {
+    // ssh2's server SFTP wrapper leaves the close acknowledgement to its owner.
+    sftp.end()
+    closed.abort()
+    for (const key of [...handles.keys()]) {
+      const handle = handles.get(key)
+      if (!handle) continue
+      handles.delete(key)
+      void releaseHandle(handle).catch((error: unknown) => resources.cleanupErrors.push(error))
+    }
+  }
+  sftp.once("end", closeHandles)
+  sftp.once("close", closeHandles)
 
   sftp.on("REALPATH", (id: number, remotePath: string) => {
     void Promise.resolve().then(() => {
@@ -286,6 +403,7 @@ function installSftpFixture(sftp: SFTPWrapper, root: string, home = "/", writeDe
   })
   sftp.on("OPENDIR", (id: number, remotePath: string) => {
     void readdir(fixturePath(root, remotePath)).then((entries) => {
+      if (closed.signal.aborted) return
       sftp.handle(id, allocateHandle({ kind: "directory", path: fixturePath(root, remotePath), entries, index: 0 }))
     }).catch((error: unknown) => sendSftpError(sftp, id, error))
   })
@@ -310,7 +428,8 @@ function installSftpFixture(sftp: SFTPWrapper, root: string, home = "/", writeDe
   sftp.on("OPEN", (id: number, remotePath: string, flags: number) => {
     const localPath = fixturePath(root, remotePath)
     void openFile(localPath, openFlags(flags)).then((file) => {
-      sftp.handle(id, allocateHandle({ kind: "file", file }))
+      if (closed.signal.aborted) return file.close()
+      sftp.handle(id, allocateHandle({ kind: "file", file, remotePath }))
     }).catch((error: unknown) => sendSftpError(sftp, id, error))
   })
   sftp.on("READ", (id: number, rawHandle: Buffer, offset: number, length: number) => {
@@ -336,21 +455,27 @@ function installSftpFixture(sftp: SFTPWrapper, root: string, home = "/", writeDe
         await new Promise((resolve) => setTimeout(resolve, writeDelayMs))
       }
       await handle.file.write(data, 0, data.length, offset)
-      sftp.status(id, SFTP_STATUS_OK)
+      resources.writesWaiting += 1
+      try {
+        await writeBarrier?.pause(handle.remotePath, closed.signal)
+      } finally {
+        resources.writesWaiting = Math.max(0, resources.writesWaiting - 1)
+      }
+      if (!closed.signal.aborted) sftp.status(id, SFTP_STATUS_OK)
     })().catch((error: unknown) => sendSftpError(sftp, id, error))
   })
   sftp.on("CLOSE", (id: number, rawHandle: Buffer) => {
-    const handle = readHandle(rawHandle)
+    const handle = removeHandle(rawHandle)
     if (!handle) {
       sftp.status(id, SFTP_STATUS_FAILURE, "Invalid handle")
       return
     }
-    removeHandle(rawHandle)
     if (handle.kind === "directory") {
+      resources.handles -= 1
       sftp.status(id, SFTP_STATUS_OK)
       return
     }
-    void handle.file.close().then(() => sftp.status(id, SFTP_STATUS_OK)).catch((error: unknown) => sendSftpError(sftp, id, error))
+    void releaseHandle(handle).then(() => sftp.status(id, SFTP_STATUS_OK)).catch((error: unknown) => sendSftpError(sftp, id, error))
   })
   sftp.on("REMOVE", (id: number, remotePath: string) => {
     void unlink(fixturePath(root, remotePath)).then(() => sftp.status(id, SFTP_STATUS_OK)).catch((error: unknown) => sendSftpError(sftp, id, error))
@@ -364,6 +489,21 @@ function installSftpFixture(sftp: SFTPWrapper, root: string, home = "/", writeDe
   sftp.on("RENAME", (id: number, oldPath: string, newPath: string) => {
     void rename(fixturePath(root, oldPath), fixturePath(root, newPath)).then(() => sftp.status(id, SFTP_STATUS_OK)).catch((error: unknown) => sendSftpError(sftp, id, error))
   })
+}
+
+function deferredSignal(): DeferredSignal {
+  let resolvePromise!: () => void
+  const promise = new Promise<void>((resolve) => { resolvePromise = resolve })
+  let resolved = false
+  return {
+    promise,
+    resolve() {
+      if (resolved) return
+      resolved = true
+      resolvePromise()
+    },
+    isResolved: () => resolved
+  }
 }
 
 async function respondWithStats(sftp: SFTPWrapper, id: number, localPath: string): Promise<void> {

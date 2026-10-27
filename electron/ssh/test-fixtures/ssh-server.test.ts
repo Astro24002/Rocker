@@ -9,7 +9,7 @@ afterEach(async () => {
   clients.splice(0).forEach((client) => client.end())
   const closing = servers.splice(0)
   await Promise.all(closing.map((server) => server.close()))
-  for (const server of closing) expect(server.resourceSnapshot()).toEqual({ clients: 0, sessions: 0, shells: 0, forwards: 0 })
+  for (const server of closing) expect(server.resourceSnapshot()).toMatchObject({ clients: 0, sessions: 0, shells: 0, forwards: 0, sftpChannels: 0, sftpHandles: 0, sftpWritesWaiting: 0 })
 })
 
 function connect(port: number, client = new Client()): Promise<Client> {
