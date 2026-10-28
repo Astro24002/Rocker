@@ -2973,11 +2973,15 @@ textarea:focus-visible {
 }
 
 .ports-card-grid {
+  --forwarding-card-min-width: 480px;
+  --forwarding-card-max-width: 640px;
   display: grid;
   min-width: 0;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--forwarding-card-min-width)), 1fr));
   gap: 14px;
 }
+
+.forwarding-rule-card { width: 100%; max-width: var(--forwarding-card-max-width); }
 
 .forwarding-rule-card,
 .port-discovery-card {
@@ -2998,22 +3002,26 @@ textarea:focus-visible {
 
 .forwarding-card-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.forwarding-card-icon {
-  display: grid;
-  width: 36px;
-  height: 36px;
+.forwarding-card-state {
+  width: 8px;
+  height: 8px;
   flex: 0 0 auto;
-  place-items: center;
-  border-radius: 10px;
-  color: var(--text-secondary);
-  background: var(--workspace-bg);
+  border: 2px solid var(--text-muted);
+  border-radius: 50%;
 }
 
-.forwarding-card-title { min-width: 0; }
+.forwarding-card-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
+
+.forwarding-card-state[data-status="forwarding"] { border-color: var(--success); background: var(--success); }
+.forwarding-card-state[data-status="error"] { border-color: var(--danger); background: var(--danger); }
+.forwarding-card-state[data-status="starting"],
+.forwarding-card-state[data-status="stopping"],
+.forwarding-card-state[data-status="suspended"] { border-color: var(--warning); background: var(--warning); }
 
 .forwarding-card-title h3 {
   overflow: hidden;
@@ -3026,10 +3034,10 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
-.forwarding-card-title p {
+.forwarding-card-description {
   display: -webkit-box;
   overflow: hidden;
-  margin: 4px 0 0;
+  margin: -8px 0 0 17px;
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.5;
@@ -3040,16 +3048,18 @@ textarea:focus-visible {
 
 .forwarding-card-route {
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 48px;
   margin: 0;
-  padding: 12px;
-  border-radius: 10px;
-  background: var(--workspace-bg);
+  padding: 16px 0 0;
+  border-top: 1px solid var(--line);
 }
 
 .forwarding-card-route > div {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
+  position: relative;
+  min-width: 0;
+  align-content: start;
   align-items: baseline;
   gap: 8px;
 }
@@ -3068,8 +3078,7 @@ textarea:focus-visible {
   margin: 0;
 }
 
-.forwarding-card-route > div:first-child dd { padding-left: 23px; }
-.forwarding-card-route dd svg { flex: 0 0 auto; margin-top: 3px; color: var(--text-muted); }
+.forwarding-card-route dd svg { position: absolute; left: -32px; top: 27px; color: var(--text-muted); }
 
 .forwarding-card-route code,
 .port-discovery-info code {
@@ -3081,22 +3090,27 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.forwarding-card-footer {
+.forwarding-card-toolbar {
   display: flex;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: auto;
-  padding-top: 12px;
-  border-top: 1px solid var(--line-subtle);
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
 }
 
-.forwarding-card-footer .port-status { white-space: nowrap; }
-.forwarding-card-actions { flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.forwarding-card-toolbar .port-status { white-space: nowrap; }
+.forwarding-card-toolbar .port-status[data-status="forwarding"] {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--success) 28%, var(--raised));
+  border: 1px solid color-mix(in srgb, var(--success) 65%, var(--line));
+  font-weight: 650;
+}
+.forwarding-card-actions { flex-wrap: nowrap; justify-content: flex-end; gap: 4px; }
 .forwarding-card-actions .icon-button { width: 32px; height: 32px; }
 
-.forwarding-card-footer .port-status[data-status="stopped"] {
+.forwarding-card-toolbar .port-status[data-status="stopped"] {
   color: var(--text-secondary);
   background: var(--workspace-bg);
 }

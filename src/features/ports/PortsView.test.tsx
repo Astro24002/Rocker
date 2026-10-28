@@ -106,14 +106,14 @@ describe("PortsView", () => {
     expect(onOpenSession).not.toHaveBeenCalled()
   })
 
-  it("groups by Host, showing only each Host's two newest rules until independently expanded", async () => {
+  it("groups by Host, sorting ports numerically before independently collapsing each group", async () => {
     const profiles = [
-      { ...profileFixture(), id: "a-old", name: "A old", createdAt: "2026-09-01T00:00:00Z" },
-      { ...profileFixture(), id: "b-new", hostId: "host-b", name: "B new", createdAt: "2026-09-06T00:00:00Z" },
-      { ...profileFixture(), id: "a-new", name: "A new", createdAt: "2026-09-05T00:00:00Z" },
-      { ...profileFixture(), id: "a-middle", name: "A middle", createdAt: "2026-09-03T00:00:00Z" },
-      { ...profileFixture(), id: "b-old", hostId: "host-b", name: "B old", createdAt: "2026-09-02T00:00:00Z" },
-      { ...profileFixture(), id: "b-middle", hostId: "host-b", name: "B middle", createdAt: "2026-09-04T00:00:00Z" }
+      { ...profileFixture(), id: "a-old", name: "A old", localPort: 10000, createdAt: "2026-09-01T00:00:00Z" },
+      { ...profileFixture(), id: "b-new", hostId: "host-b", name: "B new", localPort: 443, createdAt: "2026-09-06T00:00:00Z" },
+      { ...profileFixture(), id: "a-new", name: "A new", localPort: 9000, createdAt: "2026-09-05T00:00:00Z" },
+      { ...profileFixture(), id: "a-middle", name: "A middle", localPort: 80, createdAt: "2026-09-03T00:00:00Z" },
+      { ...profileFixture(), id: "b-old", hostId: "host-b", name: "B old", localPort: 10000, createdAt: "2026-09-02T00:00:00Z" },
+      { ...profileFixture(), id: "b-middle", hostId: "host-b", name: "B middle", localPort: 80, createdAt: "2026-09-04T00:00:00Z" }
     ]
     const bridge = { ports: { listOverview: vi.fn(async () => profiles.map((profile) => ({ profile }))) } } as unknown as RockerBridge
     const hosts = [
@@ -129,9 +129,9 @@ describe("PortsView", () => {
     expect(within(first).getByRole("heading", { name: "G12" })).toBeInTheDocument()
     expect(within(first).queryByText("deploy@10.0.0.2:22")).not.toBeInTheDocument()
     expect(within(first).getAllByRole("article")).toHaveLength(2)
-    expect(within(first).getByRole("article", { name: "B new" })).toHaveTextContent("127.0.0.1:18080")
-    expect(within(first).getAllByText(/^B (new|middle)$/).map((element) => element.textContent)).toEqual(["B new", "B middle"])
-    expect(within(second).getAllByText(/^A (new|middle)$/).map((element) => element.textContent)).toEqual(["A new", "A middle"])
+    expect(within(first).getByRole("article", { name: "B new" })).toHaveTextContent("127.0.0.1:443")
+    expect(within(first).getAllByText(/^B (new|middle)$/).map((element) => element.textContent)).toEqual(["B middle", "B new"])
+    expect(within(second).getAllByText(/^A (new|middle)$/).map((element) => element.textContent)).toEqual(["A middle", "A new"])
     expect(screen.queryByText("A old")).not.toBeInTheDocument()
     expect(screen.queryByText("B old")).not.toBeInTheDocument()
 
@@ -139,6 +139,7 @@ describe("PortsView", () => {
     expect(showA).toHaveAttribute("aria-expanded", "false")
     fireEvent.click(showA)
     expect(within(second).getByText("A old")).toBeInTheDocument()
+    expect(within(second).getAllByRole("article").map(element => element.getAttribute("aria-label"))).toEqual(["A middle", "A new", "A old"])
     expect(within(first).queryByText("B old")).not.toBeInTheDocument()
     expect(within(second).getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true")
     fireEvent.click(within(second).getByRole("button", { name: "Show less" }))
@@ -148,6 +149,21 @@ describe("PortsView", () => {
     expect(oldB).not.toBeNull()
     fireEvent.click(within(oldB as HTMLElement).getByRole("button", { name: "View details" }))
     expect(onOpenSession).toHaveBeenCalledWith(profiles[4], undefined)
+  })
+
+  it("sorts Host rules by numeric local port, then remote port without mutating bridge data", async () => {
+    const profiles = [
+      { ...profileFixture(), id: "high", name: "High", localPort: 10000 },
+      { ...profileFixture(), id: "same-high", name: "Same high", localPort: 443, remotePort: 9000 },
+      { ...profileFixture(), id: "low", name: "Low", localPort: 80 },
+      { ...profileFixture(), id: "same-low", name: "Same low", localPort: 443, remotePort: 80 }
+    ]
+    const rows = Object.freeze(profiles.map(profile => ({ profile })))
+    const bridge = { ports: { listForHost: vi.fn(async () => rows) } } as unknown as RockerBridge
+    render(<I18nProvider><PortsView bridge={bridge} mode="host" hostId="host-a" session={sessionFixture()} /></I18nProvider>)
+    await screen.findByRole("article", { name: "Low" })
+    expect(screen.getAllByRole("article").map(element => element.getAttribute("aria-label"))).toEqual(["Low", "Same low", "Same high", "High"])
+    expect(rows.map(row => row.profile.name)).toEqual(["High", "Same high", "Low", "Same low"])
   })
 
   it("keeps a removed Host's rules accessible under its own group", async () => {

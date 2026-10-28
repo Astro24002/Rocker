@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, Check, ChevronDown, ChevronUp, Clipboard, ExternalLink, Eye, Network, Pause, PanelTopOpen, Pencil, Play, Plus, RefreshCw, Server, Share2, Square, Trash2, X } from "lucide-react"
+import { AlertTriangle, ArrowRight, Check, ChevronDown, ChevronUp, Clipboard, ExternalLink, Eye, Pause, PanelTopOpen, Pencil, Play, Plus, RefreshCw, Server, Share2, Square, Trash2, X } from "lucide-react"
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import type { ForwardingProfileRequest, ForwardingProfileView } from "../../../electron/ports/types"
@@ -168,6 +168,12 @@ function LegacyPortsView({ bridge, connectionId, session, username, bindAddress 
   )
 }
 
+function compareForwardingPorts(a: ForwardingProfileView, b: ForwardingProfileView): number {
+  return a.profile.localPort - b.profile.localPort
+    || a.profile.remotePort - b.profile.remotePort
+    || a.profile.id.localeCompare(b.profile.id)
+}
+
 function GlobalPortsView({ bridge, hosts, onOpenSession, onProfileRemoved }: PortsViewProps) {
   const { t } = useI18n()
   const [rows, setRows] = useState<ForwardingProfileView[]>([])
@@ -193,8 +199,9 @@ function GlobalPortsView({ bridge, hosts, onOpenSession, onProfileRemoved }: Por
     const createdAt = (row: ForwardingProfileView): number => Date.parse(row.profile.createdAt) || 0
     return [...byHost.entries()].map(([hostId, profiles]) => ({
       hostId,
-      profiles: profiles.sort((a, b) => createdAt(b) - createdAt(a) || a.profile.id.localeCompare(b.profile.id))
-    })).sort((a, b) => createdAt(b.profiles[0]) - createdAt(a.profiles[0]) || a.hostId.localeCompare(b.hostId))
+      newestCreatedAt: Math.max(...profiles.map(createdAt)),
+      profiles: profiles.sort(compareForwardingPorts)
+    })).sort((a, b) => b.newestCreatedAt - a.newestCreatedAt || a.hostId.localeCompare(b.hostId))
   }, [rows])
 
   const refresh = async (): Promise<void> => {
@@ -347,20 +354,20 @@ function ForwardingRuleCard({ profile, status, actions }: {
   const remoteAddress = formatAddress(profile.remoteAddress, profile.remotePort)
   return <article className="forwarding-rule-card" aria-label={profile.name}>
     <header className="forwarding-card-header">
-      <span className="forwarding-card-icon"><Network size={18} aria-hidden="true" /></span>
       <div className="forwarding-card-title">
+        <span className="forwarding-card-state" data-status={status} title={t(statusKey(status))} aria-hidden="true" />
         <h3 title={profile.name}>{profile.name}</h3>
-        {profile.description && <p title={profile.description}>{profile.description}</p>}
+      </div>
+      <div className="forwarding-card-toolbar">
+        <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
+        <div className="port-actions forwarding-card-actions">{actions}</div>
       </div>
     </header>
+    {profile.description && <p className="forwarding-card-description" title={profile.description}>{profile.description}</p>}
     <dl className="forwarding-card-route">
       <div><dt>{t("session.info.local")}</dt><dd><code>{localAddress}</code></dd></div>
       <div><dt>{t("session.info.remote")}</dt><dd><ArrowRight size={15} aria-hidden="true" /><code>{remoteAddress}</code></dd></div>
     </dl>
-    <footer className="forwarding-card-footer">
-      <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
-      <div className="port-actions forwarding-card-actions">{actions}</div>
-    </footer>
   </article>
 }
 
@@ -584,7 +591,7 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
         {error && <div className="inline-error">{error}</div>}
         {connectionError && <div className="inline-error" role="alert">{connectionError}</div>}
         {rows.length > 0 ? <div className="ports-card-grid">
-          {rows.map(({ profile, runtime }) => {
+          {[...rows].sort(compareForwardingPorts).map(({ profile, runtime }) => {
             const status = runtime?.status ?? "stopped"
             return <ForwardingRuleCard key={profile.id} profile={profile} status={status} actions={<>
                 {onOpenSession && <IconButton label={t("session.open")} onClick={() => onOpenSession(profile, runtime)}><PanelTopOpen size={14} /></IconButton>}
