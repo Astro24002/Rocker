@@ -1,5 +1,5 @@
-import { AlertTriangle, Check, ChevronDown, ChevronUp, Clipboard, ExternalLink, Eye, Pause, PanelTopOpen, Pencil, Play, Plus, RefreshCw, Server, Share2, Square, Trash2, X } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { AlertTriangle, ArrowRight, Check, ChevronDown, ChevronUp, Clipboard, ExternalLink, Eye, Network, Pause, PanelTopOpen, Pencil, Play, Plus, RefreshCw, Server, Share2, Square, Trash2, X } from "lucide-react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import type { RockerBridge } from "../../../electron/ipc/bridge-contract"
 import type { ForwardingProfileRequest, ForwardingProfileView } from "../../../electron/ports/types"
 import type { ForwardingProfile } from "../../../electron/storage/types"
@@ -295,18 +295,13 @@ function GlobalPortsView({ bridge, hosts, onOpenSession, onProfileRemoved }: Por
                   <Server size={17} aria-hidden="true" />
                   <h2 title={host?.name ?? hostId}>{host?.name ?? hostId}</h2>
                 </header>
-                <div className="ports-table ports-overview-table">
-                  <div className="ports-heading"><span>{t("ports.rule")}</span><span>{t("ports.route")}</span><span>{t("ports.status")}</span><span /></div>
+                <div className="ports-card-grid">
                   {(expanded ? profiles : profiles.slice(0, 2)).map(({ profile, runtime }) => {
                     const status = runtime?.status ?? "stopped"
                     const command = host ? forwardingSshCommand(profile, host) : undefined
                     const transitioning = status === "starting" || status === "stopping"
                     const busy = busyProfileId === profile.id || transitioning
-                    return <div className="port-row ports-overview-row" key={profile.id}>
-                      <div className="port-profile-cell"><strong title={profile.name}>{profile.name}</strong></div>
-                      <code title={`${formatAddress(profile.localAddress, profile.localPort)} -> ${profile.remoteAddress}:${profile.remotePort}`}>{formatAddress(profile.localAddress, profile.localPort)} <span className="route-arrow">-&gt;</span> {profile.remoteAddress}:{profile.remotePort}</code>
-                      <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
-                      <div className="port-actions ports-overview-actions">
+                    return <ForwardingRuleCard key={profile.id} profile={profile} status={status} actions={<>
                         <IconButton label={t("ports.viewDetails")} disabled={!onOpenSession} onClick={() => onOpenSession?.(profile, runtime)}><Eye size={15} /></IconButton>
                         {status === "forwarding" || transitioning
                           ? <IconButton label={t("ports.pauseForwarding")} disabled={busy || !runtime} onClick={() => { if (runtime) void pause(profile, runtime) }}><Pause size={15} /></IconButton>
@@ -315,8 +310,7 @@ function GlobalPortsView({ bridge, hosts, onOpenSession, onProfileRemoved }: Por
                         <IconButton label={command ? (copiedProfileId === profile.id ? t("ports.shareCopied") : t("ports.shareCommand")) : t("ports.shareUnavailable")} disabled={!command} onClick={() => { if (command) void share(command, profile.id) }}>
                           {copiedProfileId === profile.id ? <Check size={15} /> : <Share2 size={15} />}
                         </IconButton>
-                      </div>
-                    </div>
+                      </>} />
                   })}
                 </div>
                 {profiles.length > 2 && <button className="ports-overview-disclosure" type="button" aria-expanded={expanded} onClick={() => setExpandedHosts((current) => ({ ...current, [hostId]: !current[hostId] }))}>
@@ -341,6 +335,33 @@ interface HostForwardingFormState {
   localPort: string
   remoteAddress: string
   remotePort: string
+}
+
+function ForwardingRuleCard({ profile, status, actions }: {
+  profile: ForwardingProfile
+  status: PortStatus
+  actions: ReactNode
+}) {
+  const { t } = useI18n()
+  const localAddress = formatAddress(profile.localAddress, profile.localPort)
+  const remoteAddress = formatAddress(profile.remoteAddress, profile.remotePort)
+  return <article className="forwarding-rule-card" aria-label={profile.name}>
+    <header className="forwarding-card-header">
+      <span className="forwarding-card-icon"><Network size={18} aria-hidden="true" /></span>
+      <div className="forwarding-card-title">
+        <h3 title={profile.name}>{profile.name}</h3>
+        {profile.description && <p title={profile.description}>{profile.description}</p>}
+      </div>
+    </header>
+    <dl className="forwarding-card-route">
+      <div><dt>{t("session.info.local")}</dt><dd><code>{localAddress}</code></dd></div>
+      <div><dt>{t("session.info.remote")}</dt><dd><ArrowRight size={15} aria-hidden="true" /><code>{remoteAddress}</code></dd></div>
+    </dl>
+    <footer className="forwarding-card-footer">
+      <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
+      <div className="port-actions forwarding-card-actions">{actions}</div>
+    </footer>
+  </article>
 }
 
 function HostPortsView({ bridge, hostId, hostName, connectionId, session, username, bindAddress = "127.0.0.1", onOpenSession }: PortsViewProps) {
@@ -562,15 +583,10 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
         </div>
         {error && <div className="inline-error">{error}</div>}
         {connectionError && <div className="inline-error" role="alert">{connectionError}</div>}
-        {rows.length > 0 ? <div className="ports-table ports-host-table">
-          <div className="ports-heading"><span>{t("ports.rule")}</span><span>{t("ports.route")}</span><span>{t("ports.status")}</span><span /></div>
+        {rows.length > 0 ? <div className="ports-card-grid">
           {rows.map(({ profile, runtime }) => {
             const status = runtime?.status ?? "stopped"
-            return <div className="port-row ports-profile-row" key={profile.id}>
-              <div><strong>{profile.name}</strong>{profile.description && <small>{profile.description}</small>}</div>
-              <code>{formatAddress(profile.localAddress, profile.localPort)} <span className="route-arrow">-&gt;</span> {profile.remoteAddress}:{profile.remotePort}</code>
-              <span className="port-status" data-status={status}>{t(statusKey(status))}</span>
-              <div className="port-actions">
+            return <ForwardingRuleCard key={profile.id} profile={profile} status={status} actions={<>
                 {onOpenSession && <IconButton label={t("session.open")} onClick={() => onOpenSession(profile, runtime)}><PanelTopOpen size={14} /></IconButton>}
                 {runtime?.status === "forwarding" && <>
                   <IconButton label={t("ports.copyAddress")} onClick={() => void navigator.clipboard?.writeText(formatAddress(runtime.localAddress, runtime.localPort))}><Clipboard size={14} /></IconButton>
@@ -580,11 +596,16 @@ function HostPortsView({ bridge, hostId, hostName, connectionId, session, userna
                 {(runtime?.status === "suspended" || !runtime || runtime.status === "stopped" || runtime.status === "error") && <IconButton label={runtime?.status === "suspended" ? t("ports.resumeForwarding") : t("ports.startForwarding")} onClick={() => void startProfile(profile)}><Play size={14} /></IconButton>}
                 <IconButton label={t("ports.editProfile")} onClick={() => openEdit(profile)}><Pencil size={14} /></IconButton>
                 <IconButton label={t("ports.removeProfile")} onClick={() => void removeProfile(profile)}><Trash2 size={14} /></IconButton>
-              </div>
-            </div>
+              </>} />
           })}
         </div> : !loading ? <div className="port-empty"><strong>{t("ports.hostEmptyTitle")}</strong><span>{t("ports.hostEmptyBody")}</span></div> : <div className="port-empty"><strong>{t("ports.loading")}</strong></div>}
-        {discoveredPorts.length > 0 && <div className="ports-discovery"><div className="ports-section-label">{t("ports.discoveredTitle")}</div>{discoveredPorts.map((port) => <div className="port-discovery-row" key={port.id}><div className="port-discovery-info"><strong title={port.process ?? t("ports.unknown")}>{port.process ?? t("ports.unknown")}</strong><code>{port.remoteAddress}:{port.remotePort}</code></div><button className="secondary-command compact-command" type="button" onClick={() => quickForward(port)}><Play size={14} />{t("ports.forwardPort")}</button></div>)}</div>}
+        {discoveredPorts.length > 0 && <section className="ports-discovery" aria-label={t("ports.discoveredTitle")}>
+          <h2 className="ports-section-label">{t("ports.discoveredTitle")}</h2>
+          <div className="ports-card-grid ports-discovery-grid">{discoveredPorts.map((port) => <article className="port-discovery-card" key={port.id}>
+            <div className="port-discovery-info"><strong title={port.process ?? t("ports.unknown")}>{port.process ?? t("ports.unknown")}</strong><code>{formatAddress(port.remoteAddress, port.remotePort)}</code></div>
+            <button className="secondary-command compact-command" type="button" onClick={() => quickForward(port)}><Play size={14} aria-hidden="true" />{t("ports.forwardPort")}</button>
+          </article>)}</div>
+        </section>}
       </div>
       {editorOpen && <div className="forwarding-editor-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditorOpen(false) }}>
         <div className="forwarding-editor" role="dialog" aria-modal="true" aria-labelledby="forwarding-editor-title">

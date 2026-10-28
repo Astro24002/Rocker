@@ -39,15 +39,12 @@ describe("UI quality stylesheet contract", () => {
     expect(componentStyles).toMatch(/\.host-card-shell:hover \.host-card-inline-actions,[\s\S]*?\.host-card-shell:focus-within \.host-card-inline-actions\s*\{[^}]*opacity:\s*1;[^}]*pointer-events:\s*auto;/)
   })
 
-  it("enlarges Port Forwarding text while allowing narrow rule tables to scroll", () => {
+  it("keeps enlarged Port Forwarding text and editor labels", () => {
     expect(componentStyles).toMatch(/\.ports-view\s*\{\s*font-size:\s*15px;/)
     expect(componentStyles).toMatch(/\.ports-view \.view-header h1\s*\{\s*font-size:\s*22px;/)
     expect(componentStyles).toMatch(/\.ports-heading\s*\{[^}]*font-size:\s*12px;/)
     expect(componentStyles).toMatch(/\.port-row code\s*\{[^}]*font-size:\s*13px;/)
     expect(componentStyles).toMatch(/\.forwarding-form label\s*\{[^}]*font-size:\s*12px;/)
-    expect(layoutStyles).toMatch(/\.ports-overview-table,\s*\.ports-host-table\s*\{\s*overflow-x:\s*auto;/)
-    expect(layoutStyles).toMatch(/\.ports-overview-row,[\s\S]*?\.ports-profile-row\s*\{\s*min-width:\s*880px;/)
-    expect(layoutStyles).toMatch(/\.ports-overview-table \.ports-heading,\s*\.ports-overview-row\s*\{\s*min-width:\s*700px;/)
   })
 
   it("locks the SFTP workspace to the reference split-pane table geometry", () => {

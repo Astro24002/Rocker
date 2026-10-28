@@ -2802,10 +2802,14 @@ textarea:focus-visible {
 
 .ports-view {
   font-size: 15px;
+  color: var(--text-primary);
+  --workspace-raised: var(--raised);
+  --workspace-hover: color-mix(in srgb, var(--raised), var(--text-primary) 6%);
 }
 
 .ports-view .view-header h1 {
   font-size: 22px;
+  color: var(--text-primary);
 }
 
 .ports-view .view-eyebrow {
@@ -2968,65 +2972,133 @@ textarea:focus-visible {
   background: var(--workspace-raised);
 }
 
-.ports-overview-table .ports-heading,
-.ports-overview-row {
-  grid-template-columns: minmax(120px, 1fr) minmax(220px, 1.4fr) minmax(108px, .65fr) 156px;
-}
-
-.ports-overview-actions {
-  gap: 6px;
-}
-
-.ports-overview-actions .icon-button {
-  width: 30px;
-  height: 30px;
-}
-
-.ports-host-table .ports-heading,
-.ports-profile-row {
-  grid-template-columns: minmax(150px, 1fr) minmax(240px, 1.45fr) 100px 220px;
-}
-
-.port-profile-cell,
-.ports-profile-row > div:first-child {
+.ports-card-grid {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+  gap: 14px;
 }
 
-.port-profile-cell strong,
-.ports-profile-row strong {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.forwarding-rule-card,
+.port-discovery-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--workspace-raised);
 }
 
-.ports-profile-row small {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.forwarding-rule-card:hover,
+.port-discovery-card:hover {
+  border-color: var(--line-strong);
 }
 
-.ports-profile-row > div:first-child {
+.forwarding-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.forwarding-card-icon {
   display: grid;
-  align-content: center;
-  justify-content: start;
-  gap: 3px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--text-secondary);
+  background: var(--workspace-bg);
 }
 
-.ports-profile-row > div:last-child,
-.ports-overview-row > div:last-child {
-  justify-content: flex-end;
+.forwarding-card-title { min-width: 0; }
+
+.forwarding-card-title h3 {
+  overflow: hidden;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.route-arrow {
-  padding: 0 3px;
-  color: var(--text-muted);
+.forwarding-card-title p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.forwarding-card-route {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--workspace-bg);
+}
+
+.forwarding-card-route > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+
+.forwarding-card-route dt {
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.forwarding-card-route dd {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+}
+
+.forwarding-card-route > div:first-child dd { padding-left: 23px; }
+.forwarding-card-route dd svg { flex: 0 0 auto; margin-top: 3px; color: var(--text-muted); }
+
+.forwarding-card-route code,
+.port-discovery-info code {
+  min-width: 0;
+  color: var(--text-primary);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.forwarding-card-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-subtle);
+}
+
+.forwarding-card-footer .port-status { white-space: nowrap; }
+.forwarding-card-actions { flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.forwarding-card-actions .icon-button { width: 32px; height: 32px; }
+
+.forwarding-card-footer .port-status[data-status="stopped"] {
+  color: var(--text-secondary);
+  background: var(--workspace-bg);
 }
 
 .ports-host-context {
@@ -3074,6 +3146,7 @@ textarea:focus-visible {
 }
 
 .ports-section-label {
+  margin: 0;
   padding: 14px 0 8px;
   color: var(--text-muted);
   font-size: 12px;
@@ -3082,38 +3155,26 @@ textarea:focus-visible {
   text-transform: uppercase;
 }
 
-.port-discovery-row {
-  display: flex;
-  flex-wrap: wrap;
-  min-height: 42px;
-  align-items: center;
-  gap: 10px;
-  border-top: 1px solid var(--line-subtle);
-  color: var(--text-secondary);
-  font-size: 13px;
-}
+.ports-discovery-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); }
 
 .port-discovery-info {
-  display: inline-flex;
+  display: grid;
   min-width: 0;
-  align-items: baseline;
-  gap: 10px;
+  gap: 6px;
 }
 
 .port-discovery-info strong {
   overflow: hidden;
-  max-width: 240px;
+  color: var(--text-primary);
+  font-size: 15px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.port-discovery-row code {
-  color: var(--teal);
-  font-family: "SFMono-Regular", Consolas, monospace;
-}
-
-.port-discovery-row button {
-  flex: 0 0 auto;
+.port-discovery-card .compact-command {
+  align-self: flex-start;
+  min-height: 32px;
+  margin-top: auto;
 }
 
 .forwarding-editor-backdrop {
