@@ -1920,6 +1920,7 @@ function openHostAction(hostLabel: string, action: string): void {
 
 async function openForwardingSession(hostLabel: string): Promise<void> {
   openHostAction(hostLabel, "Open Forwarding")
+  fireEvent.click(await screen.findByRole("button", { name: "View details" }))
   fireEvent.click(await screen.findByRole("button", { name: "Open session" }))
 }
 

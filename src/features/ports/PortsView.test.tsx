@@ -55,12 +55,56 @@ describe("PortsView", () => {
     expect(await screen.findByText("Web console")).toBeInTheDocument()
     expect(screen.queryByText("Policy")).not.toBeInTheDocument()
     expect(ports.startProfile).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "View details" }))
     fireEvent.click(screen.getByRole("button", { name: "Edit forwarding profile" }))
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }))
     await waitFor(() => expect(ports.updateProfile).toHaveBeenCalledOnce())
     expect(ports.updateProfile.mock.calls[0][1]).not.toHaveProperty("autoStart")
     expect(ports.startProfile).not.toHaveBeenCalled()
+  })
+  it("shows the remote port and rule fields on both card views, and puts real errors in the Host detail log", async () => {
+    const profile = profileFixture()
+    const runtime = { ...profile, id: "runtime", profileId: profile.id, status: "error" as const, error: "LOCAL_PORT_IN_USE" }
+    const ports = { listOverview: vi.fn(async () => [{ profile, runtime }]), listForHost: vi.fn(async () => [{ profile, runtime }]) }
+    const bridge = { ports } as unknown as RockerBridge
+    const view = render(<I18nProvider><PortsView bridge={bridge} mode="global" onOpenSession={vi.fn()} /></I18nProvider>)
+    let card = await screen.findByRole("article", { name: "Web console" })
+    expect(within(card).getByLabelText("Remote port: 8080")).toBeInTheDocument()
+    expect(within(card).getByText("Name")).toBeInTheDocument()
+    expect(within(card).getByText("Local")).toBeInTheDocument()
+    expect(within(card).getByText("Remote")).toBeInTheDocument()
+    expect(within(card).queryByText(/LOCAL_PORT_IN_USE/)).not.toBeInTheDocument()
+    view.rerender(<I18nProvider><PortsView bridge={bridge} mode="host" hostId="host-a" session={sessionFixture()} /></I18nProvider>)
+    card = await screen.findByRole("article", { name: "Web console" })
+    expect(within(card).getByLabelText("Remote port: 8080")).toBeInTheDocument()
+    expect(within(card).getAllByRole("button")).toHaveLength(4)
+    fireEvent.click(within(card).getByRole("button", { name: "View details" }))
+    expect(screen.getByRole("log")).toHaveTextContent(/local port/i)
+    expect(within(card).queryByText(/local port/i)).not.toBeInTheDocument()
+  })
+
+  it("shares a Host rule and confirms deletion before removing it", async () => {
+    const writeText = vi.fn(async () => undefined)
+    const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard")
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } })
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true)
+    try {
+      const ports = { listForHost: vi.fn(async () => [{ profile: profileFixture() }]), removeProfile: vi.fn(async () => undefined) }
+      const hosts = [{ id: "host-a", name: "G11", host: "10.0.0.1", port: 22, username: "root", authMethod: "agent" as const, favorite: false, notes: "" }]
+      render(<I18nProvider><PortsView bridge={{ ports } as unknown as RockerBridge} mode="host" hostId="host-a" hosts={hosts} session={sessionFixture()} /></I18nProvider>)
+      const card = await screen.findByRole("article", { name: "Web console" })
+      fireEvent.click(within(card).getByRole("button", { name: "Copy SSH command" }))
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith(expect.stringContaining("ssh ")))
+      fireEvent.click(within(card).getByRole("button", { name: "Remove forwarding profile" }))
+      expect(ports.removeProfile).not.toHaveBeenCalled()
+      fireEvent.click(within(card).getByRole("button", { name: "Remove forwarding profile" }))
+      await waitFor(() => expect(ports.removeProfile).toHaveBeenCalledWith("profile-1"))
+    } finally {
+      confirm.mockRestore()
+      if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard)
+      else Reflect.deleteProperty(navigator, "clipboard")
+    }
   })
   it("opens details separately from starting and pausing a saved rule", async () => {
     const startProfile = vi.fn(async () => ({

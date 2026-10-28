@@ -1499,7 +1499,7 @@ function Workspace() {
             const host = hosts.find((candidate) => candidate.id === session.hostId)
             return <div className="session-content-host" data-session-id={session.id} data-theme={themeForHost(session.hostId)} key={session.id}
               hidden={activeNav !== "host-port-forwarding" || workspace.activeSessionId !== session.id}>
-              <PortsView mode="host" bridge={bridge} hostId={session.hostId} hostName={host?.name} session={session} username={host?.username} bindAddress={settings.bindAddress} onOpenSession={openPfSession} />
+              <PortsView mode="host" bridge={bridge} hostId={session.hostId} hostName={host?.name} hosts={hosts} session={session} username={host?.username} bindAddress={settings.bindAddress} onOpenSession={openPfSession} />
             </div>
           })}
           {activeNav === "settings" ? (
