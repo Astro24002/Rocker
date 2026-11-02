@@ -1,4 +1,4 @@
-import { Copy, ExternalLink, FolderClosed, Network, Pencil, Server, Settings, ShieldCheck, X } from "lucide-react"
+import { Copy, ExternalLink, FolderClosed, Network, Pencil, Server, Settings, ShieldCheck, X, PanelsTopLeft } from "lucide-react"
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactElement } from "react"
 import { createPortal } from "react-dom"
 import { useI18n } from "../i18n"
@@ -8,8 +8,8 @@ import { isCompactSidebar, normalizeSidebarWidth } from "../shared/sidebar-width
 import rockerMark from "../../build/icon.svg"
 import { isPortForwardingSession, isSftpSession, isSshSession, sessionKind, type SessionKind, type WorkspaceSession } from "../features/terminal/session-state"
 
-export type NavKey = "hosts" | "port-forwarding" | "connections" | "settings"
-export type WorkspaceNavKey = NavKey | "sftp" | "terminal" | "history" | "trust" | "host-port-forwarding"
+export type NavKey = "hosts" | "port-forwarding" | "connections" | "settings" | "workspaces"
+export type WorkspaceNavKey = NavKey | "sftp" | "terminal" | "history" | "trust" | "host-port-forwarding" | "workbench"
 export type SessionCommandId = Extract<CommandId, `session.${string}`>
 export type ContextMenuOwner = "sidebar" | "terminal"
 
@@ -30,6 +30,7 @@ interface SidebarProps {
 }
 
 const navItems: Array<{ key: NavKey; icon: typeof Server }> = [
+  { key: "workspaces", icon: PanelsTopLeft },
   { key: "hosts", icon: Server },
   { key: "port-forwarding", icon: Network },
   { key: "connections", icon: ShieldCheck }
@@ -164,7 +165,7 @@ export function Sidebar({ width, activeNav, sessions = [], activeSessionId, them
                 }} onClick={() => {
                   onSessionActivate?.(session.id)
                   if (!onSessionActivate || !isPortForwardingSession(session)) {
-                    onNavigate(sessionKind(session) === "sftp" ? "sftp" : "terminal")
+                    onNavigate(session.kind === "codex" ? "workbench" : sessionKind(session) === "sftp" ? "sftp" : "terminal")
                   }
                 }}>
                   <SessionKindIcon session={session} />
@@ -216,12 +217,14 @@ function dispatchSessionCommand(commandId: SessionCommandId, session: WorkspaceS
 }
 
 function kindBadge(kind: SessionKind): string {
+  if (kind === "codex") return "CODE"
   if (kind === "sftp") return "SFTP"
   if (kind === "pf") return "PF"
   return "SSH"
 }
 
 function isSessionDestinationActive(session: WorkspaceSession, activeNav: WorkspaceNavKey): boolean {
+  if (session.kind === "codex") return activeNav === "workbench"
   if (sessionKind(session) === "sftp") return activeNav === "sftp"
   if (sessionKind(session) === "pf") return activeNav === "terminal" || activeNav === "host-port-forwarding"
   return activeNav === "terminal"
@@ -238,6 +241,7 @@ function SessionKindIcon({ session }: { session: WorkspaceSession }): ReactEleme
 }
 
 function hasSessionActivity(session: WorkspaceSession): boolean {
+  if (session.kind === "codex") return session.running === true
   if (isSshSession(session)) return session.hasUnreadActivity === true
   if (isSftpSession(session)) return (session.activeTransferCount ?? 0) > 0
   return session.forwardingStatus === "forwarding"

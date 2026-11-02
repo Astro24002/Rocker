@@ -1,4 +1,5 @@
 export const en = {
+  "nav.workspaces": "Workspace",
   "app.tagline": "SSH workspace",
   "workspace.personal": "Personal",
   "workspace.breadcrumbs": "Breadcrumb",

@@ -21,7 +21,7 @@ describe("Sidebar session actions", () => {
     expect(screen.queryByText("Current host")).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Rocker" })).not.toBeInTheDocument()
     expect(screen.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Hosts", "Port Forwarding", "Connections", "Settings"
+      "Workspace", "Hosts", "Port Forwarding", "Connections", "Settings"
     ])
     expect(onNavigate).not.toHaveBeenCalled()
     expect(container.querySelector(".sidebar-resizer")).toBeNull()

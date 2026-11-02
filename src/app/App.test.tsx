@@ -15,6 +15,7 @@ import type { StorageHealth } from "../../electron/storage/storage-result"
 import type { TerminalSessionEvent } from "../../electron/ssh/types"
 import type { SftpDirectoryEntry, SftpTransferTask } from "../../electron/sftp/types"
 import { clampSidebarWidth } from "../components/Sidebar"
+import { createWorkbenchTestBridge, testProfile } from "../features/workbench/test-bridge"
 import { visibleSessionIds } from "../features/terminal/layout"
 import type { SshWorkspaceSession, TerminalWorkspaceState } from "../features/terminal/session-state"
 import App from "./App"
@@ -133,6 +134,53 @@ function openSearchShortcut(): void {
 }
 
 describe("desktop workspace shell", () => {
+  it("keeps a background Codex task and the current workbench when its close is cancelled", async () => {
+    const workbench = createWorkbenchTestBridge()
+    window.rocker = { ...bridge, workbench: workbench.bridge } as unknown as RockerBridge
+    render(<App />)
+    fireEvent.click(await screen.findByRole("button", { name: "Workspace" }))
+    fireEvent.doubleClick(await screen.findByRole("button", { name: testProfile.name }))
+    await screen.findByText("Ready")
+    const first = workbench.bridge.open.mock.calls[0][0], snapshot = await workbench.bridge.read(first)
+    act(() => workbench.emit({ ...snapshot, revision: 2, status: "running", turnId: "turn" }))
+    fireEvent.click(screen.getByRole("button", { name: "New session" }))
+    await waitFor(() => expect(workbench.bridge.open).toHaveBeenCalledTimes(2))
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false)
+    try {
+      fireEvent.click(screen.getByRole("button", { name: `Close ${testProfile.name}` }))
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+      expect(workbench.bridge.close).not.toHaveBeenCalled()
+      expect(screen.getByRole("button", { name: `CODE ${testProfile.name} (1)` })).toHaveAttribute("aria-current", "page")
+      expect(screen.getByRole("textbox", { name: "Message Codex" })).toBeVisible()
+    } finally { confirm.mockRestore() }
+  })
+
+  it("opens graphical Codex sessions, switches through the sidebar, and closes only the selected session", async () => {
+    const workbench = createWorkbenchTestBridge()
+    window.rocker = { ...bridge, workbench: workbench.bridge } as unknown as RockerBridge
+    render(<App />)
+    fireEvent.click(await screen.findByRole("button", { name: "Workspace" }))
+    fireEvent.doubleClick(await screen.findByRole("button", { name: testProfile.name }))
+    await screen.findByRole("textbox", { name: "Message Codex" })
+    const first = workbench.bridge.open.mock.calls[0][0]
+    fireEvent.click(screen.getByRole("button", { name: "Hosts" }))
+    fireEvent.click(screen.getByRole("button", { name: `CODE ${testProfile.name}` }))
+    expect(screen.getByRole("textbox", { name: "Message Codex" })).toBeVisible()
+    await screen.findByText("Ready")
+    fireEvent.click(screen.getByRole("button", { name: "New session" }))
+    await waitFor(() => expect(workbench.bridge.open).toHaveBeenCalledTimes(2))
+    const second = workbench.bridge.open.mock.calls[1][0]
+    expect(first).not.toBe(second)
+    fireEvent.click(screen.getByRole("button", { name: `Close ${testProfile.name} (1)` }))
+    await waitFor(() => expect(workbench.bridge.close).toHaveBeenCalledWith(second, true))
+    expect(screen.getByRole("button", { name: `CODE ${testProfile.name}` })).toHaveAttribute("aria-current", "page")
+    expect(screen.getByRole("textbox", { name: "Message Codex" })).toBeVisible()
+    expect(bridge.sessions.open).not.toHaveBeenCalled()
+    expect(bridge.sessions.close).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: `Close ${testProfile.name}` }))
+    await screen.findByRole("button", { name: "New workspace" })
+  })
+
   it("does not restore cleared History from a stale list response", async () => {
     bridge.bootstrap.load.mockResolvedValue(bootstrapSnapshot([host], undefined))
     let resolveList!: (items: ConnectionHistoryItem[]) => void

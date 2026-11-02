@@ -133,6 +133,7 @@ export interface AppBootstrapSnapshot {
 }
 
 export interface RockerBridge {
+  workbench?: import("../workbench/types").WorkbenchBridge
   app: {
     platform: NodeJS.Platform
     minimize(): Promise<void>
@@ -241,6 +242,8 @@ export interface RockerBridge {
 }
 
 export const ipcChannels = {
+  workbenchRequest: "rocker:workbench:request",
+  workbenchEvent: "rocker:workbench:event",
   hostsList: "rocker:hosts:list",
   hostsChooseIdentityFile: "rocker:hosts:choose-identity-file",
   hostsSave: "rocker:hosts:save",

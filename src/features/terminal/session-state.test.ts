@@ -2,6 +2,20 @@ import { describe, expect, it } from "vitest"
 import { activateSession, applyTerminalState, attachChannel, closeSession, createTerminalWorkspaceState, openSession, patchSession, sessionKind, synchronizePortForwardingSessions } from "./session-state"
 
 describe("terminal workspace state", () => {
+  it("mixes Codex with SSH/SFTP/PF without changing their contexts or active selection", () => {
+    let state = openSession(createTerminalWorkspaceState(), { id: "ssh", hostId: "host", label: "SSH" })
+    state = openSession(state, { id: "sftp", hostId: "host", label: "Files", kind: "sftp", path: "/project" })
+    state = openSession(state, { id: "pf", hostId: "host", label: "Ports", kind: "pf" })
+    state = openSession(state, { id: "code", hostId: "host", label: "Code", kind: "codex", workbenchProfileId: "project" })
+    const siblings = state.sessions.slice(0, 3)
+    state = patchSession(state, "code", { kind: "codex", state: "connected", running: true })
+    state = activateSession(state, "sftp")
+    expect(state.sessions.slice(0, 3)).toEqual(siblings)
+    expect(state.sessions[3]).toMatchObject({ running: true })
+    state = closeSession(state, "code")
+    expect(state.activeSessionId).toBe("sftp")
+    expect(state.sessions).toEqual(siblings)
+  })
   it("stores session metadata without terminal output", () => {
     const state = openSession(createTerminalWorkspaceState(), {
       id: "11111111-1111-4111-8111-111111111111",

@@ -21,6 +21,7 @@ export type CommandId =
   | "session.sftp"
   | "session.port-forwarding"
   | "navigation.hosts"
+  | "navigation.workspaces"
   | "navigation.trust"
   | "navigation.history"
   | "navigation.ports"
@@ -28,7 +29,7 @@ export type CommandId =
   | "palette.open"
 
 export type CommandCategory = "terminal" | "session" | "navigation" | "palette"
-export type NavigationCommand = "hosts" | "trust" | "history" | "connections" | "port-forwarding" | "settings" | "sftp" | "terminal"
+export type NavigationCommand = "hosts" | "trust" | "history" | "connections" | "port-forwarding" | "settings" | "sftp" | "terminal" | "workspaces"
 
 export interface TerminalCommandSurface {
   hasSelection(): boolean
@@ -123,6 +124,7 @@ export type CommandExecutionResult =
 const categoryOrder: readonly CommandCategory[] = ["terminal", "session", "navigation", "palette"]
 
 export const commandRegistry: readonly CommandDefinition[] = [
+  { id: "navigation.workspaces", label: "Open Workspace", labelKey: "nav.workspaces", category: "navigation", keywords: ["codex", "project", "workbench"], isEnabled: () => true, execute: ({ actions }) => actions.navigation.navigate("workspaces") },
   {
     id: "terminal.search",
     label: "Search terminal",
@@ -435,6 +437,7 @@ function canDuplicateSession(context: CommandContext): boolean {
 }
 
 function canDuplicateWindow(context: CommandContext): boolean {
+  if (context.activeSession?.kind === "codex") return false
   if (!hasSession(context)) return false
   return !isSshSession(context) || sessionState(context) === "connected"
 }

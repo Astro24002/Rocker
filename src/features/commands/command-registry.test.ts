@@ -25,6 +25,7 @@ describe("command registry", () => {
     const ids = commandRegistry.map((command) => command.id)
 
     expect(ids).toEqual([
+      "navigation.workspaces",
       "terminal.search",
       "terminal.copy",
       "terminal.paste",

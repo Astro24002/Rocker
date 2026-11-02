@@ -1,0 +1,45 @@
+.workspaces-view, .codex-workbench { display: flex; flex: 1; min-width: 0; min-height: 0; height: 100%; flex-direction: column; background: var(--workspace-bg); color: var(--text-primary); }
+.workspaces-content { padding: 24px; overflow: auto; }
+.workspaces-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 14px; }
+.workspaces-card { min-width: 0; border: 1px solid var(--line); border-radius: 14px; background: var(--workspace-raised); padding: 16px; }
+.workspaces-card[data-selected="true"] { border-color: var(--accent); }
+.workspaces-card-main { display: flex; align-items: center; gap: 18px; width: 100%; text-align: left; background: transparent; color: inherit; cursor: pointer; }
+.workspaces-card-main > svg { flex-shrink: 0; color: var(--accent); }
+.workspaces-card-main > span { display: grid; gap: 8px; min-width: 0; }
+.workspaces-card strong { font-size: 16px; }
+.workspaces-card small { text-transform: capitalize; color: var(--text-secondary); }
+.workspaces-card code, .workspaces-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspaces-card code { color: var(--text-muted); font-size: 12px; }
+.workspaces-card-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.workspaces-card-actions button, .workbench-dialog header button { display: grid; place-items: center; width: 30px; height: 30px; background: transparent; color: var(--text-secondary); border-radius: 6px; cursor: pointer; }
+.workspaces-card-actions button:hover { background: var(--workspace-hover); }
+.workbench-empty { margin: auto; padding: 48px 20px; color: var(--text-muted); text-align: center; }
+.workbench-empty h2 { color: var(--text-primary); font-size: 20px; font-weight: 600; }
+.workbench-empty p { max-width: 560px; margin: 12px auto; line-height: 1.7; }
+.workbench-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--workspace-raised); color: var(--text-primary); }
+.workbench-dialog::backdrop { background: var(--drawer-scrim); }
+.workbench-dialog header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.workbench-dialog h2 { margin: 0; font-size: 20px; }
+.workbench-form { display: grid; gap: 16px; }
+.workbench-form label, .workbench-approval label { display: grid; gap: 8px; font-size: 14px; }
+.workbench-form input, .workbench-form select, .workbench-approval input, .workbench-approval select { min-width: 0; width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--text-primary); background: var(--workspace-bg); }
+.workbench-form small { color: var(--text-muted); line-height: 1.6; }
+.codex-workbench .view-header { flex-shrink: 0; }
+.codex-workbench .view-header p { overflow-wrap: anywhere; }
+.codex-workbench .view-header-actions { flex-wrap: wrap; justify-content: flex-end; font-size: 12px; }
+.workbench-error { display: flex; gap: 12px; align-items: center; margin: 12px 24px; padding: 12px; border: 1px solid var(--danger); border-radius: 8px; color: var(--danger); overflow-wrap: anywhere; }
+.workbench-conversation { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 18px; overflow: auto; padding: 24px max(24px, calc((100% - 850px) / 2)); }
+.workbench-message { padding: 16px 20px; border-radius: 12px; background: var(--workspace-raised); }
+.workbench-message[data-role="user"] { background: var(--workspace-hover); }
+.workbench-message strong { font-size: 12px; color: var(--text-muted); }
+.workbench-message p { margin: 10px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; font-size: 15px; }
+.workbench-tool { border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-size: 12px; }
+.workbench-tool summary { cursor: pointer; overflow-wrap: anywhere; }
+.workbench-tool pre, .workbench-approval pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: Consolas, monospace; }
+.workbench-approval { padding: 16px; border: 1px solid var(--warning); border-radius: 10px; }
+.workbench-approval > div, .workbench-approval form { display: flex; flex-wrap: wrap; gap: 12px; }
+.workbench-composer { flex-shrink: 0; margin: 12px max(24px, calc((100% - 850px) / 2)) 20px; border: 1px solid var(--line-strong); border-radius: 12px; padding: 12px; background: var(--workspace-raised); }
+.workbench-composer textarea { width: 100%; min-height: 65px; max-height: 180px; resize: vertical; background: transparent; color: var(--text-primary); border: 0; font: inherit; }
+.workbench-composer > div { display: flex; justify-content: flex-end; }
+.workbench-terminal { height: 240px; min-height: 150px; flex-shrink: 0; overflow: hidden; padding: 12px; background: var(--terminal-bg); }
+.workspaces-view button:focus-visible, .codex-workbench button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -33,8 +33,12 @@ import {
   type WorkspaceWindowOptions
 } from "./windows/workspace-window-manager"
 import { WorkAreaMaximizer } from "./windows/work-area-maximizer"
+import { WorkbenchService } from "./workbench/service"
+import { WorkbenchProfileStore } from "./workbench/profile-store"
+import { createCodexTransport } from "./workbench/transport"
 
 interface ApplicationRuntime {
+  workbench: WorkbenchService
   connections: SshConnectionManager
   sessions: TerminalSessionManager
   forwarding: ForwardingManager
@@ -74,6 +78,25 @@ function createNativeWindow(options: WorkspaceWindowOptions = {}): BrowserWindow
       sandbox: true,
       preload: join(__dirname, "../preload/index.cjs")
     }
+  })
+  let closeApproved = false
+  let closePrompt = false
+  window.on("close", (event) => {
+    const count = runtime?.workbench.activeTaskCount(window.webContents.id) ?? 0
+    if (shutdown || closeApproved || count === 0) return
+    event.preventDefault()
+    if (closePrompt) return
+    closePrompt = true
+    void dialog.showMessageBox(window, {
+      type: "question", title: "Active Codex tasks",
+      message: `${count} Codex task(s) are still running in this window.`,
+      detail: "Keep the window open to continue working, or close it and stop these tasks.",
+      buttons: ["Keep open", "Stop tasks and close"], defaultId: 0, cancelId: 0
+    }).then(result => {
+      if (result.response !== 1 || window.isDestroyed()) return
+      closeApproved = true
+      window.close()
+    }).catch(() => undefined).finally(() => { closePrompt = false })
   })
   windowMaximizer?.track(window)
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -176,6 +199,7 @@ async function startApplication(): Promise<void> {
     journal: importJournal
   })
   const ports = new PortService(connections)
+  const workbench = new WorkbenchService(new WorkbenchProfileStore(join(resolvedUserDataPath, "workbenches.json"), onStorageDiagnostic), (profile, owner, signal) => createCodexTransport(profile, owner, connections, signal))
   windows = new WorkspaceWindowManager({
     snapshots,
     createWindow: createNativeWindow,
@@ -187,6 +211,7 @@ async function startApplication(): Promise<void> {
     preserveLastWindowWorkspace: process.platform !== "darwin",
     workspacePersistenceBlocked: initialWorkspaceResult.status === "blocked",
     onWindowClosed: async (ownerWebContentsId) => {
+      await workbench.releaseWebContents(ownerWebContentsId)
       await ports.releaseWebContents(ownerWebContentsId)
       await sftp.releaseWebContents(ownerWebContentsId)
       await forwarding.releaseWebContents(ownerWebContentsId)
@@ -194,6 +219,7 @@ async function startApplication(): Promise<void> {
       await connections.releaseWebContents(ownerWebContentsId)
     },
     onRendererReleased: async (owner) => {
+      await workbench.releaseOwner(owner)
       await ports.releaseOwner(owner)
       await sftp.releaseOwner(owner)
       await forwarding.releaseOwner(owner)
@@ -203,6 +229,7 @@ async function startApplication(): Promise<void> {
     onLifecycle: (event) => recordWindowDiagnostic(diagnostics, event)
   })
   const dependencies: IpcDependencies = {
+    workbench,
     hosts,
     credentials,
     hostKeys,
@@ -262,7 +289,7 @@ async function startApplication(): Promise<void> {
   app.on("activate", () => {
     if (windows.ownerWebContentsIds().length === 0) windows.createNew()
   })
-  runtime = { connections, sessions, forwarding, sftp, snapshots, windows, diagnostics, forwardingProfiles, history, ports }
+  runtime = { connections, sessions, forwarding, sftp, snapshots, windows, diagnostics, forwardingProfiles, history, ports, workbench }
   if (pendingFocus) {
     pendingFocus = false
     windows.focusMostRecentOrCreate()
@@ -352,6 +379,7 @@ async function shutdownApplication(applicationRuntime: ApplicationRuntime): Prom
     // Profile writes are best effort during shutdown; active transports still need cleanup.
   }
   await Promise.all(applicationRuntime.windows.ownerWebContentsIds().map(async (ownerWebContentsId) => {
+    await applicationRuntime.workbench.releaseWebContents(ownerWebContentsId)
     await applicationRuntime.ports.releaseWebContents(ownerWebContentsId)
     await applicationRuntime.sftp.releaseWebContents(ownerWebContentsId)
     await applicationRuntime.forwarding.releaseWebContents(ownerWebContentsId)
@@ -490,15 +518,16 @@ app.on("before-quit", (event) => {
   if (shutdown || !runtime) return
   const currentRuntime = runtime
   const activeTransfers = currentRuntime.sftp.activeTransferCount()
-  if (activeTransfers > 0) {
+  const activeCodexTasks = currentRuntime.workbench.activeTaskCount()
+  if (activeTransfers > 0 || activeCodexTasks > 0) {
     event.preventDefault()
     if (quitPrompt) return
     quitPrompt = dialog.showMessageBox({
       type: "question",
-      title: "Active SFTP transfers",
-      message: `${activeTransfers} SFTP transfer${activeTransfers === 1 ? " is" : "s are"} still running.`,
-      detail: "Cancel to keep Rocker open, or quit and cancel the active transfers.",
-      buttons: ["Cancel", "Quit and cancel transfers"],
+      title: "Active tasks",
+      message: `${activeTransfers} SFTP transfer(s) and ${activeCodexTasks} Codex task(s) are still running.`,
+      detail: "Cancel to keep Rocker open, or quit and stop the active tasks.",
+      buttons: ["Cancel", "Quit and stop tasks"],
       defaultId: 0,
       cancelId: 0
     }).then((result) => {

@@ -1,6 +1,7 @@
 import type { TranslationKey } from "./en"
 
 export const zhCN = {
+  "nav.workspaces": "工作环境",
   "app.tagline": "SSH 工作台",
   "workspace.personal": "个人空间",
   "workspace.breadcrumbs": "导航路径",

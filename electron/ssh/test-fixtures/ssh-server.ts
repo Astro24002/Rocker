@@ -18,6 +18,7 @@ export interface SshTestServerOptions {
   sftpWriteDelayMs?: number
   sftpWriteBarrier?: SftpWriteBarrier
   execOutput?: string
+  onExec?: (command: string, channel: ServerChannel) => void
 }
 
 export interface SshResourceSnapshot {
@@ -212,7 +213,7 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
           openShell()
         }
       })
-      session.on("exec", (execAccept) => {
+      session.on("exec", (execAccept, _reject, info) => {
         const channel = execAccept()
         activeShells.add(channel)
         connectionShells.add(channel)
@@ -220,6 +221,7 @@ export async function createSshTestServer(options: SshTestServerOptions = {}): P
           activeShells.delete(channel)
           connectionShells.delete(channel)
         })
+        if (options.onExec) { options.onExec(info.command, channel); return }
         channel.write(options.execOutput ?? "ok\n")
         queueMicrotask(() => {
           channel.exit(0)

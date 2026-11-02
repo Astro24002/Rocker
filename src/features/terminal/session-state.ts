@@ -2,7 +2,7 @@ import type { ForwardingProfileView, PortStatus } from "../../../electron/ports/
 import type { TerminalDimensions, TerminalFailureReason, TerminalSessionInfo, TerminalSessionState, TerminalStateEvent } from "../../../electron/ssh/types"
 import { removeSessionFromLayout, type TerminalLayout } from "./layout"
 
-export type SessionKind = "ssh" | "sftp" | "pf"
+export type SessionKind = "ssh" | "sftp" | "pf" | "codex"
 
 /** Explicit application protocol for PF preview. Never inferred from a port number. */
 export type ApplicationProtocol = "http" | "https"
@@ -60,7 +60,12 @@ export interface PortForwardingWorkspaceSession extends WorkspaceSessionBase {
   applicationProtocol?: ApplicationProtocol
 }
 
-export type WorkspaceSession = SshWorkspaceSession | SftpWorkspaceSession | PortForwardingWorkspaceSession
+export interface CodexWorkspaceSession extends WorkspaceSessionBase {
+  kind: "codex"
+  workbenchProfileId: string
+  running?: boolean
+}
+export type WorkspaceSession = SshWorkspaceSession | SftpWorkspaceSession | PortForwardingWorkspaceSession | CodexWorkspaceSession
 
 export interface TerminalWorkspaceState {
   sessions: WorkspaceSession[]
@@ -75,6 +80,7 @@ interface OpenSessionBase {
 }
 
 export type OpenSessionInput = OpenSessionBase & (
+  | { kind: "codex"; workbenchProfileId: string }
   | {
       kind?: "ssh"
       dimensions?: TerminalDimensions
@@ -93,6 +99,7 @@ export type OpenSessionInput = OpenSessionBase & (
 )
 
 export type WorkspaceSessionPatch =
+  | { kind: "codex"; state?: TerminalSessionState; running?: boolean }
   | {
       kind: "ssh"
       hasUnreadActivity: boolean
@@ -148,6 +155,7 @@ export function openSession(
 }
 
 function createSession(input: OpenSessionInput): WorkspaceSession {
+  if (input.kind === "codex") return { id: input.id, hostId: input.hostId, label: input.label, kind: "codex", workbenchProfileId: input.workbenchProfileId, state: "idle" }
   if (input.kind === "sftp") {
     return {
       id: input.id,
@@ -215,6 +223,11 @@ export function patchSession(
   if (!state.sessions.some((session) => session.id === sessionId)) return state
   let changed = false
   const sessions: WorkspaceSession[] = state.sessions.map((session): WorkspaceSession => {
+    if (session.id === sessionId && session.kind === "codex" && patch.kind === "codex") {
+      if (session.state === (patch.state ?? session.state) && session.running === (patch.running ?? session.running)) return session
+      changed = true
+      return { ...session, ...patch }
+    }
     if (session.id !== sessionId) return session
     if (patch.kind === "ssh" && isSshSession(session)) {
       if (patch.hasUnreadActivity === true) {

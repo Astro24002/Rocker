@@ -10,6 +10,26 @@ import type { TerminalSessionEvent } from "./ssh/types"
 import type { ForwardingRuntimeEvent, SessionLaunchRequest, SftpRuntimeEvent } from "./ipc/bridge-contract"
 
 const bridge: RockerBridge = {
+  workbench: {
+    list: () => ipcRenderer.invoke(ipcChannels.workbenchRequest, "list"),
+    save: profile => ipcRenderer.invoke(ipcChannels.workbenchRequest, "save", profile),
+    remove: id => ipcRenderer.invoke(ipcChannels.workbenchRequest, "remove", { id }),
+    chooseDirectory: () => ipcRenderer.invoke(ipcChannels.workbenchRequest, "chooseDirectory"),
+    open: (id, profileId) => ipcRenderer.invoke(ipcChannels.workbenchRequest, "open", { id, profileId }),
+    read: id => ipcRenderer.invoke(ipcChannels.workbenchRequest, "read", { id }),
+    send: (id, text) => ipcRenderer.invoke(ipcChannels.workbenchRequest, "send", { id, text }),
+    interrupt: id => ipcRenderer.invoke(ipcChannels.workbenchRequest, "interrupt", { id }),
+    reconnect: id => ipcRenderer.invoke(ipcChannels.workbenchRequest, "reconnect", { id }),
+    close: (id, stop) => ipcRenderer.invoke(ipcChannels.workbenchRequest, "close", { id, stop }),
+    approve: (id, approvalId, accept) => ipcRenderer.invoke(ipcChannels.workbenchRequest, "approve", { id, approvalId, accept }),
+    answer: (id, approvalId, answers) => ipcRenderer.invoke(ipcChannels.workbenchRequest, "answer", { id, approvalId, answers }),
+    terminal: (id, action, data, cols, rows) => ipcRenderer.invoke(ipcChannels.workbenchRequest, "terminal", { id, action, data, cols, rows }),
+    onEvent: listener => {
+      const handler = (_event: Electron.IpcRendererEvent, snapshot: import("./workbench/types").WorkbenchSnapshot): void => listener(snapshot)
+      ipcRenderer.on(ipcChannels.workbenchEvent, handler)
+      return () => ipcRenderer.removeListener(ipcChannels.workbenchEvent, handler)
+    }
+  },
   app: {
     platform: process.platform,
     minimize: () => ipcRenderer.invoke(ipcChannels.windowMinimize),

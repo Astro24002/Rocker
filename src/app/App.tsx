@@ -8,6 +8,9 @@ import { HostList } from "../features/hosts/HostList"
 import { hostForSshTarget, parseSshCommand, upsertHost } from "../features/hosts/host-state"
 import { HistoryView } from "../features/history/HistoryView"
 import { PortsView } from "../features/ports/PortsView"
+import { WorkspacesView } from "../features/workbench/WorkspacesView"
+import { CodexWorkbench } from "../features/workbench/CodexWorkbench"
+import type { WorkbenchProfile } from "../../electron/workbench/types"
 import { SettingsView } from "../features/settings/SettingsView"
 import { TrustView } from "../features/trust/TrustView"
 import { ConnectionsView } from "../features/connections/ConnectionsView"
@@ -508,6 +511,18 @@ function Workspace() {
     setWorkspace((current) => patchSession(current, sessionId, patch))
   }, [])
 
+  const openWorkbench = (profile: WorkbenchProfile, fresh = false): void => {
+    setWorkspace(current => {
+      const existing = current.sessions.find(s => s.kind === "codex" && s.workbenchProfileId === profile.id)
+      if (existing && !fresh) return activateSession(current, existing.id)
+      const names = new Set(current.sessions.filter(s => s.kind === "codex").map(s => s.label))
+      let label = profile.name, suffix = 1
+      while (names.has(label)) label = `${profile.name} (${suffix++})`
+      return openSession(current, { id: crypto.randomUUID(), hostId: profile.hostId ?? "local-workbench", label, kind: "codex", workbenchProfileId: profile.id })
+    })
+    setActiveNav("workbench")
+  }
+
   useEffect(() => {
     const unsubscribeSession = bridge.events.onSessionEvent(handleSessionEvent)
     return unsubscribeSession
@@ -993,7 +1008,9 @@ function Workspace() {
     if (!session) return
     setWorkspace((current) => activateSession(current, sessionId))
     setRecentSessionState((current) => recordSessionFocus(current, sessionId))
-    if (isSftpSession(session)) {
+    if (session.kind === "codex") {
+      setActiveNav("workbench")
+    } else if (isSftpSession(session)) {
       setActiveNav("sftp")
     } else if (isPortForwardingSession(session)) {
       setHostForwardingHostId(session.hostId)
@@ -1065,6 +1082,14 @@ function Workspace() {
 
   const closeTerminalSession = async (session: WorkspaceSession): Promise<void> => {
     const kind = sessionKind(session)
+    if (kind === "codex" && bridge.workbench) {
+      const status = await bridge.workbench.read(session.id).catch(() => undefined)
+      if (status?.status === "running" && !window.confirm(locale === "zh-CN" ? "任务正在运行。确定将停止任务并关闭；取消则保留后台运行。" : "A task is running. OK stops it and closes the session. Cancel keeps it running in the background.")) {
+        if (workspaceRef.current.activeSessionId === session.id && activeNavigationRef.current === "workbench") setActiveNav("workspaces")
+        return
+      }
+      await bridge.workbench.close(session.id, true)
+    }
     if (kind === "sftp") {
       const transfers = await bridge.sftp.listTransfers(session.id).catch(() => [])
       const activeTransfers = transfers.filter((transfer) => transfer.status === "queued" || transfer.status === "running")
@@ -1100,11 +1125,12 @@ function Workspace() {
       setHostForwardingHostId(undefined)
       setActiveNav("port-forwarding")
     }
-    if (currentWorkspace.activeSessionId === session.id && activeNavigationRef.current === "sftp") {
+    if (currentWorkspace.activeSessionId === session.id && (activeNavigationRef.current === "sftp" || activeNavigationRef.current === "workbench")) {
       const nextActive = nextWorkspace.sessions.find((candidate) => candidate.id === nextWorkspace.activeSessionId)
       if (isPortForwardingSession(nextActive)) setHostForwardingHostId(nextActive.hostId)
-      setActiveNav(nextActive ? (isSftpSession(nextActive) ? "sftp" : isPortForwardingSession(nextActive) ? "host-port-forwarding" : "terminal") : "hosts")
+      setActiveNav(nextActive ? (nextActive.kind === "codex" ? "workbench" : isSftpSession(nextActive) ? "sftp" : isPortForwardingSession(nextActive) ? "host-port-forwarding" : "terminal") : kind === "codex" ? "workspaces" : "hosts")
     }
+    if (currentWorkspace.activeSessionId === session.id && nextWorkspace.sessions.find(s => s.id === nextWorkspace.activeSessionId)?.kind === "codex" && ["terminal", "host-port-forwarding"].includes(activeNavigationRef.current)) setActiveNav("workbench")
     if (remaining.length === 0 && (activeNavigationRef.current === "terminal" || activeNavigationRef.current === "sftp")) {
       setHostForwardingHostId(undefined)
       setActiveNav(leavingHostForwarding ? "port-forwarding" : "hosts")
@@ -1205,9 +1231,9 @@ function Workspace() {
       reconnect: (session) => capabilities.sshAvailable && sessionKind(session) === "ssh" ? bridge.sessions.reconnect(session.id) : undefined,
       rename: renameTerminalSession,
       duplicate: (session) => duplicateSession(session),
-      duplicateWindow: (session) => capabilities.sshAvailable ? bridge.sessions.duplicateInNewWindow({
+      duplicateWindow: (session) => capabilities.sshAvailable && session.kind !== "codex" ? bridge.sessions.duplicateInNewWindow({
         hostId: session.hostId,
-        kind: sessionKind(session),
+        kind: session.kind ?? "ssh",
         label: session.label,
         ...(isSftpSession(session) ? { path: session.browser.path } : {}),
         ...(isPortForwardingSession(session) && session.profileId ? { profileId: session.profileId } : {}),
@@ -1239,7 +1265,7 @@ function Workspace() {
     terminal: activeTerminalSurface,
     selection: { hasSelection: activeTerminalSurface?.hasSelection() ?? false },
     clipboard: { canPaste: activeSession?.state === "connected" },
-    activeNavigation: activeNav === "host-port-forwarding" ? "port-forwarding" : activeNav,
+    activeNavigation: activeNav === "host-port-forwarding" ? "port-forwarding" : activeNav === "workbench" ? "workspaces" : activeNav,
     settingsAvailable: true,
     settingsPersistenceAvailable: settingsMutationsAvailable,
     recentSessions: recentSessionCommands,
@@ -1502,7 +1528,10 @@ function Workspace() {
               <PortsView mode="host" bridge={bridge} hostId={session.hostId} hostName={host?.name} hosts={hosts} session={session} username={host?.username} bindAddress={settings.bindAddress} onOpenSession={openPfSession} />
             </div>
           })}
-          {activeNav === "settings" ? (
+          {workspace.sessions.map(session => session.kind === "codex" ? <div className="session-content-host" key={session.id} hidden={activeNav !== "workbench" || workspace.activeSessionId !== session.id}>
+            <CodexWorkbench session={session} bridge={bridge.workbench} active={activeNav === "workbench" && workspace.activeSessionId === session.id} onNew={openWorkbench} onPatch={patchWorkspaceSession} />
+          </div> : null)}
+          {activeNav === "workspaces" ? <WorkspacesView bridge={bridge.workbench} hosts={hosts} onOpen={openWorkbench} /> : activeNav === "workbench" ? null : activeNav === "settings" ? (
             <SettingsView locale={locale} settings={settings} hosts={hosts} bridge={hasDataProtectionBridge(bridge) ? bridge : undefined} onConfigurationImported={refreshConfigurationAfterImport} disabled={!settingsMutationsAvailable} terminalAppearanceDisabled={false} persistenceUnavailable={!settingsMutationsAvailable || settingsPersistenceFailed} onLocaleChange={(next) => {
               if (!settingsMutationsAvailable) return
               setLocale(next)
@@ -1632,7 +1661,7 @@ function serializeWorkspace(workspace: TerminalWorkspaceState): {
       }
     } else if (isSftpSession(session)) {
       sessions.push({ sessionId: session.id, hostId: session.hostId, label: session.label, kind: "sftp", path: session.browser.path })
-    } else {
+    } else if (isPortForwardingSession(session)) {
       sessions.push({
         sessionId: session.id,
         hostId: session.hostId,

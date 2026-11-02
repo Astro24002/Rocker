@@ -56,8 +56,11 @@ import {
   type WorkspaceSaveRequest
 } from "./bridge-contract"
 import { isValidSessionId, validateDimensions, validateTerminalData } from "./validation"
+import { registerWorkbenchIpc } from "../workbench/ipc"
+import type { WorkbenchService } from "../workbench/service"
 
 export interface IpcDependencies {
+  workbench?: WorkbenchService
   hosts: HostStore
   credentials: CredentialVault
   hostKeys: HostKeyManagementStore
@@ -109,6 +112,7 @@ const maximumPendingConfigurationImports = 8
 const maximumConfigurationImportBytes = 12 * 1024 * 1024
 
 export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
+  const unsubscribeWorkbench = dependencies.workbench ? registerWorkbenchIpc(dependencies.workbench, id => currentOwnerForWebContents(dependencies, id), (owner, channel, payload) => dependencies.windows.sendToOwner(owner, channel, payload)) : undefined
   let hostSaveQueue = Promise.resolve()
   const pendingConfigurationImports = new Map<string, PendingConfigurationImport>()
   ipcMain.handle(ipcChannels.hostsList, () => dependencies.hosts.list())
@@ -148,6 +152,7 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     assertId(id, "host")
     await dependencies.mutations.run(async () => {
       await dependencies.ports.releaseHost(id)
+      await dependencies.workbench?.releaseHost(id)
       const profiles = dependencies.forwardingProfiles ? await dependencies.forwardingProfiles.list(id) : []
       const runtimes = dependencies.forwarding.list().filter((runtime) => runtime.hostId === id || profiles.some((profile) => profile.id === runtime.profileId))
       await Promise.all(runtimes.map((runtime) => dependencies.forwarding.stop(runtime.id)))
@@ -736,6 +741,7 @@ export function registerIpcHandlers(dependencies: IpcDependencies): () => void {
     dependencies.windows.sendToOwner(owner, ipcChannels.sftpEvent, safePayload)
   }) ?? (() => undefined)
   return () => {
+    unsubscribeWorkbench?.()
     unsubscribe()
     unsubscribeForwarding?.()
     unsubscribeSftp()
