@@ -1,6 +1,6 @@
 # Workspace / Codex Workbench integration
 
-Status: implemented on `feature/workspaces-codex`; prepared for v0.8.1-rc.4.
+Status: implemented on `feature/workspaces-codex`; published in v0.8.1-rc.4 (prerelease).
 Baseline: `152cc0f5e888e8ddf0beff9c3cc80a86967b799b` (v0.8.1-rc.3 follow-up).
 
 ## Product behavior
